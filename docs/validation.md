@@ -2,21 +2,42 @@
 
 The [CI workflow](../.github/workflows/ci.yml) defines Python 3.12/3.13 lint and regression checks, frontend tests and build, PowerShell validation and Docker-backed integration.
 
-## Recorded local checks
+## Verified CI run
 
-The pre-publication review on 27 September 2026 recorded:
+All five jobs passed in [CI run 36277550894](https://github.com/alebgl77/open-shadow-ai/actions/runs/36277550894) for source commit [cea2bafab02bfe0298776ab4de679fd4f044acd6](https://github.com/alebgl77/open-shadow-ai/commit/cea2bafab02bfe0298776ab4de679fd4f044acd6), on 27 September 2026.
 
 | Area | Result and scope |
 |---|---|
-| Backend final local regression | 71 tests passed; one live integration test skipped; lint clean; compilation succeeded; dependency audit reported no known vulnerabilities |
+| Python 3.12 and 3.13 | Each regression suite passed 72 tests and skipped the live integration test; lint passed |
+| Frontend | 13 tests passed and production build succeeded |
+| PowerShell | Script syntax and non-mutating bootstrap/AD-export entry points passed |
+| Real-store integration | 1 test passed, 72 deselected, against disposable PostgreSQL, Redis and ClickHouse services; migrations, catalog persistence, stream reclaim, receipt deduplication and concurrent correlation exercised |
+| Docker deployment | Fresh service image builds and Compose startup passed |
+| HTTP pipeline smoke | Protected ingestion, readiness, frontend, queue pipeline, event storage and detection persistence passed |
+
+The smoke script reported:
+
+```text
+PASS: protected ingestion, readiness, frontend, queue pipeline, event storage, detection persistence
+```
+
+The skipped integration test in each Python regression job ran separately in the Docker integration job. These results apply to the linked source commit and workflow; they do not validate later code changes or every deployment environment.
+
+## Additional local checks
+
+The review on 27 September 2026 also recorded:
+
+| Area | Result and scope |
+|---|---|
+| Backend | 72 tests passed; one live integration test skipped locally; lint and compilation clean; dependency audit reported no known vulnerabilities |
 | Frontend | Build succeeded; 13 tests passed; dependency audit reported no known vulnerabilities |
 | Browser review | Desktop and mobile navigation, search and detection review checked; the README uses an actual 42 KB WebP screenshot from isolated synthetic demo data |
 | Deployment tooling | YAML/XML parsing, bootstrap generation and repeat-run preservation, PowerShell syntax and dry-run checks passed |
 | Architecture assets | SVG visually checked for legibility; SVG and editable draw.io XML parsed |
 
-These are recorded results, not a guarantee about later edits. Re-run validation on the published commit. A dependency audit result means no known issues reported by that audit at the time.
+A dependency audit result means no known issues reported by that audit at the time.
 
-An independent read-only security/correctness review identified three blocking findings, which were corrected: workers could ingest before catalog initialization completed; governance audit data mishandled date values; and policy links were not consistently propagated to detections. Two subsequent medium-priority governance findings were also corrected. The final independent read-only review passed with the operational caveats recorded below. This review is not a security certification; Docker-backed CI execution remains a release validation gate.
+An independent read-only security/correctness review identified three blocking findings, which were corrected: workers could ingest before catalog initialization completed; governance audit data mishandled date values; and policy links were not consistently propagated to detections. Two subsequent medium-priority governance findings were also corrected. The final independent read-only review passed with the operational caveats recorded below. The first Docker smoke run additionally caught a missing-key response returning 422 instead of 401; the authentication dependency was corrected and covered by an HTTP regression before the successful run linked above. This review is not a security certification.
 
 ## Reproduce the checks
 
@@ -48,8 +69,10 @@ docker compose up -d --build --wait --wait-timeout 180 api ingest-worker correla
 python scripts/integration-smoke.py
 ```
 
-The first integration container is designed to exercise real database migrations, catalog persistence, stream reclaim, receipt deduplication and concurrent correlation. The smoke script is designed to exercise authenticated HTTP ingestion through running workers into ClickHouse and PostgreSQL. Reset only the disposable stores between these suites, as CI does.
+The integration container exercises real database migrations, catalog persistence, stream reclaim, receipt deduplication and concurrent correlation. The smoke script exercises authenticated HTTP ingestion through running workers into ClickHouse and PostgreSQL. Reset only the disposable stores between these suites, as CI does.
 
-Docker was unavailable on the authoring workstation. The service checks are definitions awaiting execution on a Docker-capable host; no successful live integration result is claimed here. Kubernetes server validation and live AD/Entra tests remain pending.
+## Remaining validation boundaries
 
-A green unit suite does not prove fleet rollout, production throughput, security certification or recovery objectives. Record the exact commit and actual CI result when evaluating a release.
+Docker was unavailable on the authoring workstation; Docker-backed checks passed on the Linux CI runner. Kubernetes server validation, live Active Directory and Microsoft Graph tenant tests, and managed-fleet rollout remain pending. Sustained load, scaling, backup/restore recovery objectives and operation on your infrastructure require separate validation.
+
+Enterprise SSO/SCIM and isolated multi-tenancy are not implemented: this preview uses local accounts and one organization per deployment. A passing CI run does not prove production throughput, security certification or universal production readiness. Use controlled pilots and record the exact commit and actual CI result when evaluating a release.
