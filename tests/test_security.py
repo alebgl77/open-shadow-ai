@@ -134,7 +134,7 @@ def test_api_auth_cors_size_and_error_redaction():
 
     client = TestClient(app)
     assert client.get("/api/v1/dashboard/summary").status_code == 401
-    assert client.post("/api/v1/ingest/events", json={"events": []}).status_code in {401, 422}
+    assert client.post("/api/v1/ingest/events", json={"events": []}).status_code == 401
     response = client.post("/api/v1/ingest/events", content=b"x" * (2 * 1024 * 1024 + 1))
     assert response.status_code == 413
     response = client.options(
@@ -169,3 +169,55 @@ def test_expired_or_disallowed_jwt_algorithm(mutation, algorithm, key):
     with pytest.raises(HTTPException) as error:
         decode_access_token(token)
     assert error.value.status_code == 401
+
+
+def test_canonical_ingestion_authenticates_missing_empty_wrong_and_valid_keys(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from shadai.main import app
+
+    pipe = SimpleNamespace(xadd=Mock(), execute=AsyncMock())
+    redis = SimpleNamespace(pipeline=Mock(return_value=pipe))
+    get_redis = AsyncMock(return_value=redis)
+    monkeypatch.setattr("shadai.api.ingestion.get_redis", get_redis)
+    client = TestClient(app)
+    timestamp = datetime.now(UTC).isoformat()
+    payload = {
+        "events": [
+            {
+                "event_id": str(uuid4()),
+                "timestamp": timestamp,
+                "source_type": "dns",
+                "collector_id": "ci-dns",
+                "domain": "chatgpt.com",
+                "src_ip": "192.0.2.10",
+            },
+            {
+                "event_id": str(uuid4()),
+                "timestamp": timestamp,
+                "source_type": "directory",
+                "evidence_type": "inventory",
+                "collector_id": "ci-ad",
+                "identity_provider": "active_directory",
+                "identity_object_id": str(uuid4()),
+                "device_id": "ci-device",
+                "hostname": "ci.example.test",
+            },
+        ]
+    }
+    for headers in ({}, {"X-API-Key": ""}, {"X-API-Key": "incorrect"}):
+        response = client.post("/api/v1/ingest/events", json=payload, headers=headers)
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Invalid API key"}
+    get_redis.assert_not_awaited()
+    pipe.xadd.assert_not_called()
+    headers = {"X-API-Key": get_config().security.agent_api_key}
+    response = client.post("/api/v1/ingest/events", json=payload, headers=headers)
+    assert response.status_code == 202
+    assert response.json() == {"received": 2, "tenant_id": "test-org"}
+    get_redis.assert_awaited_once()
+    pipe.execute.assert_awaited_once()
+    assert [call.args[0] for call in pipe.xadd.call_args_list] == ["events:dns", "events:directory"]
+    assert client.get("/api/v1/agent/config").status_code == 401
+    assert client.get("/api/v1/agent/config", headers=headers).status_code == 200

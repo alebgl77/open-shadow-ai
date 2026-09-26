@@ -54,12 +54,12 @@ class TelemetryBatch(BaseModel):
         return records
 
 
-def _validate_api_key(x_api_key: str = Header(...)) -> str:
+def _validate_api_key(x_api_key: str | None = Header(None)) -> str:
     """Validate agent API key from header using constant-time comparison."""
     import hmac
 
     expected = get_config().security.agent_api_key
-    if len(expected.encode()) < 32 or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
+    if not x_api_key or len(expected.encode()) < 32 or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return x_api_key
 
