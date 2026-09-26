@@ -31,6 +31,21 @@ Use an overlay to set real images and database routes before running the command
 
 Copy `ingress.example.yaml` into your private overlay and replace the hostname, ingress class and TLS Secret reference. Apply only after valid TLS and access policies exist. The frontend proxies `/api/` to the API. HTTP ports are internal; a YAML `tls` field alone does not issue a certificate.
 
+## Optional OIDC/SCIM console access
+
+The `sso/` overlay adds identity configuration only to the API. The base remains disabled. Before using it, replace its documentation-only tenant/client IDs, public origin, group role map and IdP egress CIDR in your private deployment configuration. Preserve your real image digests and database network rules from the base deployment procedure.
+
+Provision an additional Secret named `open-shadow-ai-identity` in the application namespace with keys `OIDC_CLIENT_SECRET` and `SCIM_BEARER_TOKEN`, using your secret manager. The separate ConfigMap has the same name and contains only non-secret settings. The token must contain at least 32 random bytes and be independent of the runtime and collector credentials. Do not commit a Secret manifest. Existing runtime Secret requirements are unchanged.
+
+The API needs HTTPS egress for OIDC discovery, token exchange and signing keys. Standard NetworkPolicy cannot allow hostnames: adapt `identity-egress.yaml` to approved provider routes or your CNI's FQDN policy. Its TEST-NET CIDR intentionally grants no working IdP route. No new inbound port is required; the existing frontend/ingress path serves SCIM. Configure ingress logs and tracing to exclude callback query strings and sensitive headers. See the [identity guide](../../docs/sso-scim.md) for exact URLs and Entra mappings.
+
+```bash
+kubectl kustomize deploy/kubernetes/sso > rendered-sso.yaml
+kubectl apply --dry-run=server -k deploy/kubernetes/sso
+```
+
+Apply the prepared overlay only after the PostgreSQL migration Job completes. This is an example requiring cluster and identity-provider validation, not a tested production overlay.
+
 ## Validation
 
 ```bash

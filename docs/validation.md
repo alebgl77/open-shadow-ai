@@ -75,4 +75,6 @@ The integration container exercises real database migrations, catalog persistenc
 
 Docker was unavailable on the authoring workstation; Docker-backed checks passed on the Linux CI runner. Kubernetes server validation, live Active Directory and Microsoft Graph tenant tests, and managed-fleet rollout remain pending. Sustained load, scaling, backup/restore recovery objectives and operation on your infrastructure require separate validation.
 
-Enterprise SSO/SCIM and isolated multi-tenancy are not implemented: this preview uses local accounts and one organization per deployment. A passing CI run does not prove production throughput, security certification or universal production readiness. Use controlled pilots and record the exact commit and actual CI result when evaluating a release.
+The linked run predates the optional OIDC/SCIM implementation. Its new mocked-provider, provisioning, UI and deployment checks must pass for the preview's exact commit before release; earlier test counts are not evidence for the identity change. Live Entra provisioning/sign-in, MFA policies, other providers and Kubernetes overlays remain unvalidated in a real environment. See the [identity pilot checklist](sso-scim.md#pilot-acceptance).
+
+Isolated multi-tenancy is not implemented: this preview supports one organization per deployment. A passing CI run does not prove production throughput, security certification or universal production readiness. Use controlled pilots and record the exact commit and actual CI result when evaluating a release.

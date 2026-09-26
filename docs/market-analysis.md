@@ -40,4 +40,4 @@ A DNS query is a domain-resolution observation. Proxy metadata adds only the fie
 
 Initial limitations include unmanaged/off-network devices, unobserved encrypted DNS, shared or unknown domains, embedded SaaS AI, gateway bypasses and uncollected local tools. Hybrid AD/Entra identity mappings require validation.
 
-For startups, prioritize a clear first-source workflow. For enterprise pilots, require a tested restore, explicit organizational scope, least privilege, TLS, collector-key lifecycle, auditability and measured load limits. SSO/SCIM and multi-organization isolation remain planned. Avoid “better than all,” “zero blind spots,” “automatic compliance” and “enterprise-ready” without evidence.
+For startups, prioritize a clear first-source workflow. For enterprise pilots, require a tested restore, explicit organizational scope, least privilege, TLS, collector-key lifecycle, auditability and measured load limits. Optional OIDC/SCIM console access is implemented and requires provider validation; multi-organization isolation remains planned. Avoid “better than all,” “zero blind spots,” “automatic compliance” and “enterprise-ready” without evidence.

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: open-shadow-ai
+resources:
+  - ../base
+  - identity-egress.yaml
+patches:
+  - path: api.yaml
+configMapGenerator:
+  - name: open-shadow-ai-identity
+    literals:
+      - OIDC_ENABLED=true
+      - OIDC_ISSUER=https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+      - OIDC_CLIENT_ID=00000000-0000-0000-0000-000000000000
+      - OIDC_PUBLIC_BASE_URL=https://ai-inventory.example.com
+      - OIDC_LABEL=Microsoft Entra ID
+      - OIDC_IDENTITY_CLAIM=oid
+      - OIDC_ALLOW_INSECURE_LOCALHOST=false
+      - SCIM_ENABLED=true
+      - SCIM_GROUP_ROLE_MAP={}

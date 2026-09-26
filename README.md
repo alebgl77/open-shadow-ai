@@ -10,7 +10,7 @@
 
 Understand which AI services and tools appear in your environment, where each signal came from, and what it can actually prove. Bring together network metadata, endpoint inventory and Microsoft directory signals in an interface built for investigation.
 
-[Get started](#get-started) · [Deployment](docs/deployment.md) · [Microsoft & Active Directory](docs/microsoft.md) · [Architecture](docs/architecture.md) · [Français](README.fr.md)
+[Get started](#get-started) · [Deployment](docs/deployment.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Français](README.fr.md)
 
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
 
@@ -26,7 +26,7 @@ Understand which AI services and tools appear in your environment, where each si
 
 ## Try the interface
 
-Prerequisite: **Node.js 22**. Launch the isolated interface demo:
+Prerequisite: **Node.js 22.22.2+ (22.x)**. Launch the isolated interface demo:
 
 ```bash
 cd frontend
@@ -63,6 +63,8 @@ docker compose --profile entra up -d
 
 AD exports and endpoint installs are operator-run workflows, documented in the [Microsoft guide](docs/microsoft.md). Installing the server does not automatically scan the fleet.
 
+Optional [OIDC sign-in and SCIM provisioning](docs/sso-scim.md) manage access to the console, including Microsoft Entra ID. They are disabled in the base deployment and use separate credentials from the inventory collector. Local administrator sign-in remains available for recovery.
+
 ## What is delivered
 
 | Capability | Status and practical boundary |
@@ -77,7 +79,8 @@ AD exports and endpoint installs are operator-run workflows, documented in the [
 | Other directories (LDAP, Okta, Google Workspace) | Custom ingestion contract available; native connectors planned |
 | Docker Compose | Deployment package and CI service smoke provided; validate the first run |
 | Kubernetes | Baseline for external stores; cluster, ingress, backup and scaling validation pending |
-| Enterprise SSO/SCIM, isolated multi-tenancy, automated fleet management | Planned; local accounts and one organization per install today |
+| OIDC SSO and SCIM 2.0 console provisioning | Implemented optional subset with Entra setup guide; live tenant interoperability validation pending |
+| Isolated multi-tenancy, automated fleet management | Planned; one organization per install today |
 | Inline blocking, prompt DLP, full behavioral analysis | Outside the current product |
 
 ## Architecture

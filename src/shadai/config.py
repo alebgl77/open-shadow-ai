@@ -6,6 +6,8 @@ import json
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -83,6 +85,46 @@ class PrivacySettings(BaseModel):
     no_url_path_retention: bool = False
 
 
+def trusted_url(value: str, allow_local: bool = False, *, origin_only: bool = False) -> str:
+    if not value or any(c.isspace() or ord(c) < 32 for c in value):
+        raise ValueError("Identity URL contains whitespace or control characters")
+    parsed = urlsplit(value)
+    loopback = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    if (parsed.scheme != "https" and not (allow_local and loopback and parsed.scheme == "http")) or not parsed.hostname:
+        raise ValueError("Identity URLs require HTTPS; explicit HTTP development is limited to loopback")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment or "\\" in value:
+        raise ValueError("Identity URLs cannot contain credentials, query or fragment")
+    if origin_only and parsed.path not in {"", "/"}:
+        raise ValueError("Public base URL must be an origin")
+    _ = parsed.port  # Validate malformed ports.
+    return value.rstrip("/") if origin_only else value
+
+
+class OIDCSettings(BaseModel):
+    enabled: bool = False
+    issuer: str = Field(default="", max_length=1024)
+    client_id: str = Field(default="", max_length=255)
+    client_secret: str = Field(default="", repr=False)
+    public_base_url: str = ""
+    label: str = Field(default="Organization sign-in", max_length=100)
+    identity_claim: Literal["sub", "oid"] = "sub"
+    allow_insecure_localhost: bool = False
+
+    @property
+    def secure_cookies(self) -> bool:
+        return urlsplit(self.public_base_url).scheme == "https"
+
+    @property
+    def callback_url(self) -> str:
+        return self.public_base_url + "/api/v1/auth/sso/callback"
+
+
+class SCIMSettings(BaseModel):
+    enabled: bool = False
+    bearer_token: str = Field(default="", repr=False)
+    group_role_map: dict[str, Literal["viewer", "analyst", "admin"]] = Field(default_factory=dict)
+
+
 class ShadAIConfig(BaseModel):
     tenant_id: str = Field(default="default", min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
     server: ServerSettings = ServerSettings()
@@ -91,6 +133,8 @@ class ShadAIConfig(BaseModel):
     retention: RetentionSettings = RetentionSettings()
     catalog: CatalogSettings = CatalogSettings()
     privacy: PrivacySettings = PrivacySettings()
+    oidc: OIDCSettings = OIDCSettings()
+    scim: SCIMSettings = SCIMSettings()
 
 
 def _read_secret_file(path: str) -> str:
@@ -137,7 +181,31 @@ def _apply_env_overrides(config: ShadAIConfig) -> ShadAIConfig:
     elif key := os.environ.get("ENCRYPTION_KEY"):
         config.security.encryption_key = key
 
-    return ShadAIConfig.model_validate(config.model_dump())
+    identity_env = {
+        "OIDC_ENABLED": ("oidc", "enabled"),
+        "OIDC_ISSUER": ("oidc", "issuer"),
+        "OIDC_CLIENT_ID": ("oidc", "client_id"),
+        "OIDC_PUBLIC_BASE_URL": ("oidc", "public_base_url"),
+        "OIDC_LABEL": ("oidc", "label"),
+        "OIDC_IDENTITY_CLAIM": ("oidc", "identity_claim"),
+        "OIDC_ALLOW_INSECURE_LOCALHOST": ("oidc", "allow_insecure_localhost"),
+        "SCIM_ENABLED": ("scim", "enabled"),
+    }
+    raw = config.model_dump()
+    for name, (section, field) in identity_env.items():
+        if name in os.environ:
+            raw[section][field] = os.environ[name]
+    for name, section, field in (
+        ("OIDC_CLIENT_SECRET", "oidc", "client_secret"),
+        ("SCIM_BEARER_TOKEN", "scim", "bearer_token"),
+    ):
+        if path := os.environ.get(name + "_FILE"):
+            raw[section][field] = _read_secret_file(path)
+        elif name in os.environ:
+            raw[section][field] = os.environ[name]
+    if role_map := os.environ.get("SCIM_GROUP_ROLE_MAP"):
+        raw["scim"]["group_role_map"] = json.loads(role_map)
+    return ShadAIConfig.model_validate(raw)
 
 
 def validate_security(config: ShadAIConfig) -> None:
@@ -151,6 +219,27 @@ def validate_security(config: ShadAIConfig) -> None:
     if config.security.jwt_algorithm != "HS256":
         raise ValueError("Only HS256 is supported")
     Fernet(config.security.encryption_key.encode())
+    validate_identity_settings(config)
+
+
+def validate_identity_settings(config: ShadAIConfig) -> None:
+    oidc, scim = config.oidc, config.scim
+    if oidc.enabled or scim.enabled:
+        trusted_url(oidc.issuer, oidc.allow_insecure_localhost)
+    if oidc.enabled:
+        if not oidc.client_id or not oidc.client_secret:
+            raise ValueError("Enabled OIDC requires client ID and secret")
+        trusted_url(oidc.public_base_url, oidc.allow_insecure_localhost, origin_only=True)
+        if oidc.public_base_url.endswith("/"):
+            raise ValueError("OIDC_PUBLIC_BASE_URL must not end with a slash")
+    if len(scim.group_role_map) > 1000 or any(not key or len(key) > 255 for key in scim.group_role_map):
+        raise ValueError("SCIM group role map exceeds supported limits")
+    if scim.enabled:
+        secret = scim.bearer_token
+        if len(secret.encode()) < 32 or len(set(secret)) < 12:
+            raise ValueError("SCIM token must be a randomly generated secret of at least 32 bytes")
+        if secret in {config.security.agent_api_key, config.security.jwt_secret, oidc.client_secret}:
+            raise ValueError("SCIM token must be distinct from other credentials")
 
 
 def load_config(path: str | None = None) -> ShadAIConfig:

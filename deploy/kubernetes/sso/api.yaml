@@ -1,0 +1,33 @@
+# Provision this additional Secret privately; never put credentials in the overlay.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - name: OIDC_ENABLED
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: OIDC_ENABLED}}
+            - name: OIDC_ISSUER
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: OIDC_ISSUER}}
+            - name: OIDC_CLIENT_ID
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: OIDC_CLIENT_ID}}
+            - name: OIDC_PUBLIC_BASE_URL
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: OIDC_PUBLIC_BASE_URL}}
+            - name: OIDC_LABEL
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: OIDC_LABEL}}
+            - name: OIDC_IDENTITY_CLAIM
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: OIDC_IDENTITY_CLAIM}}
+            - name: OIDC_ALLOW_INSECURE_LOCALHOST
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: OIDC_ALLOW_INSECURE_LOCALHOST}}
+            - name: SCIM_ENABLED
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: SCIM_ENABLED}}
+            - name: SCIM_GROUP_ROLE_MAP
+              valueFrom: {configMapKeyRef: {name: open-shadow-ai-identity, key: SCIM_GROUP_ROLE_MAP}}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: open-shadow-ai-identity, key: OIDC_CLIENT_SECRET}}
+            - name: SCIM_BEARER_TOKEN
+              valueFrom: {secretKeyRef: {name: open-shadow-ai-identity, key: SCIM_BEARER_TOKEN}}

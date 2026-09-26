@@ -63,11 +63,43 @@ jobs:
           python-version: "3.12"
       - run: bash scripts/bootstrap.sh
       - run: docker compose config --quiet
+      - name: Validate optional identity Compose configuration
+        env:
+          OIDC_ISSUER: https://identity.example.test
+          OIDC_CLIENT_ID: ci-configuration-check
+          OIDC_PUBLIC_BASE_URL: https://console.example.test
+          SCIM_GROUP_ROLE_MAP: '{}'
+        run: |
+          python - <<'PY'
+          import secrets
+          from pathlib import Path
+          for name in ('oidc_client_secret', 'scim_bearer_token'):
+              path = Path('secrets', name + '.txt')
+              with path.open('x', encoding='utf-8') as output:
+                  output.write(secrets.token_hex(32) + '\n')
+              path.chmod(0o444)
+          PY
+          docker compose -f docker-compose.yml -f docker-compose.sso.yml config --quiet
+          SCIM_GROUP_ROLE_MAP='{"00000000-0000-0000-0000-000000000001":"analyst"}' docker compose -f docker-compose.yml -f docker-compose.sso.yml config --format json | python -c "import json, sys; c=json.load(sys.stdin); assert json.loads(c['services']['api']['environment']['SCIM_GROUP_ROLE_MAP']) == {'00000000-0000-0000-0000-000000000001': 'analyst'}; assert len(c['services']['api']['secrets']) == 8; assert all(not any(k.startswith(('OIDC_', 'SCIM_')) for k in s.get('environment', {})) for name, s in c['services'].items() if name != 'api')"
       - run: docker compose --profile test run --build --rm integration-test
       - run: docker compose down --volumes
       - run: docker compose build api ingest-worker correlation-worker purge-worker frontend syslog-collector entra-collector
       - run: docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
       - run: python scripts/integration-smoke.py
+      - name: Start optional identity API
+        env:
+          OIDC_ISSUER: https://idp.example
+          OIDC_CLIENT_ID: ci-client
+          OIDC_PUBLIC_BASE_URL: https://app.example
+          OIDC_LABEL: CI identity provider
+          OIDC_IDENTITY_CLAIM: sub
+          SCIM_GROUP_ROLE_MAP: '{"ci-scim-analysts":"analyst"}'
+        run: docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d --no-deps --force-recreate --wait --wait-timeout 180 api
+      - name: Reload frontend upstream after API recreation
+        run: docker compose exec -T frontend nginx -s reload
+      - name: Verify optional identity HTTP lifecycle
+        timeout-minutes: 5
+        run: python scripts/identity-smoke.py
       - if: always()
         run: docker compose ps --all
       - if: always()

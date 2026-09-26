@@ -22,9 +22,12 @@ from shadai.api.detections import router as detections_router
 from shadai.api.exports import router as exports_router
 from shadai.api.governance import router as governance_router
 from shadai.api.ingestion import router as ingestion_router
+from shadai.api.scim import router as scim_router
+from shadai.api.sso import router as sso_router
 from shadai.config import get_config, validate_security
 from shadai.database import close_all, init_clickhouse, init_postgres, init_redis
 from shadai.security.crypto import init_crypto
+from shadai.security.scim import SCIMError
 from shadai.utils.logging import setup_logging
 
 
@@ -81,6 +84,8 @@ app.include_router(exports_router)
 app.include_router(audit_router)
 app.include_router(agent_router)
 app.include_router(ingestion_router)
+app.include_router(scim_router)
+app.include_router(sso_router)
 
 
 # ── Health + Metrics ─────────────────────────────────────────────
@@ -108,6 +113,9 @@ async def readiness():
     try:
         async for session in get_postgres_session():
             await asyncio.wait_for(session.execute(text("SELECT event_id FROM ingest_receipts LIMIT 0")), timeout=5)
+            await asyncio.wait_for(
+                session.execute(text("SELECT session_version, username_key FROM users LIMIT 0")), timeout=5
+            )
         checks["postgres"] = True
     except Exception:
         checks["postgres"] = False
@@ -145,6 +153,13 @@ async def validation_error(request, exc):
     )
 
 
+@app.exception_handler(SCIMError)
+async def scim_error(request, exc):
+    from shadai.api.scim import response
+
+    return response(exc.body(), exc.status, {"WWW-Authenticate": "Bearer"} if exc.status == 401 else {})
+
+
 class BodyLimitMiddleware:
     def __init__(self, app, max_bytes=2 * 1024 * 1024):
         self.app, self.max_bytes = app, max_bytes
@@ -160,6 +175,10 @@ class BodyLimitMiddleware:
             body = message.get("body", b"")
             size += len(body)
             if size > self.max_bytes:
+                if scope.get("path", "").startswith("/api/v1/scim/v2"):
+                    from shadai.api.scim import response
+
+                    return await response(SCIMError(413, "Request too large", None).body(), 413)(scope, receive, send)
                 return await JSONResponse({"detail": "Request too large"}, status_code=413)(scope, receive, send)
             chunks.append(body)
             if not message.get("more_body", False):

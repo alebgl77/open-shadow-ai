@@ -1,0 +1,22 @@
+# Optional: use with docker-compose.yml after provisioning both secret files.
+# See docs/sso-scim.md. The six-secret bootstrap and base services are unchanged.
+services:
+  api:
+    environment:
+      OIDC_ENABLED: ${OIDC_ENABLED:-true}
+      OIDC_ISSUER: ${OIDC_ISSUER:?Set OIDC_ISSUER to your exact tenant issuer}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?Set OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      OIDC_PUBLIC_BASE_URL: ${OIDC_PUBLIC_BASE_URL:?Set OIDC_PUBLIC_BASE_URL to the HTTPS console origin}
+      OIDC_LABEL: ${OIDC_LABEL:-Single sign-on}
+      OIDC_IDENTITY_CLAIM: ${OIDC_IDENTITY_CLAIM:-sub}
+      OIDC_ALLOW_INSECURE_LOCALHOST: "false"
+      SCIM_ENABLED: ${SCIM_ENABLED:-true}
+      SCIM_BEARER_TOKEN_FILE: /run/secrets/scim_bearer_token
+      SCIM_GROUP_ROLE_MAP: ${SCIM_GROUP_ROLE_MAP:?Set SCIM_GROUP_ROLE_MAP to a JSON object, or an empty object for viewer access}
+    secrets:
+      - oidc_client_secret
+      - scim_bearer_token
+secrets:
+  oidc_client_secret: {file: ./secrets/oidc_client_secret.txt}
+  scim_bearer_token: {file: ./secrets/scim_bearer_token.txt}

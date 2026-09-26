@@ -3,6 +3,7 @@ import { useAuthStore } from '@/stores/auth'
 import ErrorBoundary from '@/components/ui/ErrorBoundary'
 import AppShell from '@/components/layout/AppShell'
 import Login from '@/pages/Login'
+import SsoCallback from '@/pages/SsoCallback'
 import DemoEntry from '@/pages/DemoEntry'
 import Dashboard from '@/pages/Dashboard'
 import DiscoveryList from '@/pages/DiscoveryList'
@@ -26,7 +27,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <Routes>
-        <Route path="/login" element={<Login />} /><Route path="/demo" element={<DemoEntry />} />
+        <Route path="/login" element={<Login />} /><Route path="/auth/callback" element={<SsoCallback />} /><Route path="/demo" element={<DemoEntry />} />
         <Route
           path="/*"
           element={

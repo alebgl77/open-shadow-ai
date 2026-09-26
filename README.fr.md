@@ -12,7 +12,7 @@ Logiciel en phase de développement : les packages Docker/Kubernetes et les scri
 
 ## Essayer l'interface
 
-Prérequis : **Node.js 22**. Lancez la démonstration isolée :
+Prérequis : **Node.js 22.22.2+ (22.x)**. Lancez la démonstration isolée :
 
 ```bash
 cd frontend
@@ -47,7 +47,9 @@ L'interface est accessible sur [localhost:3000](http://localhost:3000). Cette é
 - **Réseau :** sélectionner un parseur DNS/proxy correspondant au format réellement envoyé.
 - **Autres annuaires :** utiliser le contrat d'ingestion générique ; les connecteurs natifs restent à développer.
 
-[Guide Microsoft et AD](docs/microsoft.md) · [Déploiement et exploitation](docs/deployment.md) · [Couverture des collecteurs](docs/collectors.md)
+[Guide Microsoft et AD](docs/microsoft.md) · [Déploiement et exploitation](docs/deployment.md) · [SSO et SCIM](docs/sso-scim.md) · [Couverture des collecteurs](docs/collectors.md)
+
+La connexion OIDC et le provisionnement SCIM 2.0 des comptes de la console sont facultatifs, avec un guide Microsoft Entra ID. Ils sont désactivés par défaut et utilisent des secrets distincts du collecteur d'inventaire. Un administrateur local reste disponible pour la récupération. SCIM gère les accès à la console ; il ne collecte pas les salariés ni les appareils observés.
 
 ## Lire les résultats correctement
 
@@ -57,7 +59,7 @@ Les tableaux distinguent observations, inventaires et informations indisponibles
 
 ## Du pilote à l'entreprise
 
-Le package fournit une base Docker Compose, une configuration Kubernetes pour bases externes et des procédures d'export/installation. Avant production : tester sauvegarde et restauration, capacité, mises à jour, accès, politique de conservation et supervision des collecteurs. SSO/SCIM et isolation multi-organisations restent des évolutions prévues.
+Le package fournit une base Docker Compose, une configuration Kubernetes pour bases externes et des procédures d'export/installation. Avant production : tester sauvegarde et restauration, capacité, mises à jour, accès, politique de conservation et supervision des collecteurs. Le sous-ensemble OIDC/SCIM livré nécessite une validation avec votre fournisseur d'identité ; SAML et l'isolation multi-organisations ne sont pas implémentés.
 
 ![Architecture](docs/assets/architecture.svg)
 

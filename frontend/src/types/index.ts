@@ -98,7 +98,8 @@ export interface AIUser {
 export interface AuditEntry {
   audit_id: string
   timestamp: string
-  user_id: string
+  user_id: string | null
+  actor_kind?: 'user' | 'scim'
   username: string
   action: string
   resource_type: string | null

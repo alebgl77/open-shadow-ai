@@ -26,6 +26,8 @@ Source: [Microsoft Get-ADComputer](https://learn.microsoft.com/en-us/powershell/
 
 ## Entra ID
 
+For console sign-in and account provisioning, use the separate [OIDC/SCIM guide](sso-scim.md). The collector below inventories applications; its Graph permissions and client secret do not enable console SSO. Synced on-prem AD accounts can access the console through Entra after deliberate provisioning and identity mapping.
+
 Create a dedicated application registration for the collector. Provision its client secret separately into `secrets/entra_client_secret.txt`; the bootstrap does not invent a usable Microsoft credential. Protect it with the same directory permissions as other deployment secrets.
 
 Set `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_POLL_INTERVAL_SECONDS` (minimum 60) in your private `.env`. Enable the `entra` Compose profile.
@@ -69,4 +71,4 @@ For Linux/macOS, install the agent in a dedicated virtual environment, set `SHAD
 
 ## Other directories
 
-Native LDAP, Okta, Google Workspace and SCIM synchronization are planned. Authorized adapters can send scoped inventory through the [generic event contract](collectors.md). Neither AD export nor Entra inventory automatically enrolls devices or configures other infrastructure.
+Native inventory collectors for LDAP, Okta and Google Workspace are planned. Authorized adapters can send scoped inventory through the [generic event contract](collectors.md). Generic OIDC sign-in and a SCIM console-provisioning subset are available separately; validate your provider against the [supported contract](sso-scim.md#supported-subset). Neither AD export nor Entra inventory automatically enrolls devices or configures other infrastructure.

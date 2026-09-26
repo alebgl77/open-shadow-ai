@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shadai.database import get_postgres_session, get_redis
@@ -15,6 +17,7 @@ from shadai.security.audit import log_audit
 from shadai.security.auth import (
     create_access_token,
     decode_access_token,
+    effective_roles,
     get_current_user,
     hash_password,
     oauth2_scheme,
@@ -41,10 +44,10 @@ async def login(
         await redis.expire(key, 120)
     if count > 20:
         raise HTTPException(status_code=429, detail="Too many login attempts", headers={"Retry-After": "60"})
-    result = await session.execute(select(UserORM).where(UserORM.username == body.username))
+    result = await session.execute(select(UserORM).where(UserORM.username_key == body.username.strip().casefold()))
     user = result.scalar_one_or_none()
 
-    if user is None or not verify_password(body.password, user.password_hash):
+    if user is None or user.identity_kind != "local" or not verify_password(body.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -56,7 +59,7 @@ async def login(
             detail="Account is deactivated",
         )
 
-    token = create_access_token(str(user.user_id), user.role)
+    token = create_access_token(str(user.user_id), user.role, user.session_version)
     user.last_login_at = datetime.now(UTC)
 
     await log_audit(
@@ -110,8 +113,10 @@ async def list_users(
     _admin: UserORM = Depends(require_role("admin")),
     session: AsyncSession = Depends(get_postgres_session),
 ):
-    result = await session.execute(select(UserORM).order_by(UserORM.username))
-    return [UserRead.model_validate(u) for u in result.scalars().all()]
+    result = await session.execute(select(UserORM).where(UserORM.scim_deleted.is_(False)).order_by(UserORM.username))
+    users = list(result.scalars().all())
+    roles = await effective_roles(session, users)
+    return [UserRead.model_validate(user).model_copy(update={"role": roles[user.user_id]}) for user in users]
 
 
 @users_router.post("/", response_model=UserRead, status_code=201)
@@ -128,7 +133,11 @@ async def create_user(
         role=body.role,
     )
     session.add(user)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Username already exists") from exc
 
     await log_audit(
         session,
@@ -145,17 +154,21 @@ async def create_user(
 
 @users_router.put("/{user_id}", response_model=UserRead)
 async def update_user(
-    user_id: str,
+    user_id: UUID,
     body: UserUpdate,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
     session: AsyncSession = Depends(get_postgres_session),
 ):
-    result = await session.execute(select(UserORM).where(UserORM.user_id == user_id))
+    result = await session.execute(select(UserORM).where(UserORM.user_id == user_id).with_for_update())
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    if user.identity_kind != "local":
+        raise HTTPException(status_code=403, detail="External accounts are managed through SCIM")
+    if body.is_active is not None and body.is_active != user.is_active:
+        user.session_version += 1
     if body.email is not None:
         user.email = body.email
     if body.role is not None:

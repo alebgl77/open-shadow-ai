@@ -36,9 +36,17 @@ The API listens on HTTP internally despite port 8443. Place a reverse proxy with
 
 Use an exact `CORS_ORIGINS` JSON array only when clients need cross-origin access. The bundled frontend uses same-origin requests. Endpoint agents and the AD uploader require HTTPS and validate certificates. Supply `SHADAI_CA_BUNDLE` for a private CA; never disable validation.
 
+## Optional console SSO and provisioning
+
+The base Compose file keeps OIDC/SCIM disabled and requires only the six bootstrap secrets. The optional [identity guide](sso-scim.md) describes `docker-compose.sso.yml`, two operator-provisioned secret files and Entra/generic OIDC setup. SCIM controls console accounts, separately from collected directory inventory. Keep a tested local administrator for recovery.
+
+The public origin must serve both the frontend and `/api/` over HTTPS. The existing frontend proxy carries SCIM; no extra port is needed. Configure every upstream proxy and tracing system to omit OAuth callback query strings and sensitive headers. The bundled proxy logs method/path/status without query strings or referrers; callback error logging and raw Uvicorn access logs are disabled because they can contain authorization codes. Diagnose failures using sanitized application events and provisioning status.
+
 ## Updates
 
 Back up data, configuration and encryption keys first. Validate the new commit against a restored copy before production. Review migration SQL and deployment changes.
+
+The 0.2.0 identity migration (`003`) must complete before the new API/workers start. It takes an exclusive lock on the users table and checks stripped, case-folded usernames before schema changes. Empty names or case-insensitive collisions block the migration; resolve them by explicitly renaming the affected local accounts, then rerun it. Accounts are never silently merged. Schedule the migration with application writes stopped and test it against a restored backup first.
 
 ```bash
 docker compose build
@@ -48,6 +56,8 @@ docker compose up -d
 ```
 
 The above ClickHouse migration is needed on existing volumes; init scripts run only during first database initialization. Fresh installs mount both `docker/clickhouse-init/001_create_database.sql` and `migrations/clickhouse/002_event_metadata.sql`. There is no automatic schema rollback.
+
+Migration `003` refuses a downgrade once external identities, SCIM groups, service audit entries or session revocations exist. Do not delete those records to bypass the guard. Recover a pre-migration backup into an isolated deployment with its matching code/configuration if rollback is required. For SSO-enabled deployments use both Compose files in the commands above, as described in the [identity guide](sso-scim.md#docker-compose).
 
 ## Backup and restore
 
@@ -80,4 +90,4 @@ See [deploy/kubernetes/README.md](../deploy/kubernetes/README.md). The manifests
 
 ## Readiness gates
 
-Local accounts and a shared collector key are implemented; enterprise SSO, per-device enrollment keys and automatic key rotation are future work. One install is one organization. Do not infer tenant isolation from an event's `tenant_id`. Validate backup/restore, ingress authentication, least privilege, encrypted private connectivity to stores, retention, failure recovery and measured capacity before production.
+Local accounts, optional OIDC/SCIM console access and a shared collector key are implemented. Validate identity-provider interoperability and deactivation with a pilot account; per-device enrollment keys and automatic key rotation remain future work. One install is one organization. Do not infer tenant isolation from an event's `tenant_id`. Validate backup/restore, ingress authentication, least privilege, encrypted private connectivity to stores, retention, failure recovery and measured capacity before production.

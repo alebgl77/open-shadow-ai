@@ -12,17 +12,19 @@ from shadai.models.audit import AuditLogORM
 
 async def log_audit(
     session: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: uuid.UUID | None,
     username: str,
     action: str,
     resource_type: str | None = None,
     resource_id: str | None = None,
     details: dict | None = None,
     ip_address: str | None = None,
+    actor_kind: str = "user",
 ) -> None:
     """Insert an audit log entry. Called after every mutation."""
     entry = AuditLogORM(
         user_id=user_id,
+        actor_kind=actor_kind,
         username=username,
         action=action,
         resource_type=resource_type,
