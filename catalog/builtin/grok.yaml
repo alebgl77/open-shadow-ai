@@ -1,0 +1,24 @@
+id: grok
+canonical_name: Grok
+category: llm_chat
+vendor: xAI
+description: xAI chatbot
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - grok.x.ai
+  - api.x.ai
+  - console.x.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

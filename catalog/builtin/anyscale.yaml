@@ -1,0 +1,23 @@
+id: anyscale
+canonical_name: Anyscale
+category: ai_platform
+vendor: Anyscale
+description: Ray-based AI platform
+rule_tags:
+- llm
+- api
+- platform
+signatures:
+  domains:
+  - anyscale.com
+  - api.endpoints.anyscale.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

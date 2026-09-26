@@ -1,0 +1,22 @@
+id: adobe-firefly
+canonical_name: Adobe Firefly
+category: image_gen
+vendor: Adobe
+description: Adobe AI image gen
+rule_tags:
+- image
+- gen
+- saas
+signatures:
+  domains:
+  - firefly.adobe.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

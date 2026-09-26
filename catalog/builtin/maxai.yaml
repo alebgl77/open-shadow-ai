@@ -1,0 +1,24 @@
+id: maxai
+canonical_name: MaxAI
+category: browser_extension_ai
+vendor: MaxAI
+description: AI browser assistant
+rule_tags:
+- llm
+- extension
+- browser
+signatures:
+  domains:
+  - maxai.me
+  - app.maxai.me
+  extension_ids:
+  - mhnlakgilnojmhinhkckjpncpbhabphi
+  url_patterns: []
+  processes: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

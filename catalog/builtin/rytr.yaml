@@ -1,0 +1,22 @@
+id: rytr
+canonical_name: Rytr
+category: writing_assistant
+vendor: Rytr
+description: AI writing tool
+rule_tags:
+- writing
+- saas
+signatures:
+  domains:
+  - rytr.me
+  - app.rytr.me
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

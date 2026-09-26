@@ -1,0 +1,23 @@
+id: deepinfra
+canonical_name: DeepInfra
+category: ai_platform
+vendor: DeepInfra
+description: Model inference API
+rule_tags:
+- llm
+- api
+- platform
+signatures:
+  domains:
+  - deepinfra.com
+  - api.deepinfra.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

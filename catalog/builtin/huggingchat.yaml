@@ -1,0 +1,23 @@
+id: huggingchat
+canonical_name: HuggingChat
+category: llm_chat
+vendor: Hugging Face
+description: Open-source chat
+rule_tags:
+- llm
+- chat
+- open_source
+signatures:
+  domains:
+  - huggingface.co
+  url_patterns:
+  - /chat*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

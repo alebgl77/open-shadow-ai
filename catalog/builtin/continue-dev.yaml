@@ -1,0 +1,22 @@
+id: continue-dev
+canonical_name: Continue
+category: code_assistant
+vendor: Continue
+description: Open-source AI code assistant
+rule_tags:
+- llm
+- code
+- extension
+signatures:
+  domains:
+  - continue.dev
+  extension_ids: []
+  url_patterns: []
+  processes: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

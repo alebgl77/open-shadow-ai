@@ -1,0 +1,23 @@
+id: inflection-pi
+canonical_name: Pi by Inflection
+category: llm_chat
+vendor: Inflection AI
+description: Personal AI assistant
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - pi.ai
+  - heypi.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

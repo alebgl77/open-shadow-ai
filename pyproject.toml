@@ -1,0 +1,55 @@
+[project]
+name = "shadai"
+version = "0.1.0"
+description = "Shadow AI Discovery, Correlation & Governance Platform"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "asyncpg>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "alembic>=1.14.0",
+    "clickhouse-driver>=0.2.9",
+    "redis>=5.2.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "pyyaml>=6.0.2",
+    "bcrypt>=4.2.0",
+    "PyJWT>=2.10.1",
+    "cryptography>=44.0.0",
+    "httpx>=0.28.0",
+    "python-multipart>=0.0.18",
+    "structlog>=24.4.0",
+    "prometheus-client>=0.21.0",
+    "psutil>=6.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",
+    "testcontainers>=4.8.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["integration: requires explicitly enabled disposable PostgreSQL, Redis and ClickHouse services"]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

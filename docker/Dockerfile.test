@@ -1,0 +1,15 @@
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SHADAI_INTEGRATION=1
+COPY pyproject.toml README.md alembic.ini ./
+COPY src/ src/
+COPY agent/ agent/
+RUN pip install --no-cache-dir '.[dev]' ./agent && useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin shadai
+COPY tests/ tests/
+COPY migrations/ migrations/
+COPY catalog/ catalog/
+COPY docker/clickhouse-init/ docker/clickhouse-init/
+COPY docker/entrypoint.py /app/entrypoint.py
+USER 10001:10001
+ENTRYPOINT ["python", "/app/entrypoint.py"]
+CMD ["python", "-m", "pytest", "-q", "-m", "integration", "-p", "no:cacheprovider"]

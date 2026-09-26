@@ -1,0 +1,23 @@
+id: mistral-api
+canonical_name: Mistral API
+category: ai_platform
+vendor: Mistral AI
+description: Mistral API
+rule_tags:
+- llm
+- api
+- platform
+signatures:
+  domains:
+  - api.mistral.ai
+  url_patterns:
+  - /v1/chat/completions
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

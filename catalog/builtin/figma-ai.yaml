@@ -1,0 +1,23 @@
+id: figma-ai
+canonical_name: Figma AI
+category: design_ai
+vendor: Figma
+description: AI design features
+rule_tags:
+- design
+- saas
+signatures:
+  domains:
+  - figma.com
+  - www.figma.com
+  url_patterns:
+  - /ai/*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

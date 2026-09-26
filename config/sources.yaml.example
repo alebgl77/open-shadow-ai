@@ -1,0 +1,11 @@
+# The syslog profile exposes this BIND listener on loopback by default.
+# Configure one parser per listener; see docs/collectors.md.
+sources:
+  - name: dns-pilot
+    type: syslog
+    enabled: true
+    config:
+      listen_port: 1514
+      protocol: tcp
+      parser: bind_query_log
+# Entra runs separately; declaring an API source here does not poll it.

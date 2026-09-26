@@ -1,0 +1,24 @@
+id: llama-cpp
+canonical_name: llama.cpp
+category: local_runtime
+vendor: ggerganov
+description: C++ LLM inference
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  processes:
+  - llama-server
+  - llama-cli
+  - llama-cpp-server
+  local_ports: []
+  domains: []
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

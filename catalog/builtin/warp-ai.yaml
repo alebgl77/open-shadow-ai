@@ -1,0 +1,25 @@
+id: warp-ai
+canonical_name: Warp AI
+category: code_assistant
+vendor: Warp
+description: AI-powered terminal
+aliases: []
+signatures:
+  domains:
+  - warp.dev
+  - app.warp.dev
+  processes:
+  - warp
+  - Warp
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- code
+- terminal
+- desktop

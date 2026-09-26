@@ -1,0 +1,22 @@
+id: writesonic
+canonical_name: Writesonic
+category: writing_assistant
+vendor: Writesonic
+description: AI content generation
+rule_tags:
+- writing
+- saas
+signatures:
+  domains:
+  - writesonic.com
+  - app.writesonic.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

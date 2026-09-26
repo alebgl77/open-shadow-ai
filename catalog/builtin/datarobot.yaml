@@ -1,0 +1,23 @@
+id: datarobot
+canonical_name: DataRobot
+category: data_ai
+vendor: DataRobot
+description: Enterprise ML platform
+rule_tags:
+- ml
+- data
+- saas
+signatures:
+  domains:
+  - datarobot.com
+  - app.datarobot.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,23 @@
+id: uizard
+canonical_name: Uizard
+category: design_ai
+vendor: Uizard
+description: AI UI design
+aliases: []
+signatures:
+  domains:
+  - uizard.io
+  - app.uizard.io
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- design
+- ui
+- saas

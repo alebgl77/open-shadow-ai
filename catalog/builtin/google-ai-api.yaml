@@ -1,0 +1,25 @@
+id: google-ai-api
+canonical_name: Google AI API
+category: ai_platform
+vendor: Google
+description: Google Generative AI API
+rule_tags:
+- llm
+- api
+- platform
+signatures:
+  domains:
+  - generativelanguage.googleapis.com
+  - aiplatform.googleapis.com
+  url_patterns:
+  - /v1/models*
+  - /v1beta/models*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

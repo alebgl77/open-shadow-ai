@@ -1,0 +1,26 @@
+id: gpt4all
+canonical_name: GPT4All
+category: local_runtime
+vendor: Nomic
+description: Local chatbot
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  domains:
+  - gpt4all.io
+  processes:
+  - gpt4all
+  - gpt4all-chat
+  local_paths:
+  - ~/.cache/gpt4all
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports:
+  - 4891
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

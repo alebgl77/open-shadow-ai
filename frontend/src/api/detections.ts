@@ -1,0 +1,68 @@
+import client from './client'
+
+export interface Detection {
+  detection_id: string
+  entity_name: string
+  entity_type: string
+  entity_category: string | null
+  catalog_item_id: string | null
+  classification: string
+  shadow_ai_status: string
+  confidence_score: number
+  confidence_level: string
+  risk_score: number
+  risk_level: string
+  risk_score_stale?: boolean
+  governance_status?: 'none' | 'active' | 'expired'
+  first_seen_at: string
+  last_seen_at: string
+  impacted_users_count: number
+  impacted_devices_count: number
+  total_events_count: number
+  source_types: string[]
+  primary_evidence: string | null
+  evidence_bundle: Record<string, unknown>
+  reasoning_summary: string | null
+  analyst_status: string
+  analyst_notes: string | null
+  reviewed_at: string | null
+  recommended_action: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DetectionListResponse {
+  items: Detection[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface DetectionFilter {
+  classification?: string
+  risk_level?: string
+  confidence_level?: string
+  entity_type?: string
+  analyst_status?: string
+  search?: string
+  page?: number
+  page_size?: number
+  sort_by?: string
+  sort_order?: string
+}
+
+export const listDetections = (filters: DetectionFilter = {}) => {
+  const params = new URLSearchParams()
+  const normalized = { ...filters, page: Math.max(1, Math.floor(Number(filters.page) || 1)), page_size: Math.max(10, Math.min(100, Math.floor(Number(filters.page_size) || 25))) }
+  Object.entries(normalized).forEach(([k, v]) => { if (v) params.set(k, String(v)) })
+  return client.get<DetectionListResponse>(`/detections?${params}`).then(r => r.data)
+}
+
+export const getDetection = (id: string) =>
+  client.get<Detection>(`/detections/${id}`).then(r => r.data)
+
+export const updateDetection = (id: string, body: { classification?: string; analyst_status?: string; analyst_notes?: string }) =>
+  client.patch<Detection>(`/detections/${id}`, body).then(r => r.data)
+
+export const getDetectionTimeline = (id: string) =>
+  client.get<Array<{ type: string; timestamp: string; description: string }>>(`/detections/${id}/timeline`).then(r => r.data)

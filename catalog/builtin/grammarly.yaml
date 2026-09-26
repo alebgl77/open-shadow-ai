@@ -1,0 +1,25 @@
+id: grammarly
+canonical_name: Grammarly
+category: writing_assistant
+vendor: Grammarly
+description: AI writing assistant
+rule_tags:
+- writing
+- saas
+signatures:
+  domains:
+  - grammarly.com
+  - app.grammarly.com
+  - gnar.grammarly.com
+  - capi.grammarly.com
+  extension_ids:
+  - kbfnbcaeplbcioakkpcpgfkobkghlhen
+  url_patterns: []
+  processes: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

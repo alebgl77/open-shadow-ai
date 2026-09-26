@@ -1,0 +1,23 @@
+id: playground-ai
+canonical_name: Playground AI
+category: image_gen
+vendor: Playground
+description: AI image gen
+aliases: []
+signatures:
+  domains:
+  - playground.com
+  - playgroundai.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- image
+- gen
+- saas

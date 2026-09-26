@@ -1,0 +1,24 @@
+id: canva-ai
+canonical_name: Canva AI
+category: design_ai
+vendor: Canva
+description: AI design features
+rule_tags:
+- design
+- saas
+signatures:
+  domains:
+  - canva.com
+  - www.canva.com
+  url_patterns:
+  - /api/ai*
+  - /magic-studio*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

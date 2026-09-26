@@ -1,0 +1,25 @@
+id: text-gen-webui
+canonical_name: Text Generation WebUI
+category: local_runtime
+vendor: oobabooga
+description: Gradio LLM interface
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  processes:
+  - text-generation-launcher
+  - text-generation-server
+  local_ports:
+  - 7860
+  container_patterns:
+  - atinoda/text-generation-webui*
+  domains: []
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_paths: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

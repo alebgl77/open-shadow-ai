@@ -1,0 +1,24 @@
+id: notion-ai
+canonical_name: Notion AI
+category: writing_assistant
+vendor: Notion
+description: AI in Notion
+rule_tags:
+- writing
+- productivity
+- saas
+signatures:
+  domains:
+  - notion.so
+  - api.notion.com
+  url_patterns:
+  - /api/v3/getCompletion*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

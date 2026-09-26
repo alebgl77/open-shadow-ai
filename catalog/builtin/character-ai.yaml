@@ -1,0 +1,23 @@
+id: character-ai
+canonical_name: Character.AI
+category: llm_chat
+vendor: Character AI
+description: Character-based AI chat
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - character.ai
+  - beta.character.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

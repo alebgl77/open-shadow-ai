@@ -1,0 +1,24 @@
+id: aider
+canonical_name: Aider
+category: code_assistant
+vendor: aider-chat
+description: AI pair programming CLI
+rule_tags:
+- llm
+- code
+- cli
+- local
+signatures:
+  processes:
+  - aider
+  domains:
+  - aider.chat
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

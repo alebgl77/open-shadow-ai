@@ -1,0 +1,24 @@
+id: descript
+canonical_name: Descript
+category: voice_ai
+vendor: Descript
+description: AI audio/video editor
+rule_tags:
+- voice
+- video
+- saas
+signatures:
+  domains:
+  - descript.com
+  - app.descript.com
+  processes:
+  - Descript
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

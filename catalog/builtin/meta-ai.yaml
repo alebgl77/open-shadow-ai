@@ -1,0 +1,23 @@
+id: meta-ai
+canonical_name: Meta AI
+category: llm_chat
+vendor: Meta
+description: Meta AI assistant
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - meta.ai
+  - www.meta.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

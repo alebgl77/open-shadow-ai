@@ -1,0 +1,25 @@
+id: together-api
+canonical_name: Together API
+category: ai_platform
+vendor: Together AI
+description: Open model API
+rule_tags:
+- llm
+- api
+- platform
+signatures:
+  domains:
+  - api.together.xyz
+  url_patterns:
+  - /v1/chat/completions
+  - /v1/completions
+  - /inference
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

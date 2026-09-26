@@ -1,0 +1,23 @@
+id: replit-ai
+canonical_name: Replit AI
+category: code_assistant
+vendor: Replit
+description: AI-powered coding platform
+rule_tags:
+- llm
+- code
+- saas
+signatures:
+  domains:
+  - replit.com
+  - repl.co
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

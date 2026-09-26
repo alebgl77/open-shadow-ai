@@ -1,0 +1,28 @@
+id: chatgpt
+canonical_name: ChatGPT
+category: llm_chat
+vendor: OpenAI
+description: Conversational AI by OpenAI
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - chat.openai.com
+  - chatgpt.com
+  - cdn.oaistatic.com
+  url_patterns:
+  - /v1/chat/completions
+  - /backend-api/conversation
+  user_agent_patterns:
+  - openai-python*
+  - OpenAI/*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+aliases: []
+default_trust_level: unknown

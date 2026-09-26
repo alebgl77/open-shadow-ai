@@ -1,0 +1,26 @@
+id: jan
+canonical_name: Jan
+category: local_runtime
+vendor: Jan.ai
+description: Open-source ChatGPT alternative
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  domains:
+  - jan.ai
+  processes:
+  - jan
+  - Jan
+  local_ports:
+  - 1337
+  local_paths:
+  - ~/jan
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+  :root { color-scheme: dark; font-synthesis: none; }
+  body { @apply bg-surface-950 text-slate-100; }
+  * { scrollbar-width: thin; scrollbar-color: #33464c #10191f; }
+  button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  button:disabled { cursor: not-allowed; opacity: .45; }
+  :focus-visible { outline: 2px solid #65dbc6; outline-offset: 4px; }
+  input,select,textarea { min-width: 0; }
+  td { white-space: nowrap; }
+  h1,h2,h3 { text-wrap: balance; }
+  @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+}
+@layer components {
+  .stat-card { @apply bg-surface-900 border border-surface-600/35 rounded-xl p-5; }
+  .data-row { @apply border-b border-surface-700/40 hover:bg-surface-700/20 transition-colors duration-150; }
+  .badge { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium; }
+  .eyebrow { @apply text-[10px] font-semibold uppercase tracking-[.2em] text-accent; }
+  .field-label { @apply block text-xs text-slate-300 font-medium mb-2; }
+  .field { @apply bg-surface-950 border border-surface-600/60 rounded-lg px-3 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 focus:border-accent/60; }
+  .primary-button { @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-accent text-surface-950 font-semibold text-xs hover:bg-accent-glow transition-colors; }
+  .secondary-button { @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-surface-800 border border-surface-600/50 text-slate-200 font-medium text-xs hover:border-accent/40 hover:text-accent transition-colors; }
+  .page-heading { @apply text-[28px] md:text-[30px] font-semibold tracking-[-.035em]; }
+  .page-description { @apply text-sm text-slate-400 mt-2 leading-relaxed; }
+  .skip-link { @apply fixed top-2 left-2 z-50 bg-accent text-surface-950 px-4 py-2 rounded -translate-y-20 focus:translate-y-0; }
+}
+.login-scene { background: radial-gradient(ellipse at 5% 35%, #142a2c 0%, transparent 50%), #0c1217; }
+.nav-item.active { box-shadow: inset 2px 0 0 #65dbc6; }
+.text-slate-500 { color: #8a9aa8; }
+.text-slate-600 { color: #82929f; }
+.bg-surface-800:has(> table) { overflow-x: auto; }
+@media (max-width: 640px) { .stat-card { padding: 1rem; } .login-grid { padding-top: 1rem; } }

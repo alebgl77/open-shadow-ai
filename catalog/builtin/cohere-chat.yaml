@@ -1,0 +1,26 @@
+id: cohere-chat
+canonical_name: Cohere Chat
+category: llm_chat
+vendor: Cohere
+description: Enterprise AI platform
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - coral.cohere.com
+  - dashboard.cohere.com
+  - api.cohere.com
+  url_patterns:
+  - /v1/chat
+  - /v2/chat
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

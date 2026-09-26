@@ -1,0 +1,23 @@
+id: assembly-ai
+canonical_name: AssemblyAI
+category: voice_ai
+vendor: AssemblyAI
+description: Speech-to-text API
+aliases: []
+signatures:
+  domains:
+  - assemblyai.com
+  - api.assemblyai.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- voice
+- transcription
+- api

@@ -1,0 +1,22 @@
+id: murf-ai
+canonical_name: Murf AI
+category: voice_ai
+vendor: Murf
+description: AI voiceover
+aliases: []
+signatures:
+  domains:
+  - murf.ai
+  - app.murf.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- voice
+- saas

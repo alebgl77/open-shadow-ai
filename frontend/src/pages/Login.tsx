@@ -1,0 +1,30 @@
+import { useState } from 'react'
+import { Navigate, useNavigate } from 'react-router-dom'
+import { ArrowRight, ScanLine, Layers3, ShieldCheck, ArrowUpRight } from 'lucide-react'
+import axios from 'axios'
+import { login as apiLogin } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
+import Brand, { BrandMark } from '@/components/ui/Brand'
+
+export default function Login() {
+  const [username, setUsername] = useState(''); const [password, setPassword] = useState('')
+  const [error, setError] = useState(''); const [loading, setLoading] = useState(false)
+  const auth = useAuthStore(); const navigate = useNavigate()
+  if (auth.isAuthenticated) return <Navigate to="/dashboard" replace />
+  async function submit(event: React.FormEvent) {
+    event.preventDefault(); setError(''); setLoading(true)
+    try { const res = await apiLogin(username, password); auth.login(res.access_token, res.user); navigate('/dashboard') }
+    catch (error) { setError(axios.isAxiosError(error) && error.response?.status === 401 ? 'The username or password is incorrect.' : 'Unable to reach your workspace. Check the service connection and try again.') }
+    finally { setLoading(false) }
+  }
+  async function demo() { const { resetDemo } = await import('@/api/demo'); resetDemo(); auth.enterDemo(); navigate('/dashboard') }
+  return <div className="login-scene min-h-screen flex flex-col">
+    <header className="flex items-center justify-between px-6 md:px-12 py-7"><Brand/><a href="https://github.com/alebgl77/open-shadow-ai" target="_blank" rel="noreferrer" className="text-xs text-slate-400 flex items-center gap-2 hover:text-accent">View on GitHub <ArrowUpRight size={14}/></a></header>
+    <main className="login-grid w-full max-w-[1260px] mx-auto grid lg:grid-cols-[1.25fr_1fr] gap-12 lg:gap-24 px-6 md:px-12 py-12 md:py-20 flex-1 items-center">
+      <section><p className="eyebrow mb-6">Open source · Evidence first</p><h1 className="text-5xl md:text-[68px] leading-[1.06] tracking-[-.055em] font-semibold max-w-[650px]">See the evidence.<br/><span className="text-accent">Govern the AI.</span></h1><p className="text-slate-400 leading-relaxed text-lg max-w-[470px] mt-7">Bring AI signals into focus. Discover tools, understand the evidence, and make informed governance decisions.</p>
+      <div className="mt-12 space-y-6">{[[ScanLine, 'Discover what your sources can see', 'Network, endpoint, browser and identity signals.'], [Layers3, 'Understand the evidence', 'Trace findings to observed activity and source coverage.'], [ShieldCheck, 'Review with context', 'Classify tools and record your decisions.']].map(([Icon, title, description]) => { const ItemIcon = Icon as typeof ScanLine; return <div className="flex gap-4" key={String(title)}><div className="w-10 h-10 flex items-center justify-center border border-surface-600/50 rounded-xl text-accent"><ItemIcon size={19}/></div><div><h2 className="text-sm font-medium">{String(title)}</h2><p className="text-sm text-slate-400 mt-1">{String(description)}</p></div></div> })}</div></section>
+      <section className="login-panel p-7 md:p-9 rounded-2xl border border-surface-600/50 bg-surface-900 shadow-2xl shadow-black/20"><BrandMark className="w-10 h-10 text-accent mb-6"/><p className="eyebrow mb-2">Your workspace</p><h2 className="text-2xl font-semibold tracking-tight">Welcome back</h2><p className="text-sm text-slate-400 mt-2 mb-7">Sign in to your self-hosted console.</p><form onSubmit={submit} className="space-y-5"><div><label htmlFor="username" className="field-label">Username</label><input id="username" autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} placeholder="Your username" required className="field w-full"/></div><div><label htmlFor="password" className="field-label">Password</label><input id="password" type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Your password" required className="field w-full"/></div>{error && <p role="alert" className="text-red-300 bg-red-500/10 p-3 rounded-lg text-sm">{error}</p>}<button disabled={loading} className="primary-button w-full justify-center">{loading ? 'Signing in…' : 'Sign in to workspace'}<ArrowRight size={16}/></button></form>
+      <div className="mt-7 border-t border-surface-600/40 pt-6"><p className="text-sm font-medium">Take a look around</p><p className="text-xs leading-relaxed text-slate-400 mt-1 mb-4">Explore synthetic evidence. No account or connected sources needed; changes stay in this session.</p><button onClick={demo} disabled={loading} className="secondary-button w-full justify-center">Explore the demo<ArrowUpRight size={15}/></button></div><p className="text-[11px] text-slate-500 leading-relaxed mt-6">Credentials stay in memory. Reloading the page ends your session.</p></section>
+    </main><footer className="px-6 md:px-12 pb-6 text-xs text-slate-500">For IT governance and security review. Not for employee performance monitoring.</footer>
+  </div>
+}

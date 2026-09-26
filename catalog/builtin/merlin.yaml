@@ -1,0 +1,24 @@
+id: merlin
+canonical_name: Merlin
+category: browser_extension_ai
+vendor: Merlin
+description: AI browser assistant
+rule_tags:
+- llm
+- extension
+- browser
+signatures:
+  domains:
+  - getmerlin.in
+  - merlin.foyer.work
+  extension_ids:
+  - camppjleccjaphfdbohjdohecfnoikec
+  url_patterns: []
+  processes: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

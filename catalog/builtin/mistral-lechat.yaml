@@ -1,0 +1,23 @@
+id: mistral-lechat
+canonical_name: Le Chat Mistral
+category: llm_chat
+vendor: Mistral AI
+description: Mistral AI chatbot
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - chat.mistral.ai
+  - mistral.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,23 @@
+id: obviously-ai
+canonical_name: Obviously AI
+category: data_ai
+vendor: Obviously AI
+description: No-code ML
+rule_tags:
+- ml
+- data
+- saas
+signatures:
+  domains:
+  - obviously.ai
+  - app.obviously.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

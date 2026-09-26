@@ -1,0 +1,23 @@
+id: dall-e
+canonical_name: DALL-E
+category: image_gen
+vendor: OpenAI
+description: OpenAI image generation
+rule_tags:
+- image
+- gen
+- saas
+signatures:
+  domains:
+  - labs.openai.com
+  url_patterns:
+  - /v1/images/generations
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

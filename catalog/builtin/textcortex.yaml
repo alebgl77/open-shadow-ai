@@ -1,0 +1,22 @@
+id: textcortex
+canonical_name: TextCortex
+category: writing_assistant
+vendor: TextCortex
+description: AI content generation
+aliases: []
+signatures:
+  domains:
+  - textcortex.com
+  - app.textcortex.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- writing
+- saas

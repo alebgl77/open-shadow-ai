@@ -1,0 +1,25 @@
+id: groq
+canonical_name: Groq
+category: ai_platform
+vendor: Groq
+description: Fast inference API
+rule_tags:
+- llm
+- api
+- platform
+signatures:
+  domains:
+  - groq.com
+  - api.groq.com
+  - console.groq.com
+  url_patterns:
+  - /openai/v1/chat/completions
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

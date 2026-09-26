@@ -1,0 +1,23 @@
+id: you-ai
+canonical_name: You.com
+category: llm_chat
+vendor: You.com
+description: AI search engine
+rule_tags:
+- llm
+- search
+- saas
+signatures:
+  domains:
+  - you.com
+  - api.you.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

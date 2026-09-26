@@ -1,0 +1,22 @@
+id: galileo-ai
+canonical_name: Galileo AI
+category: design_ai
+vendor: Galileo
+description: AI UI generation
+aliases: []
+signatures:
+  domains:
+  - usegalileo.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- design
+- ui
+- saas

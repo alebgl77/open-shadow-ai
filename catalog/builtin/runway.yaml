@@ -1,0 +1,23 @@
+id: runway
+canonical_name: Runway
+category: video_ai
+vendor: Runway
+description: AI video generation
+rule_tags:
+- video
+- gen
+- saas
+signatures:
+  domains:
+  - runwayml.com
+  - app.runwayml.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

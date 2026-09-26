@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: open-shadow-ai
+resources:
+  - namespace.yaml
+  - workloads.yaml
+  - services.yaml
+  - networkpolicy.yaml
+configMapGenerator:
+  - name: open-shadow-ai-settings
+    literals:
+      - SHADAI_TENANT_ID=default
+      - CORS_ORIGINS=[]
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_DATABASE=shadai
+  - name: open-shadow-ai-config
+    files: [shadai.yaml]
+images:
+  - name: open-shadow-ai-api
+    newTag: local
+  - name: open-shadow-ai-worker
+    newTag: local
+  - name: open-shadow-ai-frontend
+    newTag: local

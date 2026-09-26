@@ -1,0 +1,22 @@
+id: copy-ai
+canonical_name: Copy.ai
+category: writing_assistant
+vendor: Copy.ai
+description: AI copywriting
+rule_tags:
+- writing
+- saas
+signatures:
+  domains:
+  - copy.ai
+  - app.copy.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

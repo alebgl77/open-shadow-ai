@@ -1,0 +1,25 @@
+id: vllm
+canonical_name: vLLM
+category: local_runtime
+vendor: vLLM Project
+description: Fast LLM serving
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  processes:
+  - vllm
+  - vllm-server
+  local_ports:
+  - 8000
+  container_patterns:
+  - vllm/vllm*
+  domains: []
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_paths: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,25 @@
+id: anything-llm
+canonical_name: AnythingLLM
+category: local_runtime
+vendor: Mintplex Labs
+description: All-in-one AI app
+rule_tags:
+- llm
+- local
+- desktop
+signatures:
+  domains:
+  - useanything.com
+  processes:
+  - anything-llm
+  local_ports:
+  - 3001
+  container_patterns:
+  - mintplexlabs/anythingllm*
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_paths: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,20 @@
+name: Bug report
+description: Report a reproducible problem without exposing logs or credentials.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Expected and actual behavior; redact identities, tokens and internal hostnames.
+    validations: {required: true}
+  - type: textarea
+    id: reproduction
+    attributes: {label: Steps to reproduce with synthetic data}
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes: {label: Commit and deployment method}
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes: {label: Sanitized evidence and coverage limits}

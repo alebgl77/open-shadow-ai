@@ -1,0 +1,23 @@
+id: monica
+canonical_name: Monica
+category: browser_extension_ai
+vendor: Monica.im
+description: AI browser assistant
+rule_tags:
+- llm
+- extension
+- browser
+signatures:
+  domains:
+  - monica.im
+  extension_ids:
+  - ofpnmcalabcbjgholdjcjblkibolbppb
+  url_patterns: []
+  processes: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

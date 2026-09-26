@@ -1,0 +1,23 @@
+id: vercel-ai
+canonical_name: Vercel AI SDK
+category: ai_platform
+vendor: Vercel
+description: AI SDK
+rule_tags:
+- llm
+- api
+- dev
+signatures:
+  domains:
+  - sdk.vercel.ai
+  - v0.dev
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

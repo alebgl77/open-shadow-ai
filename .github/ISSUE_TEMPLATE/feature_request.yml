@@ -1,0 +1,13 @@
+name: Feature request
+description: Describe a use case or collector integration.
+body:
+  - type: textarea
+    id: need
+    attributes: {label: User need and current workaround}
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes: {label: Available telemetry and expected evidence}
+  - type: textarea
+    id: acceptance
+    attributes: {label: Acceptance criteria and privacy constraints}

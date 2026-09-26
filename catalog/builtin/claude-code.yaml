@@ -1,0 +1,24 @@
+id: claude-code
+canonical_name: Claude Code
+category: code_assistant
+vendor: Anthropic
+description: CLI coding assistant
+rule_tags:
+- llm
+- code
+- cli
+signatures:
+  domains: []
+  processes:
+  - claude
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns:
+  - claude-code/*
+  - anthropic-ai/claude-code*
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,24 @@
+id: auto-gpt
+canonical_name: AutoGPT
+category: agent_automation
+vendor: Significant Gravitas
+description: Autonomous AI agent
+rule_tags:
+- agent
+- local
+- automation
+signatures:
+  processes:
+  - autogpt
+  - auto-gpt
+  container_patterns:
+  - significantgravitas/autogpt*
+  domains: []
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

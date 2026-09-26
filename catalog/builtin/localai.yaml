@@ -1,0 +1,26 @@
+id: localai
+canonical_name: LocalAI
+category: local_runtime
+vendor: LocalAI
+description: Self-hosted OpenAI-compatible API
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  processes:
+  - local-ai
+  - localai
+  local_ports:
+  - 8080
+  container_patterns:
+  - localai/localai*
+  - quay.io/go-skynet/local-ai*
+  domains: []
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_paths: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

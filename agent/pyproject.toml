@@ -1,0 +1,23 @@
+[project]
+name = "shadai-agent"
+version = "0.1.0"
+description = "ShadAI Endpoint Agent — collects process, container, local AI, and browser extension telemetry"
+requires-python = ">=3.10"
+dependencies = [
+    "psutil>=6.1.0",
+    "requests>=2.32.0",
+    "pyyaml>=6.0.2",
+]
+
+[project.optional-dependencies]
+docker = ["docker>=7.1.0"]
+
+[project.scripts]
+shadai-agent = "shadai_agent.main:main"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["shadai_agent*"]

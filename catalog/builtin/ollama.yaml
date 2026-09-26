@@ -1,0 +1,32 @@
+id: ollama
+canonical_name: Ollama
+category: local_runtime
+vendor: Ollama
+description: Local LLM runtime
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  domains:
+  - ollama.com
+  - registry.ollama.ai
+  url_patterns:
+  - /api/generate
+  - /api/chat
+  - /api/pull
+  processes:
+  - ollama
+  - ollama.exe
+  - ollama-runner
+  local_ports:
+  - 11434
+  local_paths:
+  - ~/.ollama
+  container_patterns:
+  - ollama/ollama*
+  extension_ids: []
+  oauth_app_ids: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

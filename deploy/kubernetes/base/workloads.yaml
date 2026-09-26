@@ -1,0 +1,228 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: open-shadow-ai, component: api}}
+  template:
+    metadata:
+      labels: {app: open-shadow-ai, component: api, tier: backend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: api
+          image: open-shadow-ai-api:local
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8443}]
+          envFrom:
+            - configMapRef: {name: open-shadow-ai-settings}
+            - secretRef: {name: open-shadow-ai-runtime}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: config, mountPath: /app/config, readOnly: true}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}, {name: config, configMap: {name: open-shadow-ai-config}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest-worker
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: open-shadow-ai, component: ingest-worker}}
+  template:
+    metadata:
+      labels: {app: open-shadow-ai, component: ingest-worker, tier: backend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: ingest-worker
+          image: open-shadow-ai-worker:local
+          imagePullPolicy: IfNotPresent
+          args: [python, -m, shadai.workers.ingest]
+          envFrom:
+            - configMapRef: {name: open-shadow-ai-settings}
+            - secretRef: {name: open-shadow-ai-runtime}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          startupProbe:
+            exec: {command: [python, '-c', 'import os; os.kill(1, 0)']}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            exec: {command: [python, '-c', 'import os; os.kill(1, 0)']}
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command: [python, '-c', "from shadai.config import load_config; import redis; c=load_config(); redis.Redis.from_url(c.database.redis_url).ping()"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: config, mountPath: /app/config, readOnly: true}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}, {name: config, configMap: {name: open-shadow-ai-config}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: correlation-worker
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: open-shadow-ai, component: correlation-worker}}
+  template:
+    metadata:
+      labels: {app: open-shadow-ai, component: correlation-worker, tier: backend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: correlation-worker
+          image: open-shadow-ai-worker:local
+          imagePullPolicy: IfNotPresent
+          args: [python, -m, shadai.workers.correlate]
+          envFrom:
+            - configMapRef: {name: open-shadow-ai-settings}
+            - secretRef: {name: open-shadow-ai-runtime}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          startupProbe:
+            exec: {command: [python, '-c', 'import os; os.kill(1, 0)']}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            exec: {command: [python, '-c', 'import os; os.kill(1, 0)']}
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command: [python, '-c', "from shadai.config import load_config; import redis; c=load_config(); redis.Redis.from_url(c.database.redis_url).ping()"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: config, mountPath: /app/config, readOnly: true}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}, {name: config, configMap: {name: open-shadow-ai-config}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: purge-worker
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: open-shadow-ai, component: purge-worker}}
+  template:
+    metadata:
+      labels: {app: open-shadow-ai, component: purge-worker, tier: backend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: purge-worker
+          image: open-shadow-ai-worker:local
+          imagePullPolicy: IfNotPresent
+          args: [python, -m, shadai.workers.purge]
+          envFrom:
+            - configMapRef: {name: open-shadow-ai-settings}
+            - secretRef: {name: open-shadow-ai-runtime}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          startupProbe:
+            exec: {command: [python, '-c', 'import os; os.kill(1, 0)']}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            exec: {command: [python, '-c', 'import os; os.kill(1, 0)']}
+            periodSeconds: 20
+          readinessProbe:
+            exec:
+              command: [python, '-c', "from shadai.config import load_config; import redis; c=load_config(); redis.Redis.from_url(c.database.redis_url).ping()"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts: [{name: tmp, mountPath: /tmp}, {name: config, mountPath: /app/config, readOnly: true}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}, {name: config, configMap: {name: open-shadow-ai-config}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: open-shadow-ai, component: frontend}}
+  template:
+    metadata:
+      labels: {app: open-shadow-ai, component: frontend}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {seccompProfile: {type: RuntimeDefault}, runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101}
+      containers:
+        - name: frontend
+          image: open-shadow-ai-frontend:local
+          imagePullPolicy: IfNotPresent
+          ports: [{name: http, containerPort: 8080}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {cpu: 500m, memory: 128Mi}
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            failureThreshold: 20
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          volumeMounts: [{name: tmp, mountPath: /tmp}]
+      volumes: [{name: tmp, emptyDir: {sizeLimit: 64Mi}}]

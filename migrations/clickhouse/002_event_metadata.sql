@@ -1,0 +1,12 @@
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS user_agent String DEFAULT '';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS evidence_type LowCardinality(String) DEFAULT 'observation';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS provider String DEFAULT '';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS model String DEFAULT '';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS model_provenance LowCardinality(String) DEFAULT 'unknown';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS measurement_provenance LowCardinality(String) DEFAULT 'unknown';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS input_tokens Nullable(UInt64);
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS output_tokens Nullable(UInt64);
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS cost_usd Nullable(Float64);
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS identity_provider String DEFAULT '';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS identity_object_id String DEFAULT '';
+ALTER TABLE shadai.events ADD COLUMN IF NOT EXISTS identity_sid String DEFAULT '';

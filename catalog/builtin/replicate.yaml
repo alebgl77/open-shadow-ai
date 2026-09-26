@@ -1,0 +1,23 @@
+id: replicate
+canonical_name: Replicate
+category: ai_platform
+vendor: Replicate
+description: ML model hosting
+rule_tags:
+- ml
+- api
+- platform
+signatures:
+  domains:
+  - replicate.com
+  - api.replicate.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

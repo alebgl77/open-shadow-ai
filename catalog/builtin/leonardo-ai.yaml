@@ -1,0 +1,23 @@
+id: leonardo-ai
+canonical_name: Leonardo.ai
+category: image_gen
+vendor: Leonardo AI
+description: AI image creation
+rule_tags:
+- image
+- gen
+- saas
+signatures:
+  domains:
+  - leonardo.ai
+  - app.leonardo.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,24 @@
+id: codeium
+canonical_name: Codeium
+category: code_assistant
+vendor: Codeium
+description: Free AI code completion
+rule_tags:
+- llm
+- code
+- saas
+signatures:
+  domains:
+  - codeium.com
+  - api.codeium.com
+  - server.codeium.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

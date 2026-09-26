@@ -1,0 +1,148 @@
+"""Generate 100+ AI tool catalog YAML entries."""
+import os, yaml
+
+CATALOG_DIR = os.path.join(os.path.dirname(__file__), "..", "catalog", "builtin")
+os.makedirs(CATALOG_DIR, exist_ok=True)
+
+ENTRIES = [
+  # LLM Chat
+  {"id":"chatgpt","canonical_name":"ChatGPT","category":"llm_chat","vendor":"OpenAI","description":"Conversational AI by OpenAI","signatures":{"domains":["chat.openai.com","chatgpt.com","cdn.oaistatic.com"],"url_patterns":["/v1/chat/completions","/backend-api/conversation"],"user_agent_patterns":["openai-python*","OpenAI/*"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"claude","canonical_name":"Claude","category":"llm_chat","vendor":"Anthropic","description":"AI assistant by Anthropic","signatures":{"domains":["claude.ai","api.anthropic.com","cdn.anthropic.com"],"url_patterns":["/v1/messages","/v1/complete"],"user_agent_patterns":["anthropic-python*","Claude/*"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"gemini","canonical_name":"Gemini","category":"llm_chat","vendor":"Google","description":"Google AI chatbot","signatures":{"domains":["gemini.google.com","generativelanguage.googleapis.com","bard.google.com"],"url_patterns":["/v1beta/models*"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"perplexity","canonical_name":"Perplexity","category":"llm_chat","vendor":"Perplexity AI","description":"AI search engine","signatures":{"domains":["perplexity.ai","www.perplexity.ai","api.perplexity.ai"]},"rule_tags":["llm","search","saas"]},
+  {"id":"deepseek","canonical_name":"DeepSeek","category":"llm_chat","vendor":"DeepSeek","description":"Chinese AI chatbot","signatures":{"domains":["chat.deepseek.com","api.deepseek.com","deepseek.com"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"mistral-lechat","canonical_name":"Le Chat Mistral","category":"llm_chat","vendor":"Mistral AI","description":"Mistral AI chatbot","signatures":{"domains":["chat.mistral.ai","mistral.ai"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"poe","canonical_name":"Poe","category":"llm_chat","vendor":"Quora","description":"Multi-model AI chatbot platform","signatures":{"domains":["poe.com","www.poe.com"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"character-ai","canonical_name":"Character.AI","category":"llm_chat","vendor":"Character AI","description":"Character-based AI chat","signatures":{"domains":["character.ai","beta.character.ai"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"phind","canonical_name":"Phind","category":"llm_chat","vendor":"Phind","description":"AI search for developers","signatures":{"domains":["phind.com","www.phind.com"]},"rule_tags":["llm","search","saas"]},
+  {"id":"you-ai","canonical_name":"You.com","category":"llm_chat","vendor":"You.com","description":"AI search engine","signatures":{"domains":["you.com","api.you.com"]},"rule_tags":["llm","search","saas"]},
+  {"id":"grok","canonical_name":"Grok","category":"llm_chat","vendor":"xAI","description":"xAI chatbot","signatures":{"domains":["grok.x.ai","x.ai"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"meta-ai","canonical_name":"Meta AI","category":"llm_chat","vendor":"Meta","description":"Meta AI assistant","signatures":{"domains":["meta.ai","www.meta.ai"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"cohere-chat","canonical_name":"Cohere Chat","category":"llm_chat","vendor":"Cohere","description":"Enterprise AI platform","signatures":{"domains":["coral.cohere.com","dashboard.cohere.com","api.cohere.com"],"url_patterns":["/v1/chat","/v2/chat"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"inflection-pi","canonical_name":"Pi by Inflection","category":"llm_chat","vendor":"Inflection AI","description":"Personal AI assistant","signatures":{"domains":["pi.ai","heypi.com"]},"rule_tags":["llm","chat","saas"]},
+  {"id":"together-chat","canonical_name":"Together AI Chat","category":"llm_chat","vendor":"Together AI","description":"Open-source model hosting","signatures":{"domains":["api.together.xyz","together.ai"],"url_patterns":["/v1/chat/completions"]},"rule_tags":["llm","chat","saas"]},
+
+  # Code Assistants
+  {"id":"github-copilot","canonical_name":"GitHub Copilot","category":"code_assistant","vendor":"GitHub/Microsoft","description":"AI pair programmer","signatures":{"domains":["copilot.github.com","copilot-proxy.githubusercontent.com","api.githubcopilot.com"],"processes":["copilot-agent","copilot"]},"rule_tags":["llm","code","saas"]},
+  {"id":"cursor","canonical_name":"Cursor","category":"code_assistant","vendor":"Cursor","description":"AI-first code editor","signatures":{"domains":["cursor.sh","api2.cursor.sh","www.cursor.com"],"processes":["cursor","Cursor"]},"rule_tags":["llm","code","desktop"]},
+  {"id":"codeium","canonical_name":"Codeium","category":"code_assistant","vendor":"Codeium","description":"Free AI code completion","signatures":{"domains":["codeium.com","api.codeium.com","server.codeium.com"]},"rule_tags":["llm","code","saas"]},
+  {"id":"tabnine","canonical_name":"Tabnine","category":"code_assistant","vendor":"Tabnine","description":"AI code assistant","signatures":{"domains":["api.tabnine.com","tabnine.com"]},"rule_tags":["llm","code","saas"]},
+  {"id":"amazon-q","canonical_name":"Amazon Q Developer","category":"code_assistant","vendor":"AWS","description":"AWS AI assistant","signatures":{"domains":["codewhisperer.amazonaws.com","q.us-east-1.amazonaws.com"]},"rule_tags":["llm","code","saas"]},
+  {"id":"sourcegraph-cody","canonical_name":"Sourcegraph Cody","category":"code_assistant","vendor":"Sourcegraph","description":"AI coding assistant","signatures":{"domains":["sourcegraph.com","cody.sourcegraph.com"]},"rule_tags":["llm","code","saas"]},
+  {"id":"replit-ai","canonical_name":"Replit AI","category":"code_assistant","vendor":"Replit","description":"AI-powered coding platform","signatures":{"domains":["replit.com","repl.co"]},"rule_tags":["llm","code","saas"]},
+
+  # Image Generation
+  {"id":"midjourney","canonical_name":"Midjourney","category":"image_gen","vendor":"Midjourney","description":"AI image generation","signatures":{"domains":["midjourney.com","www.midjourney.com","cdn.midjourney.com"]},"rule_tags":["image","gen","saas"]},
+  {"id":"dall-e","canonical_name":"DALL-E","category":"image_gen","vendor":"OpenAI","description":"OpenAI image generation","signatures":{"domains":["labs.openai.com"],"url_patterns":["/v1/images/generations"]},"rule_tags":["image","gen","saas"]},
+  {"id":"stable-diffusion-web","canonical_name":"Stable Diffusion (Web)","category":"image_gen","vendor":"Stability AI","description":"Open image gen model","signatures":{"domains":["stability.ai","api.stability.ai","dreamstudio.ai"]},"rule_tags":["image","gen","saas"]},
+  {"id":"leonardo-ai","canonical_name":"Leonardo.ai","category":"image_gen","vendor":"Leonardo AI","description":"AI image creation","signatures":{"domains":["leonardo.ai","app.leonardo.ai"]},"rule_tags":["image","gen","saas"]},
+  {"id":"ideogram","canonical_name":"Ideogram","category":"image_gen","vendor":"Ideogram","description":"AI image+text gen","signatures":{"domains":["ideogram.ai"]},"rule_tags":["image","gen","saas"]},
+  {"id":"adobe-firefly","canonical_name":"Adobe Firefly","category":"image_gen","vendor":"Adobe","description":"Adobe AI image gen","signatures":{"domains":["firefly.adobe.com"]},"rule_tags":["image","gen","saas"]},
+
+  # Writing Assistants
+  {"id":"grammarly","canonical_name":"Grammarly","category":"writing_assistant","vendor":"Grammarly","description":"AI writing assistant","signatures":{"domains":["grammarly.com","app.grammarly.com","gnar.grammarly.com","capi.grammarly.com"],"extension_ids":["kbfnbcaeplbcioakkpcpgfkobkghlhen"]},"rule_tags":["writing","saas"]},
+  {"id":"jasper","canonical_name":"Jasper","category":"writing_assistant","vendor":"Jasper AI","description":"AI marketing content","signatures":{"domains":["jasper.ai","app.jasper.ai"]},"rule_tags":["writing","marketing","saas"]},
+  {"id":"copy-ai","canonical_name":"Copy.ai","category":"writing_assistant","vendor":"Copy.ai","description":"AI copywriting","signatures":{"domains":["copy.ai","app.copy.ai"]},"rule_tags":["writing","saas"]},
+  {"id":"writesonic","canonical_name":"Writesonic","category":"writing_assistant","vendor":"Writesonic","description":"AI content generation","signatures":{"domains":["writesonic.com","app.writesonic.com"]},"rule_tags":["writing","saas"]},
+  {"id":"quillbot","canonical_name":"QuillBot","category":"writing_assistant","vendor":"QuillBot","description":"AI paraphraser","signatures":{"domains":["quillbot.com","www.quillbot.com"]},"rule_tags":["writing","saas"]},
+  {"id":"wordtune","canonical_name":"Wordtune","category":"writing_assistant","vendor":"AI21 Labs","description":"AI writing companion","signatures":{"domains":["wordtune.com","app.wordtune.com"]},"rule_tags":["writing","saas"]},
+  {"id":"notion-ai","canonical_name":"Notion AI","category":"writing_assistant","vendor":"Notion","description":"AI in Notion","signatures":{"domains":["notion.so","api.notion.com"],"url_patterns":["/api/v3/getCompletion*"]},"rule_tags":["writing","productivity","saas"]},
+  {"id":"rytr","canonical_name":"Rytr","category":"writing_assistant","vendor":"Rytr","description":"AI writing tool","signatures":{"domains":["rytr.me","app.rytr.me"]},"rule_tags":["writing","saas"]},
+
+  # Voice/Audio AI
+  {"id":"elevenlabs","canonical_name":"ElevenLabs","category":"voice_ai","vendor":"ElevenLabs","description":"AI voice synthesis","signatures":{"domains":["elevenlabs.io","api.elevenlabs.io"]},"rule_tags":["voice","audio","saas"]},
+  {"id":"otter-ai","canonical_name":"Otter.ai","category":"voice_ai","vendor":"Otter.ai","description":"AI meeting notes","signatures":{"domains":["otter.ai","app.otter.ai"]},"rule_tags":["voice","transcription","saas"]},
+  {"id":"descript","canonical_name":"Descript","category":"voice_ai","vendor":"Descript","description":"AI audio/video editor","signatures":{"domains":["descript.com","app.descript.com"],"processes":["Descript"]},"rule_tags":["voice","video","saas"]},
+
+  # Video AI
+  {"id":"runway","canonical_name":"Runway","category":"video_ai","vendor":"Runway","description":"AI video generation","signatures":{"domains":["runwayml.com","app.runwayml.com"]},"rule_tags":["video","gen","saas"]},
+  {"id":"synthesia","canonical_name":"Synthesia","category":"video_ai","vendor":"Synthesia","description":"AI video generation","signatures":{"domains":["synthesia.io","app.synthesia.io"]},"rule_tags":["video","gen","saas"]},
+  {"id":"heygen","canonical_name":"HeyGen","category":"video_ai","vendor":"HeyGen","description":"AI avatar videos","signatures":{"domains":["heygen.com","app.heygen.com"]},"rule_tags":["video","gen","saas"]},
+  {"id":"pika","canonical_name":"Pika","category":"video_ai","vendor":"Pika","description":"AI video creation","signatures":{"domains":["pika.art"]},"rule_tags":["video","gen","saas"]},
+
+  # Local Runtimes
+  {"id":"ollama","canonical_name":"Ollama","category":"local_runtime","vendor":"Ollama","description":"Local LLM runtime","signatures":{"domains":["ollama.com","registry.ollama.ai"],"url_patterns":["/api/generate","/api/chat","/api/pull"],"processes":["ollama","ollama.exe","ollama-runner"],"local_ports":[11434],"local_paths":["~/.ollama"],"container_patterns":["ollama/ollama*"]},"rule_tags":["llm","local","open_source"]},
+  {"id":"lm-studio","canonical_name":"LM Studio","category":"local_runtime","vendor":"LM Studio","description":"Desktop LLM app","signatures":{"domains":["lmstudio.ai"],"processes":["lms","LM Studio","lm-studio"],"local_ports":[1234],"local_paths":["~/.lmstudio","~/lm-studio"]},"rule_tags":["llm","local","desktop"]},
+  {"id":"gpt4all","canonical_name":"GPT4All","category":"local_runtime","vendor":"Nomic","description":"Local chatbot","signatures":{"domains":["gpt4all.io"],"processes":["gpt4all","chat"],"local_paths":["~/.cache/gpt4all"]},"rule_tags":["llm","local","open_source"]},
+  {"id":"jan","canonical_name":"Jan","category":"local_runtime","vendor":"Jan.ai","description":"Open-source ChatGPT alternative","signatures":{"domains":["jan.ai"],"processes":["jan","Jan"],"local_ports":[1337],"local_paths":["~/jan"]},"rule_tags":["llm","local","open_source"]},
+  {"id":"localai","canonical_name":"LocalAI","category":"local_runtime","vendor":"LocalAI","description":"Self-hosted OpenAI-compatible API","signatures":{"processes":["local-ai","localai"],"local_ports":[8080],"container_patterns":["localai/localai*","quay.io/go-skynet/local-ai*"]},"rule_tags":["llm","local","open_source"]},
+  {"id":"vllm","canonical_name":"vLLM","category":"local_runtime","vendor":"vLLM Project","description":"Fast LLM serving","signatures":{"processes":["vllm","python -m vllm*"],"local_ports":[8000],"container_patterns":["vllm/vllm*"]},"rule_tags":["llm","local","open_source"]},
+  {"id":"llama-cpp","canonical_name":"llama.cpp","category":"local_runtime","vendor":"ggerganov","description":"C++ LLM inference","signatures":{"processes":["llama-server","llama-cli","main"],"local_ports":[8080]},"rule_tags":["llm","local","open_source"]},
+  {"id":"text-gen-webui","canonical_name":"Text Generation WebUI","category":"local_runtime","vendor":"oobabooga","description":"Gradio LLM interface","signatures":{"processes":["python server.py"],"local_ports":[7860],"container_patterns":["atinoda/text-generation-webui*"]},"rule_tags":["llm","local","open_source"]},
+  {"id":"koboldcpp","canonical_name":"KoboldCpp","category":"local_runtime","vendor":"KoboldAI","description":"Local AI text gen","signatures":{"processes":["koboldcpp"],"local_ports":[5001]},"rule_tags":["llm","local","open_source"]},
+  {"id":"llamafile","canonical_name":"llamafile","category":"local_runtime","vendor":"Mozilla","description":"Distributable LLM","signatures":{"processes":["llamafile"],"local_ports":[8080]},"rule_tags":["llm","local","open_source"]},
+  {"id":"anything-llm","canonical_name":"AnythingLLM","category":"local_runtime","vendor":"Mintplex Labs","description":"All-in-one AI app","signatures":{"domains":["useanything.com"],"processes":["anything-llm"],"local_ports":[3001],"container_patterns":["mintplexlabs/anythingllm*"]},"rule_tags":["llm","local","desktop"]},
+
+  # Translation AI
+  {"id":"deepl","canonical_name":"DeepL","category":"translation_ai","vendor":"DeepL","description":"AI translation","signatures":{"domains":["deepl.com","www.deepl.com","api.deepl.com","api-free.deepl.com"],"processes":["DeepL"]},"rule_tags":["translation","saas"]},
+
+  # Productivity AI
+  {"id":"gamma","canonical_name":"Gamma","category":"productivity_ai","vendor":"Gamma","description":"AI presentations","signatures":{"domains":["gamma.app"]},"rule_tags":["productivity","presentations","saas"]},
+  {"id":"beautiful-ai","canonical_name":"Beautiful.ai","category":"productivity_ai","vendor":"Beautiful.ai","description":"AI presentations","signatures":{"domains":["beautiful.ai","app.beautiful.ai"]},"rule_tags":["productivity","presentations","saas"]},
+  {"id":"tome","canonical_name":"Tome","category":"productivity_ai","vendor":"Tome","description":"AI storytelling","signatures":{"domains":["tome.app","beta.tome.app"]},"rule_tags":["productivity","presentations","saas"]},
+
+  # Browser Extension AI
+  {"id":"monica","canonical_name":"Monica","category":"browser_extension_ai","vendor":"Monica.im","description":"AI browser assistant","signatures":{"domains":["monica.im"],"extension_ids":["ofpnmcalabcbjgholdjcjblkibolbppb"]},"rule_tags":["llm","extension","browser"]},
+  {"id":"merlin","canonical_name":"Merlin","category":"browser_extension_ai","vendor":"Merlin","description":"AI browser assistant","signatures":{"domains":["getmerlin.in","merlin.foyer.work"],"extension_ids":["camppjleccjaphfdbohjdohecfnoikec"]},"rule_tags":["llm","extension","browser"]},
+  {"id":"sider","canonical_name":"Sider","category":"browser_extension_ai","vendor":"Sider","description":"ChatGPT sidebar","signatures":{"domains":["sider.ai"],"extension_ids":["difoiogjjojoaoomphldepapgpbgkhkb"]},"rule_tags":["llm","extension","browser"]},
+  {"id":"maxai","canonical_name":"MaxAI","category":"browser_extension_ai","vendor":"MaxAI","description":"AI browser assistant","signatures":{"domains":["maxai.me","app.maxai.me"],"extension_ids":["mhnlakgilnojmhinhkckjpncpbhabphi"]},"rule_tags":["llm","extension","browser"]},
+  {"id":"harpa-ai","canonical_name":"HARPA AI","category":"browser_extension_ai","vendor":"HARPA","description":"AI browser agent","signatures":{"domains":["harpa.ai"],"extension_ids":["eanggfilgonjahfnlhgeebpcoganckbi"]},"rule_tags":["llm","extension","browser"]},
+
+  # AI Platforms / APIs
+  {"id":"openai-api","canonical_name":"OpenAI API","category":"ai_platform","vendor":"OpenAI","description":"OpenAI API platform","signatures":{"domains":["api.openai.com","platform.openai.com"],"url_patterns":["/v1/chat/completions","/v1/completions","/v1/embeddings","/v1/images*","/v1/audio*"],"user_agent_patterns":["openai-python*","openai-node*","OpenAI/*"]},"rule_tags":["llm","api","platform"]},
+  {"id":"anthropic-api","canonical_name":"Anthropic API","category":"ai_platform","vendor":"Anthropic","description":"Claude API platform","signatures":{"domains":["api.anthropic.com"],"url_patterns":["/v1/messages","/v1/complete"],"user_agent_patterns":["anthropic-python*","anthropic-typescript*"]},"rule_tags":["llm","api","platform"]},
+  {"id":"google-ai-api","canonical_name":"Google AI API","category":"ai_platform","vendor":"Google","description":"Google Generative AI API","signatures":{"domains":["generativelanguage.googleapis.com","aiplatform.googleapis.com"],"url_patterns":["/v1/models*","/v1beta/models*"]},"rule_tags":["llm","api","platform"]},
+  {"id":"cohere-api","canonical_name":"Cohere API","category":"ai_platform","vendor":"Cohere","description":"Enterprise AI API","signatures":{"domains":["api.cohere.com","api.cohere.ai"],"url_patterns":["/v1/chat","/v2/chat","/v1/generate"]},"rule_tags":["llm","api","platform"]},
+  {"id":"replicate","canonical_name":"Replicate","category":"ai_platform","vendor":"Replicate","description":"ML model hosting","signatures":{"domains":["replicate.com","api.replicate.com"]},"rule_tags":["ml","api","platform"]},
+  {"id":"huggingface","canonical_name":"Hugging Face","category":"ai_platform","vendor":"Hugging Face","description":"ML model hub","signatures":{"domains":["huggingface.co","api-inference.huggingface.co","hf.co"]},"rule_tags":["ml","api","platform"]},
+  {"id":"groq","canonical_name":"Groq","category":"ai_platform","vendor":"Groq","description":"Fast inference API","signatures":{"domains":["groq.com","api.groq.com","console.groq.com"],"url_patterns":["/openai/v1/chat/completions"]},"rule_tags":["llm","api","platform"]},
+  {"id":"fireworks-ai","canonical_name":"Fireworks AI","category":"ai_platform","vendor":"Fireworks","description":"Fast model serving","signatures":{"domains":["fireworks.ai","api.fireworks.ai"]},"rule_tags":["llm","api","platform"]},
+  {"id":"mistral-api","canonical_name":"Mistral API","category":"ai_platform","vendor":"Mistral AI","description":"Mistral API","signatures":{"domains":["api.mistral.ai"],"url_patterns":["/v1/chat/completions"]},"rule_tags":["llm","api","platform"]},
+  {"id":"deepinfra","canonical_name":"DeepInfra","category":"ai_platform","vendor":"DeepInfra","description":"Model inference API","signatures":{"domains":["deepinfra.com","api.deepinfra.com"]},"rule_tags":["llm","api","platform"]},
+  {"id":"anyscale","canonical_name":"Anyscale","category":"ai_platform","vendor":"Anyscale","description":"Ray-based AI platform","signatures":{"domains":["anyscale.com","api.endpoints.anyscale.com"]},"rule_tags":["llm","api","platform"]},
+
+  # Design AI
+  {"id":"canva-ai","canonical_name":"Canva AI","category":"design_ai","vendor":"Canva","description":"AI design features","signatures":{"domains":["canva.com","www.canva.com"],"url_patterns":["/api/ai*","/magic-studio*"]},"rule_tags":["design","saas"]},
+  {"id":"figma-ai","canonical_name":"Figma AI","category":"design_ai","vendor":"Figma","description":"AI design features","signatures":{"domains":["figma.com","www.figma.com"],"url_patterns":["/ai/*"]},"rule_tags":["design","saas"]},
+
+  # Agent/Automation
+  {"id":"auto-gpt","canonical_name":"AutoGPT","category":"agent_automation","vendor":"Significant Gravitas","description":"Autonomous AI agent","signatures":{"processes":["autogpt","auto-gpt"],"container_patterns":["significantgravitas/autogpt*"]},"rule_tags":["agent","local","automation"]},
+  {"id":"crewai","canonical_name":"CrewAI","category":"agent_automation","vendor":"CrewAI","description":"Multi-agent framework","signatures":{"domains":["crewai.com"],"processes":["crewai"]},"rule_tags":["agent","framework","local"]},
+
+  # Data/ML AI
+  {"id":"datarobot","canonical_name":"DataRobot","category":"data_ai","vendor":"DataRobot","description":"Enterprise ML platform","signatures":{"domains":["datarobot.com","app.datarobot.com"]},"rule_tags":["ml","data","saas"]},
+  {"id":"obviously-ai","canonical_name":"Obviously AI","category":"data_ai","vendor":"Obviously AI","description":"No-code ML","signatures":{"domains":["obviously.ai","app.obviously.ai"]},"rule_tags":["ml","data","saas"]},
+
+  # Search AI
+  {"id":"bing-copilot","canonical_name":"Bing Copilot","category":"search_ai","vendor":"Microsoft","description":"Bing AI search","signatures":{"domains":["copilot.microsoft.com","www.bing.com"],"url_patterns":["/search?*showconv*","/turing/conversation*"]},"rule_tags":["search","llm","saas"]},
+
+  # Miscellaneous AI tools
+  {"id":"huggingchat","canonical_name":"HuggingChat","category":"llm_chat","vendor":"Hugging Face","description":"Open-source chat","signatures":{"domains":["huggingface.co"],"url_patterns":["/chat*"]},"rule_tags":["llm","chat","open_source"]},
+  {"id":"together-api","canonical_name":"Together API","category":"ai_platform","vendor":"Together AI","description":"Open model API","signatures":{"domains":["api.together.xyz"],"url_patterns":["/v1/chat/completions","/v1/completions","/inference"]},"rule_tags":["llm","api","platform"]},
+  {"id":"vercel-ai","canonical_name":"Vercel AI SDK","category":"ai_platform","vendor":"Vercel","description":"AI SDK","signatures":{"domains":["sdk.vercel.ai","v0.dev"]},"rule_tags":["llm","api","dev"]},
+  {"id":"openrouter","canonical_name":"OpenRouter","category":"ai_platform","vendor":"OpenRouter","description":"AI model router","signatures":{"domains":["openrouter.ai","api.openrouter.ai"],"url_patterns":["/api/v1/chat/completions"]},"rule_tags":["llm","api","router"]},
+  {"id":"suno","canonical_name":"Suno","category":"voice_ai","vendor":"Suno","description":"AI music generation","signatures":{"domains":["suno.com","app.suno.ai"]},"rule_tags":["audio","music","gen","saas"]},
+  {"id":"luma-ai","canonical_name":"Luma AI","category":"video_ai","vendor":"Luma AI","description":"AI 3D/video gen","signatures":{"domains":["lumalabs.ai","luma.ai"]},"rule_tags":["video","3d","gen","saas"]},
+  {"id":"remove-bg","canonical_name":"remove.bg","category":"image_gen","vendor":"Kaleido AI","description":"AI background removal","signatures":{"domains":["remove.bg","api.remove.bg"]},"rule_tags":["image","editing","saas"]},
+  {"id":"photoroom","canonical_name":"PhotoRoom","category":"image_gen","vendor":"PhotoRoom","description":"AI photo editing","signatures":{"domains":["photoroom.com","app.photoroom.com"]},"rule_tags":["image","editing","saas"]},
+  {"id":"claude-code","canonical_name":"Claude Code","category":"code_assistant","vendor":"Anthropic","description":"CLI coding assistant","signatures":{"domains":["api.anthropic.com"],"processes":["claude"]},"rule_tags":["llm","code","cli"]},
+  {"id":"aider","canonical_name":"Aider","category":"code_assistant","vendor":"aider-chat","description":"AI pair programming CLI","signatures":{"processes":["aider"],"domains":["aider.chat"]},"rule_tags":["llm","code","cli","local"]},
+  {"id":"continue-dev","canonical_name":"Continue","category":"code_assistant","vendor":"Continue","description":"Open-source AI code assistant","signatures":{"domains":["continue.dev"],"extension_ids":["EsbfFilesSpeworEerworFunworWorworWorworwor"]},"rule_tags":["llm","code","extension"]},
+]
+
+for entry in ENTRIES:
+    sigs = entry.pop("signatures", {})
+    entry["signatures"] = sigs
+    # Set defaults
+    entry.setdefault("aliases", [])
+    entry.setdefault("default_trust_level", "unknown")
+    entry.setdefault("rule_tags", [])
+    for key in ["domains","url_patterns","processes","extension_ids","oauth_app_ids","local_ports","local_paths","container_patterns","user_agent_patterns"]:
+        entry["signatures"].setdefault(key, [])
+
+    filename = f"{entry['id']}.yaml"
+    filepath = os.path.join(CATALOG_DIR, filename)
+    with open(filepath, "w") as f:
+        yaml.dump(entry, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+print(f"Generated {len(ENTRIES)} catalog entries in {CATALOG_DIR}")

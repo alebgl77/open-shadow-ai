@@ -1,0 +1,24 @@
+id: huggingface
+canonical_name: Hugging Face
+category: ai_platform
+vendor: Hugging Face
+description: ML model hub
+rule_tags:
+- ml
+- api
+- platform
+signatures:
+  domains:
+  - huggingface.co
+  - api-inference.huggingface.co
+  - hf.co
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

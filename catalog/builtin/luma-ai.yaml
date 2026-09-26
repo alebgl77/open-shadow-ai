@@ -1,0 +1,24 @@
+id: luma-ai
+canonical_name: Luma AI
+category: video_ai
+vendor: Luma AI
+description: AI 3D/video gen
+rule_tags:
+- video
+- 3d
+- gen
+- saas
+signatures:
+  domains:
+  - lumalabs.ai
+  - luma.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

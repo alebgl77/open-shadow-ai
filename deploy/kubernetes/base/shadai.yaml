@@ -1,0 +1,26 @@
+# Open Shadow AI: one organization per deployment. Secrets come from mounted files.
+tenant_id: default
+server:
+  host: 0.0.0.0
+  port: 8443
+  debug: false
+  log_level: INFO
+  cors_origins: []
+database:
+  clickhouse_host: clickhouse
+  clickhouse_port: 9000
+  clickhouse_database: shadai
+retention:
+  events_days: 90
+  detections_days: 365
+  audit_logs_days: 365
+  purge_enabled: true
+  ingestion_max_age_days: 90
+  receipt_days: 181
+catalog:
+  builtin_path: /app/catalog/builtin
+  local_path: /app/catalog/local
+  reload_interval_seconds: 60
+privacy:
+  strip_query_params: true
+  no_url_path_retention: true

@@ -1,0 +1,22 @@
+id: ideogram
+canonical_name: Ideogram
+category: image_gen
+vendor: Ideogram
+description: AI image+text gen
+rule_tags:
+- image
+- gen
+- saas
+signatures:
+  domains:
+  - ideogram.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

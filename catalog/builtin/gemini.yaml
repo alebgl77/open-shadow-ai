@@ -1,0 +1,25 @@
+id: gemini
+canonical_name: Gemini
+category: llm_chat
+vendor: Google
+description: Google AI chatbot
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - gemini.google.com
+  - generativelanguage.googleapis.com
+  - bard.google.com
+  url_patterns:
+  - /v1beta/models*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

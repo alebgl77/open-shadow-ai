@@ -1,0 +1,25 @@
+id: deepl
+canonical_name: DeepL
+category: translation_ai
+vendor: DeepL
+description: AI translation
+rule_tags:
+- translation
+- saas
+signatures:
+  domains:
+  - deepl.com
+  - www.deepl.com
+  - api.deepl.com
+  - api-free.deepl.com
+  processes:
+  - DeepL
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

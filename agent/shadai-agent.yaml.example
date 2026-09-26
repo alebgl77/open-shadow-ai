@@ -1,0 +1,17 @@
+# ShadAI Agent Configuration
+# Copy to shadai-agent.yaml and edit before running.
+
+server_url: https://your-shadai-server:8443
+api_key: YOUR_AGENT_API_KEY
+
+# Collection interval in seconds (default: 300 = 5 minutes)
+poll_interval_seconds: 300
+
+# Toggle collectors
+collect_processes: true
+collect_containers: true
+collect_extensions: true
+collect_local_ai: true
+
+# Override hostname detection
+# hostname: my-workstation

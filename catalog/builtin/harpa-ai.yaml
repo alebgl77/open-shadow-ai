@@ -1,0 +1,23 @@
+id: harpa-ai
+canonical_name: HARPA AI
+category: browser_extension_ai
+vendor: HARPA
+description: AI browser agent
+rule_tags:
+- llm
+- extension
+- browser
+signatures:
+  domains:
+  - harpa.ai
+  extension_ids:
+  - eanggfilgonjahfnlhgeebpcoganckbi
+  url_patterns: []
+  processes: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

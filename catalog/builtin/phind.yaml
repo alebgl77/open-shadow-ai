@@ -1,0 +1,23 @@
+id: phind
+canonical_name: Phind
+category: llm_chat
+vendor: Phind
+description: AI search for developers
+rule_tags:
+- llm
+- search
+- saas
+signatures:
+  domains:
+  - phind.com
+  - www.phind.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

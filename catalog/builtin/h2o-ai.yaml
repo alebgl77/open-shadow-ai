@@ -1,0 +1,23 @@
+id: h2o-ai
+canonical_name: H2O.ai
+category: data_ai
+vendor: H2O.ai
+description: Enterprise ML platform
+aliases: []
+signatures:
+  domains:
+  - h2o.ai
+  - cloud.h2o.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- ml
+- data
+- saas

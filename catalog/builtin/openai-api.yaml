@@ -1,0 +1,31 @@
+id: openai-api
+canonical_name: OpenAI API
+category: ai_platform
+vendor: OpenAI
+description: OpenAI API platform
+rule_tags:
+- llm
+- api
+- platform
+signatures:
+  domains:
+  - api.openai.com
+  - platform.openai.com
+  url_patterns:
+  - /v1/chat/completions
+  - /v1/completions
+  - /v1/embeddings
+  - /v1/images*
+  - /v1/audio*
+  user_agent_patterns:
+  - openai-python*
+  - openai-node*
+  - OpenAI/*
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+aliases: []
+default_trust_level: unknown

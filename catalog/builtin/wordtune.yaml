@@ -1,0 +1,22 @@
+id: wordtune
+canonical_name: Wordtune
+category: writing_assistant
+vendor: AI21 Labs
+description: AI writing companion
+rule_tags:
+- writing
+- saas
+signatures:
+  domains:
+  - wordtune.com
+  - app.wordtune.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,23 @@
+id: flux
+canonical_name: Flux
+category: image_gen
+vendor: Black Forest Labs
+description: AI image gen model
+aliases: []
+signatures:
+  domains:
+  - blackforestlabs.ai
+  - api.bfl.ml
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- image
+- gen
+- saas

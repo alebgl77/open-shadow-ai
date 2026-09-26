@@ -1,0 +1,24 @@
+id: suno
+canonical_name: Suno
+category: voice_ai
+vendor: Suno
+description: AI music generation
+rule_tags:
+- audio
+- music
+- gen
+- saas
+signatures:
+  domains:
+  - suno.com
+  - app.suno.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,23 @@
+id: jenni-ai
+canonical_name: Jenni AI
+category: writing_assistant
+vendor: Jenni AI
+description: AI academic writing
+aliases: []
+signatures:
+  domains:
+  - jenni.ai
+  - app.jenni.ai
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- writing
+- academic
+- saas

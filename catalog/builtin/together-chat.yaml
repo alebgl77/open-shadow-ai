@@ -1,0 +1,24 @@
+id: together-chat
+canonical_name: Together AI Chat
+category: llm_chat
+vendor: Together AI
+description: Open-source model hosting
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - api.together.xyz
+  - together.ai
+  url_patterns:
+  - /v1/chat/completions
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

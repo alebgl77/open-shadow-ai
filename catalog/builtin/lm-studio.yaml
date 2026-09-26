@@ -1,0 +1,28 @@
+id: lm-studio
+canonical_name: LM Studio
+category: local_runtime
+vendor: LM Studio
+description: Desktop LLM app
+rule_tags:
+- llm
+- local
+- desktop
+signatures:
+  domains:
+  - lmstudio.ai
+  processes:
+  - lms
+  - LM Studio
+  - lm-studio
+  local_ports:
+  - 1234
+  local_paths:
+  - ~/.lmstudio
+  - ~/lm-studio
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

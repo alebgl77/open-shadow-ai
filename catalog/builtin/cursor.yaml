@@ -1,0 +1,26 @@
+id: cursor
+canonical_name: Cursor
+category: code_assistant
+vendor: Cursor
+description: AI-first code editor
+rule_tags:
+- llm
+- code
+- desktop
+signatures:
+  domains:
+  - cursor.sh
+  - api2.cursor.sh
+  - www.cursor.com
+  processes:
+  - cursor
+  - Cursor
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

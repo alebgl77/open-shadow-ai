@@ -1,0 +1,23 @@
+id: poe
+canonical_name: Poe
+category: llm_chat
+vendor: Quora
+description: Multi-model AI chatbot platform
+rule_tags:
+- llm
+- chat
+- saas
+signatures:
+  domains:
+  - poe.com
+  - www.poe.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

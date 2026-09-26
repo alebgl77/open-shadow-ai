@@ -1,0 +1,26 @@
+id: github-copilot
+canonical_name: GitHub Copilot
+category: code_assistant
+vendor: GitHub/Microsoft
+description: AI pair programmer
+rule_tags:
+- llm
+- code
+- saas
+signatures:
+  domains:
+  - copilot.github.com
+  - copilot-proxy.githubusercontent.com
+  - api.githubcopilot.com
+  processes:
+  - copilot-agent
+  - copilot
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

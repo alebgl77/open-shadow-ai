@@ -1,0 +1,23 @@
+id: remove-bg
+canonical_name: remove.bg
+category: image_gen
+vendor: Kaleido AI
+description: AI background removal
+rule_tags:
+- image
+- editing
+- saas
+signatures:
+  domains:
+  - remove.bg
+  - api.remove.bg
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

@@ -1,0 +1,21 @@
+# Apply only after configuring the host, ingress class and an existing TLS Secret.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-shadow-ai
+  namespace: open-shadow-ai
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [ai-inventory.example.com]
+      secretName: open-shadow-ai-tls
+  rules:
+    - host: ai-inventory.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: frontend, port: {number: 8080}}

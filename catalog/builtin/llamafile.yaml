@@ -1,0 +1,22 @@
+id: llamafile
+canonical_name: llamafile
+category: local_runtime
+vendor: Mozilla
+description: Distributable LLM
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  processes:
+  - llamafile
+  local_ports: []
+  domains: []
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

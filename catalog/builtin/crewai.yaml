@@ -1,0 +1,23 @@
+id: crewai
+canonical_name: CrewAI
+category: agent_automation
+vendor: CrewAI
+description: Multi-agent framework
+rule_tags:
+- agent
+- framework
+- local
+signatures:
+  domains:
+  - crewai.com
+  processes:
+  - crewai
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

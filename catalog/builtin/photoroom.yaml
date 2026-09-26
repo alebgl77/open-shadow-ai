@@ -1,0 +1,23 @@
+id: photoroom
+canonical_name: PhotoRoom
+category: image_gen
+vendor: PhotoRoom
+description: AI photo editing
+rule_tags:
+- image
+- editing
+- saas
+signatures:
+  domains:
+  - photoroom.com
+  - app.photoroom.com
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

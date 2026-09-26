@@ -1,0 +1,22 @@
+id: gamma
+canonical_name: Gamma
+category: productivity_ai
+vendor: Gamma
+description: AI presentations
+rule_tags:
+- productivity
+- presentations
+- saas
+signatures:
+  domains:
+  - gamma.app
+  url_patterns: []
+  processes: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

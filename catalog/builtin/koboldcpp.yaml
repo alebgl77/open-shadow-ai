@@ -1,0 +1,23 @@
+id: koboldcpp
+canonical_name: KoboldCpp
+category: local_runtime
+vendor: KoboldAI
+description: Local AI text gen
+rule_tags:
+- llm
+- local
+- open_source
+signatures:
+  processes:
+  - koboldcpp
+  local_ports:
+  - 5001
+  domains: []
+  url_patterns: []
+  extension_ids: []
+  oauth_app_ids: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+aliases: []
+default_trust_level: unknown

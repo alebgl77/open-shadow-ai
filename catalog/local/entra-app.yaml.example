@@ -1,0 +1,14 @@
+# Illustrative schema only. This fake UUID is NOT a real vendor application.
+# Review the application's identity and purpose before replacing it with its
+# Microsoft Graph servicePrincipal.appId (not the servicePrincipal object ID).
+# Copy to a .yaml file only after review; .yaml.example files are not loaded.
+id: approved-pilot-ai
+canonical_name: Reviewed pilot AI application
+category: ai_platform
+vendor: Your organization
+description: Locally reviewed Entra application mapping.
+signatures:
+  oauth_app_ids:
+    - "00000000-0000-4000-8000-000000000001"
+default_trust_level: unknown
+rule_tags: [local-review, entra]

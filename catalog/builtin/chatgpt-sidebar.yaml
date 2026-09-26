@@ -1,0 +1,22 @@
+id: chatgpt-sidebar
+canonical_name: ChatGPT Sidebar
+category: browser_extension_ai
+vendor: ChatGPT Sidebar
+description: ChatGPT browser sidebar
+aliases: []
+signatures:
+  domains: []
+  url_patterns: []
+  processes: []
+  extension_ids:
+  - jgjaeacdkonaoafenlfkkkmbaopkbilf
+  oauth_app_ids: []
+  local_ports: []
+  local_paths: []
+  container_patterns: []
+  user_agent_patterns: []
+default_trust_level: unknown
+rule_tags:
+- llm
+- extension
+- browser
