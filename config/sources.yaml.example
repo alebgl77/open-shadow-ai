@@ -8,4 +8,7 @@ sources:
       listen_port: 1514
       protocol: tcp
       parser: bind_query_log
+      # IANA zone for device-local timestamps without an offset, e.g. Europe/Paris.
+      # FortiGate eventtime/tz fields take precedence when present.
+      timezone: UTC
 # Entra runs separately; declaring an API source here does not poll it.

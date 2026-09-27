@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 @router.get("/summary")
 async def get_summary(
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Executive dashboard counters."""
     total = (
@@ -76,7 +76,7 @@ async def get_summary(
 async def get_trend(
     days: int = Query(30, ge=7, le=90),
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Discovery trend over last N days."""
     cutoff = datetime.now(UTC) - timedelta(days=days)
@@ -96,7 +96,7 @@ async def get_trend(
 async def get_top_tools(
     limit: int = Query(10, ge=5, le=50),
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Top AI tools by event count."""
     result = await session.execute(
@@ -161,7 +161,7 @@ async def get_source_health(_user: UserORM = Depends(get_current_user)):
 async def get_evidence(
     days: int = Query(30, ge=1, le=90),
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Distinct collected evidence, never a proxy for AI calls or prompt inspection."""
     end = datetime.now(UTC)

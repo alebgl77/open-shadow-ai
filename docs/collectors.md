@@ -18,6 +18,10 @@ A source configuration is not a universal connector factory. The delivered YAML 
 
 Copy the example and choose the parser matching your source. The default listener is TCP/1514; the Compose syslog profile binds it to localhost. Remote forwarding requires an explicitly selected private bind address and firewall allowlist. Do not expose unauthenticated plaintext syslog to an untrusted network. Put a trusted TLS syslog relay in front when needed.
 
+Many devices log their local wall clock without an offset. Set `timezone` on the listener to the device's IANA zone (for example `Europe/Paris`); the default is `UTC`. A wrong zone shifts every event and can push recent ones outside the accepted window (at most five minutes ahead, `ingestion_max_age_days` behind). FortiGate `eventtime` (epoch, seconds to nanoseconds) and `tz` fields take precedence when present; PAN-OS ISO timestamps ending in `Z` are already UTC. For year-less BSD syslog timestamps, the most recent matching date is used.
+
+Events outside that window are dropped individually and counted in `shadai_events_rejected_total{source_type}`; neighbouring lines and the TCP connection are unaffected. A rising counter usually means a zone or clock mismatch on the source.
+
 ## Generic inventory ingestion
 
 `POST /api/v1/ingest/events` takes `X-API-Key` using the deployment's `AGENT_API_KEY`. The body contains one to 500 events. Event timestamps must have a timezone; event IDs are UUIDs and must be reused for retries. Unknown fields are rejected.

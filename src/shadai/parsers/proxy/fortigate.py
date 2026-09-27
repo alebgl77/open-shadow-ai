@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from shadai.models.event import CanonicalEvent
 from shadai.parsers.base import BaseParser, register_parser
@@ -12,15 +12,21 @@ from shadai.utils.validators import sanitize_log_input
 # FortiGate web filter log (key=value format):
 # date=2026-03-27 time=14:23:45 devname="FG-200F" logid="0316013056" type="utm" subtype="webfilter"
 # ... srcip=192.168.1.100 dstip=104.18.2.1 hostname="chat.openai.com" url="/backend-api/conversation"
-# sentbyte=4500 rcvdbyte=12000 ...
+# sentbyte=4500 rcvdbyte=12000 eventtime=1774617825123456789 tz="+0100" ...
+#
+# date/time are the device's local wall clock. FortiOS 6.2+ adds eventtime (epoch; the unit
+# varies by release) and tz (UTC offset). Both are preferred over the source's configured zone.
 
 _KV_RE = re.compile(r'(\w+)=(?:"([^"]*)"|(\S+))')
+_TZ_RE = re.compile(r"^([+-])(\d{2}):?(\d{2})$")
+# Epoch digit count -> divisor: nanoseconds, microseconds, milliseconds, seconds.
+_EPOCH_UNITS = ((18, 1_000_000_000), (15, 1_000_000), (12, 1_000), (1, 1))
 
 
 @register_parser("fortigate_webfilter")
 class FortiGateWebFilterParser(BaseParser):
     source_type = "proxy"
-    parser_version = "1.0.0"
+    parser_version = "1.1.0"
 
     def parse(self, raw_line: str) -> CanonicalEvent | None:
         line = sanitize_log_input(raw_line.strip())
@@ -42,10 +48,7 @@ class FortiGateWebFilterParser(BaseParser):
         if not hostname and not url:
             return None
 
-        # Parse timestamp
-        date_str = fields.get("date", "")
-        time_str = fields.get("time", "")
-        timestamp = self._parse_timestamp(date_str, time_str)
+        timestamp = self._parse_timestamp(fields)
 
         domain = hostname or url.split("/")[0]
         url_path = url if url.startswith("/") else ""
@@ -67,10 +70,25 @@ class FortiGateWebFilterParser(BaseParser):
             parser_version=self.parser_version,
         )
 
-    def _parse_timestamp(self, date_str: str, time_str: str) -> datetime:
+    def _parse_timestamp(self, fields: dict[str, str]) -> datetime:
+        eventtime = fields.get("eventtime", "")
+        if eventtime.isdigit():
+            divisor = next(divisor for digits, divisor in _EPOCH_UNITS if len(eventtime) >= digits)
+            try:
+                return datetime.fromtimestamp(int(eventtime) / divisor, tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                pass
+        date_str, time_str = fields.get("date", ""), fields.get("time", "")
         if date_str and time_str:
             try:
-                return datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+                local = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
             except ValueError:
-                pass
+                return datetime.now(UTC)
+            offset = _TZ_RE.match(fields.get("tz", "").strip())
+            if offset:
+                sign = -1 if offset[1] == "-" else 1
+                delta = timedelta(hours=int(offset[2]), minutes=int(offset[3]))
+                if delta < timedelta(hours=24):
+                    return local.replace(tzinfo=timezone(sign * delta)).astimezone(UTC)
+            return self.localize(local)
         return datetime.now(UTC)

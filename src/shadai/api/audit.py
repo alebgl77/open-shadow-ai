@@ -21,7 +21,7 @@ async def list_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200),
     _admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     query = select(AuditLogORM)
 

@@ -5,6 +5,7 @@ Improvements over v1:
 - User-Agent matching (now wired via event.user_agent field)
 - Confidence floor for ambiguous ports (8080, 3000, etc.)
 - Returns best match by confidence, not first match
+- Shared signatures resolve deterministically, independent of catalog order
 """
 
 from __future__ import annotations
@@ -57,11 +58,24 @@ def _domain_parents(domain: str) -> list[str]:
     return parents
 
 
+def _pattern_owners(entries: list, value: str) -> tuple[str, ...]:
+    """Owners of the most specific matching pattern(s); entries are sorted by specificity."""
+    best, owners = None, []
+    for specificity, pattern, item_id in entries:
+        if best is not None and specificity < best:
+            break
+        if pattern.match(value):
+            best = specificity
+            owners.append(item_id)
+    return tuple(sorted(set(owners)))
+
+
 class CatalogMatcher:
     """Matches canonical events against the catalog index.
 
-    Returns the single best match (highest confidence) rather than first-match-wins,
-    so that a high-specificity signal is never shadowed by a lower one evaluated earlier.
+    Returns the single best match rather than first-match-wins. Shared signatures yield
+    one candidate per owner; ties go to the item corroborated by more signal types, then
+    to the lowest catalog ID, so the result never depends on catalog load order.
     """
 
     def __init__(self, index: CatalogIndex):
@@ -73,146 +87,103 @@ class CatalogMatcher:
             return None
         candidates: list[CatalogMatch] = []
 
-        # 1. Extension ID (highest specificity)
-        if event.extension_id and event.extension_id in self._index.extension_index:
-            candidates.append(
+        def add(owners, field: str, value: str, confidence: float) -> None:
+            candidates.extend(
                 CatalogMatch(
-                    catalog_item_id=self._index.extension_index[event.extension_id],
-                    matched_field="extension_id",
-                    matched_value=event.extension_id,
-                    match_confidence=SIGNAL_CONFIDENCE["extension_id"],
+                    catalog_item_id=item_id, matched_field=field, matched_value=value, match_confidence=confidence
                 )
+                for item_id in owners
+            )
+
+        # 1. Extension ID (highest specificity)
+        if event.extension_id:
+            add(
+                self._index.extension_index.get(event.extension_id, ()),
+                "extension_id",
+                event.extension_id,
+                SIGNAL_CONFIDENCE["extension_id"],
             )
 
         # 2. OAuth App ID
-        if event.oauth_app_id and event.oauth_app_id in self._index.oauth_app_index:
-            candidates.append(
-                CatalogMatch(
-                    catalog_item_id=self._index.oauth_app_index[event.oauth_app_id],
-                    matched_field="oauth_app_id",
-                    matched_value=event.oauth_app_id,
-                    match_confidence=SIGNAL_CONFIDENCE["oauth_app_id"],
-                )
+        if event.oauth_app_id:
+            add(
+                self._index.oauth_app_index.get(event.oauth_app_id, ()),
+                "oauth_app_id",
+                event.oauth_app_id,
+                SIGNAL_CONFIDENCE["oauth_app_id"],
             )
 
         # 3. Container image pattern
         if event.container_image:
-            for pattern, item_id in self._index.container_pattern_index:
-                if pattern.match(event.container_image):
-                    candidates.append(
-                        CatalogMatch(
-                            catalog_item_id=item_id,
-                            matched_field="container_image",
-                            matched_value=event.container_image,
-                            match_confidence=SIGNAL_CONFIDENCE["container_image"],
-                        )
-                    )
-                    break
+            add(
+                _pattern_owners(self._index.container_pattern_index, event.container_image),
+                "container_image",
+                event.container_image,
+                SIGNAL_CONFIDENCE["container_image"],
+            )
 
         # 4. Process name + optional port boost
+        port_owners = self._index.port_index.get(event.local_port, ()) if event.local_port else ()
         if event.process_name:
-            proc_lower = event.process_name.lower().removesuffix(".exe")
-            if proc_lower in self._index.process_index:
-                confidence = SIGNAL_CONFIDENCE["process_name"]
-                if event.local_port and event.local_port in self._index.port_index:
-                    port_item = self._index.port_index[event.local_port]
-                    if port_item == self._index.process_index[proc_lower]:
-                        confidence = SIGNAL_CONFIDENCE["process_port"]
-                candidates.append(
-                    CatalogMatch(
-                        catalog_item_id=self._index.process_index[proc_lower],
-                        matched_field="process_name",
-                        matched_value=event.process_name,
-                        match_confidence=confidence,
-                    )
-                )
+            for item_id in self._index.process_index.get(event.process_name.lower().removesuffix(".exe"), ()):
+                confidence = SIGNAL_CONFIDENCE["process_port" if item_id in port_owners else "process_name"]
+                add((item_id,), "process_name", event.process_name, confidence)
 
         # 5. Port alone (only if process didn't match AND port is not generic)
-        if event.local_port and event.local_port not in GENERIC_PORTS and event.local_port in self._index.port_index:
-            port_item = self._index.port_index[event.local_port]
-            already_matched = any(c.catalog_item_id == port_item for c in candidates)
-            if not already_matched:
-                confidence = SIGNAL_CONFIDENCE["port_only"]
-                if event.local_port in GENERIC_PORTS:
-                    confidence = 0.30  # Very low for generic ports
-                candidates.append(
-                    CatalogMatch(
-                        catalog_item_id=port_item,
-                        matched_field="local_port",
-                        matched_value=str(event.local_port),
-                        match_confidence=confidence,
-                    )
-                )
+        if event.local_port not in GENERIC_PORTS:
+            matched = {candidate.catalog_item_id for candidate in candidates}
+            add(
+                [item_id for item_id in port_owners if item_id not in matched],
+                "local_port",
+                str(event.local_port),
+                SIGNAL_CONFIDENCE["port_only"],
+            )
 
         # 6. URL pattern match
         if event.url_path:
-            for pattern, item_id in self._index.url_pattern_index:
-                if pattern.match(event.url_path):
-                    candidates.append(
-                        CatalogMatch(
-                            catalog_item_id=item_id,
-                            matched_field="url_pattern",
-                            matched_value=event.url_path,
-                            match_confidence=SIGNAL_CONFIDENCE["url_pattern"],
-                        )
-                    )
-                    break
+            add(
+                _pattern_owners(self._index.url_pattern_index, event.url_path),
+                "url_pattern",
+                event.url_path,
+                SIGNAL_CONFIDENCE["url_pattern"],
+            )
 
-        # 7. Domain match with subdomain fallback
+        # 7. Domain match with subdomain fallback (most specific parent first)
         is_proxy = event.source_type == "proxy"
         for domain_field in [event.url_host, event.domain, event.sni]:
             if not domain_field:
                 continue
             domain_lower = domain_field.lower().rstrip(".")
-
-            # Exact match first
-            if domain_lower in self._index.domain_index:
+            if owners := self._index.domain_index.get(domain_lower):
                 confidence = SIGNAL_CONFIDENCE["domain_proxy"] if is_proxy else SIGNAL_CONFIDENCE["domain_dns"]
-                candidates.append(
-                    CatalogMatch(
-                        catalog_item_id=self._index.domain_index[domain_lower],
-                        matched_field="domain",
-                        matched_value=domain_field,
-                        match_confidence=confidence,
-                    )
-                )
+                add(owners, "domain", domain_field, confidence)
                 break
-
-            # Subdomain fallback: try parent domains
-            for parent in _domain_parents(domain_lower):
-                if parent in self._index.domain_index:
-                    confidence = (
-                        SIGNAL_CONFIDENCE["subdomain_proxy"] if is_proxy else SIGNAL_CONFIDENCE["subdomain_dns"]
-                    )
-                    candidates.append(
-                        CatalogMatch(
-                            catalog_item_id=self._index.domain_index[parent],
-                            matched_field="domain",
-                            matched_value=f"{domain_field} (via {parent})",
-                            match_confidence=confidence,
-                        )
-                    )
-                    break
-            else:
-                continue
-            break
+            parent = next((p for p in _domain_parents(domain_lower) if p in self._index.domain_index), None)
+            if parent:
+                confidence = SIGNAL_CONFIDENCE["subdomain_proxy"] if is_proxy else SIGNAL_CONFIDENCE["subdomain_dns"]
+                add(self._index.domain_index[parent], "domain", f"{domain_field} (via {parent})", confidence)
+                break
 
         # 8. User-Agent pattern match
         if event.user_agent:
-            for pattern, item_id in self._index.user_agent_pattern_index:
-                if pattern.match(event.user_agent):
-                    candidates.append(
-                        CatalogMatch(
-                            catalog_item_id=item_id,
-                            matched_field="user_agent",
-                            matched_value=event.user_agent,
-                            match_confidence=SIGNAL_CONFIDENCE["user_agent"],
-                        )
-                    )
-                    break
+            add(
+                _pattern_owners(self._index.user_agent_pattern_index, event.user_agent),
+                "user_agent",
+                event.user_agent,
+                SIGNAL_CONFIDENCE["user_agent"],
+            )
 
         if not candidates:
             return None
 
-        # Return the highest-confidence match
-        return max(candidates, key=lambda c: c.match_confidence)
+        best: dict[str, CatalogMatch] = {}
+        support: dict[str, set[str]] = {}
+        for candidate in candidates:
+            item_id = candidate.catalog_item_id
+            support.setdefault(item_id, set()).add(candidate.matched_field)
+            if item_id not in best or candidate.match_confidence > best[item_id].match_confidence:
+                best[item_id] = candidate
+        return min(
+            best.values(),
+            key=lambda c: (-c.match_confidence, -len(support[c.catalog_item_id]), c.catalog_item_id),
+        )

@@ -20,6 +20,7 @@ from shadai.database import get_postgres_session, get_redis
 from shadai.models.user import TokenPayload, UserORM
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+ROLE_RANKS = {"viewer": 0, "analyst": 1, "admin": 2}
 
 
 def hash_password(plain: str) -> str:
@@ -75,7 +76,7 @@ def decode_access_token(token: str) -> TokenPayload:
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ) -> UserORM:
     """FastAPI dependency: extract and validate current user from JWT."""
     payload = decode_access_token(token)
@@ -112,7 +113,6 @@ async def effective_roles(session: AsyncSession, users: list[UserORM]) -> dict[u
         for user in users
         if user.identity_kind == "scim" and user.oidc_issuer == get_config().oidc.issuer and not user.scim_deleted
     ]
-    ranks = {"viewer": 0, "analyst": 1, "admin": 2}
     role_map = get_config().scim.group_role_map
     for offset in range(0, len(external_ids), 1000):
         rows = await session.execute(
@@ -122,7 +122,7 @@ async def effective_roles(session: AsyncSession, users: list[UserORM]) -> dict[u
         )
         for user_id, group_id in rows:
             candidate = role_map.get(group_id, "viewer")
-            if ranks[candidate] > ranks[roles[user_id]]:
+            if ROLE_RANKS[candidate] > ROLE_RANKS[roles[user_id]]:
                 roles[user_id] = candidate
     return roles
 

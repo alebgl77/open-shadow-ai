@@ -20,7 +20,7 @@ OIDC and SCIM are optional and disabled by default. Use a tenant-specific HTTPS 
 
 Protect the SCIM bearer token as an administrative credential: its holder can provision accounts and group membership. Use at least 32 random bytes, independently of the collector key, JWT key and OIDC client secret. Map roles only from reviewed immutable group external IDs. Retain and test a separate local administrator for recovery; external accounts cannot sign in with a local password or have their managed access overridden through the local user administration API.
 
-Provisioning changes invalidate affected sessions when received by the application. Directory synchronization delays remain outside its control. MFA and Conditional Access are enforced by the identity provider; the application does not independently enforce an MFA claim. Signing out of the console does not end the identity-provider session.
+Deprovisioning, deactivation and role reductions invalidate affected sessions when received by the application; profile synchronization does not. Directory synchronization delays remain outside its control. MFA and Conditional Access are enforced by the identity provider; the application does not independently enforce an MFA claim. Signing out of the console does not end the identity-provider session.
 
 Never log authorization codes, bearer tokens, cookies or client secrets. The bundled nginx omits query strings/referrers, suppresses callback error logs, and the API image disables raw access logs. Apply equivalent controls at ingress, load balancers and tracing systems. Keep TLS verification enabled. See the [identity operations guide](docs/sso-scim.md) for configuration, rotation and validation boundaries.
 

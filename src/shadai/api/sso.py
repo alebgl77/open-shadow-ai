@@ -112,7 +112,7 @@ async def login():
 
 
 @router.get("/sso/callback")
-async def callback(request: Request, session: AsyncSession = Depends(get_postgres_session)):
+async def callback(request: Request, session: AsyncSession = Depends(get_postgres_session, scope="function")):
     config = get_config().oidc
     if not config.enabled:
         return failure(config, status=404)
@@ -166,7 +166,7 @@ async def callback(request: Request, session: AsyncSession = Depends(get_postgre
 
 
 @router.post("/sso/session", response_model=LoginResponse)
-async def exchange_session(request: Request, session: AsyncSession = Depends(get_postgres_session)):
+async def exchange_session(request: Request, session: AsyncSession = Depends(get_postgres_session, scope="function")):
     config = get_config().oidc
     if not config.enabled:
         return failure(config, status=404)

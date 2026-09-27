@@ -11,7 +11,8 @@ configMapGenerator:
     literals:
       - SHADAI_TENANT_ID=default
       - CORS_ORIGINS=[]
-      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_PORT=9440
+      - CLICKHOUSE_SECURE=true
       - CLICKHOUSE_DATABASE=shadai
   - name: open-shadow-ai-config
     files: [shadai.yaml]

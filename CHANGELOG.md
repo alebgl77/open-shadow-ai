@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Writes commit before the API responds (FastAPI function-scoped sessions, FastAPI 0.121 or later). A failed commit, for example when deactivating an account, now returns an error instead of a success for a change that was never stored.
+- Windows agent installer: the install directory must not exist and is created with a protected ACL, then every installed file is reset to Administrators ownership and re-checked; the Python home, the wheelhouse and their parent directories must not be writable or replaceable by non-administrative principals; the agent wheel is hashed on a protected copy.
+- FortiGate timestamps use `eventtime` or the `tz` offset, and every syslog listener accepts a `timezone` for device-local clocks. Recent events from UTC+ devices are no longer rejected as future-dated, and one rejected line no longer drops its neighbours or the TCP connection (`shadai_events_rejected_total`). PAN-OS year-less syslog timestamps get the correct year.
+- Catalog attribution no longer depends on catalog load order: shared signatures keep every owner, the most specific pattern wins, then corroboration, then the catalog ID.
+- The endpoint agent splits large snapshots into batches within API limits, collapses identical process observations and stops retrying client errors.
+- Discoveries can be sorted by impacted users or devices, which the identity page requires; the demo adapter now rejects the sort columns the API rejects.
+- Detection exports apply every discovery filter and sort, and record the filters in the audit entry.
+- SCIM profile updates and changes to groups that grant no role no longer end sessions; deactivation, deletion and role reductions still do. Console sign-out now revokes the token on the server.
+- ClickHouse native TLS with certificate verification, private CA, mutual TLS and SNI settings; the Kubernetes baseline uses it by default on port 9440.
+
 ## 0.2.0 preview — 2026-09-27
 
 - Optional OIDC authorization-code sign-in with PKCE S256 for pre-provisioned console users. The verified issuer and stable identity claim must match the immutable SCIM `externalId`; email does not link accounts.

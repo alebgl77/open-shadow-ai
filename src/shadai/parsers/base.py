@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import structlog
 
@@ -25,11 +27,11 @@ def register_parser(name: str):
     return decorator
 
 
-def get_parser(name: str) -> BaseParser:
+def get_parser(name: str, timezone: str = "UTC") -> BaseParser:
     """Instantiate a parser by its registered name."""
     if name not in PARSER_REGISTRY:
         raise ValueError(f"Unknown parser: {name}. Available: {list(PARSER_REGISTRY.keys())}")
-    return PARSER_REGISTRY[name]()
+    return PARSER_REGISTRY[name](timezone=timezone)
 
 
 class BaseParser(ABC):
@@ -37,6 +39,18 @@ class BaseParser(ABC):
 
     source_type: str = ""
     parser_version: str = "1.0.0"
+
+    def __init__(self, timezone: str = "UTC"):
+        try:
+            self.timezone = UTC if timezone == "UTC" else ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown source timezone: {timezone!r}") from exc
+
+    def localize(self, value: datetime) -> datetime:
+        """Read a device-local timestamp without offset in the source's configured timezone."""
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=self.timezone)
+        return value.astimezone(UTC)
 
     @abstractmethod
     def parse(self, raw_line: str) -> CanonicalEvent | None:

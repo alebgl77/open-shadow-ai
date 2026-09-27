@@ -89,3 +89,42 @@ async def test_logout_revokes_exact_token_until_expiry(monkeypatch):
     await logout(request, user, AsyncMock())
     assert redis.set.call_args.args == (f"revoked:{decode_access_token(token).jti}", "1")
     assert 0 < redis.set.call_args.kwargs["ex"] <= 24 * 3600
+
+
+def test_clickhouse_tls_is_verified_and_configurable(monkeypatch):
+    from shadai.config import load_config
+    from shadai.database import init_clickhouse
+
+    plain = init_clickhouse(DatabaseSettings()).connection
+    assert list(plain.hosts) == [("clickhouse", 9000)] and not plain.secure_socket
+    settings = DatabaseSettings(
+        clickhouse_secure=True,
+        clickhouse_ca_certs="/run/secrets/clickhouse-ca.pem",
+        clickhouse_certfile="/run/secrets/client.pem",
+        clickhouse_keyfile="/run/secrets/client.key",
+        clickhouse_server_hostname="clickhouse.internal.example",
+    )
+    secure = init_clickhouse(settings).connection
+    assert list(secure.hosts) == [("clickhouse", 9440)]
+    assert secure.secure_socket and secure.verify_cert and secure.check_hostname
+    assert secure.server_hostname == "clickhouse.internal.example"
+    assert secure.ssl_options == {
+        "ca_certs": "/run/secrets/clickhouse-ca.pem",
+        "certfile": "/run/secrets/client.pem",
+        "keyfile": "/run/secrets/client.key",
+    }
+    assert list(init_clickhouse(settings.model_copy(update={"clickhouse_port": 19440})).connection.hosts) == [
+        ("clickhouse", 19440)
+    ]
+    monkeypatch.setattr("shadai.database._ch_client", None)
+
+    monkeypatch.setenv("CLICKHOUSE_SECURE", "true")
+    monkeypatch.setenv("CLICKHOUSE_CA_CERTS", "/run/secrets/clickhouse-ca.pem")
+    config = load_config("/nonexistent.yaml")
+    assert config.database.clickhouse_secure and config.database.clickhouse_effective_port == 9440
+    assert config.database.clickhouse_ca_certs == "/run/secrets/clickhouse-ca.pem"
+    monkeypatch.setenv("CLICKHOUSE_SECURE", "false")
+    with pytest.raises(ValueError, match="require clickhouse_secure"):
+        load_config("/nonexistent.yaml")
+    with pytest.raises(ValueError, match="requires clickhouse_certfile"):
+        DatabaseSettings(clickhouse_secure=True, clickhouse_keyfile="/run/secrets/client.key")

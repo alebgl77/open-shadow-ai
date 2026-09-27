@@ -45,25 +45,31 @@ def _risk_level(score: int) -> str:
 
 RISK_THRESHOLDS = {"critical": 86, "high": 71, "medium": 51, "low": 26, "info": 0}
 CONF_THRESHOLDS = {"very_high": 0.90, "high": 0.70, "medium": 0.40, "low": 0.0}
+# Keep in sync with DETECTION_SORT_COLUMNS in frontend/src/api/detections.ts.
+SORT_COLUMNS = (
+    "last_seen_at",
+    "first_seen_at",
+    "risk_score",
+    "confidence_score",
+    "entity_name",
+    "total_events_count",
+    "impacted_users_count",
+    "impacted_devices_count",
+)
 
 
-@router.get("/", response_model=DetectionListResponse)
-async def list_detections(
+def filter_detections(
+    query,
+    *,
     classification: str | None = None,
     risk_level: str | None = None,
     confidence_level: str | None = None,
     entity_type: str | None = None,
     analyst_status: str | None = None,
     search: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
-    sort_by: str = "last_seen_at",
-    sort_order: str = "desc",
-    _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
 ):
-    query = select(DetectionORM).where(DetectionORM.shadow_ai_status.notin_(["archived"]))
-
+    """Apply the discovery list filters; exports reuse them so both return the same rows."""
+    query = query.where(DetectionORM.shadow_ai_status.notin_(["archived"]))
     if classification:
         query = query.where(DetectionORM.classification.in_(classification.split(",")))
     if entity_type:
@@ -103,30 +109,46 @@ async def list_detections(
                 ]
             )
         )
+    return query
+
+
+def order_detections(query, sort_by: str, sort_order: str):
+    if sort_by not in SORT_COLUMNS or sort_order not in {"asc", "desc"}:
+        raise HTTPException(status_code=422, detail="Invalid sort")
+    column = getattr(DetectionORM, sort_by)
+    # The ID tie-breaker keeps pages stable when many rows share a value (user counts).
+    return query.order_by(column.asc() if sort_order == "asc" else column.desc(), DetectionORM.detection_id)
+
+
+@router.get("/", response_model=DetectionListResponse)
+async def list_detections(
+    classification: str | None = None,
+    risk_level: str | None = None,
+    confidence_level: str | None = None,
+    entity_type: str | None = None,
+    analyst_status: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort_by: str = "last_seen_at",
+    sort_order: str = "desc",
+    _user: UserORM = Depends(get_current_user),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
+):
+    query = filter_detections(
+        select(DetectionORM),
+        classification=classification,
+        risk_level=risk_level,
+        confidence_level=confidence_level,
+        entity_type=entity_type,
+        analyst_status=analyst_status,
+        search=search,
+    )
+    query = order_detections(query, sort_by, sort_order)
 
     # Total count
-    count_q = select(func.count()).select_from(query.subquery())
+    count_q = select(func.count()).select_from(query.order_by(None).subquery())
     total = await session.scalar(count_q) or 0
-
-    # Sorting
-    sort_columns = {
-        key: getattr(DetectionORM, key)
-        for key in (
-            "last_seen_at",
-            "first_seen_at",
-            "risk_score",
-            "confidence_score",
-            "entity_name",
-            "total_events_count",
-        )
-    }
-    if sort_by not in sort_columns or sort_order not in {"asc", "desc"}:
-        raise HTTPException(status_code=422, detail="Invalid sort")
-    sort_col = sort_columns[sort_by]
-    if sort_order == "asc":
-        query = query.order_by(sort_col.asc())
-    else:
-        query = query.order_by(sort_col.desc())
 
     # Pagination
     offset = (page - 1) * page_size
@@ -147,7 +169,7 @@ async def list_detections(
 async def get_detection(
     detection_id: uuid.UUID,
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(DetectionORM).where(DetectionORM.detection_id == detection_id))
     detection = result.scalar_one_or_none()
@@ -162,7 +184,7 @@ async def update_detection(
     body: DetectionUpdate,
     request: Request,
     current_user: UserORM = Depends(require_role("analyst")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(
         select(DetectionORM).where(DetectionORM.detection_id == detection_id).with_for_update()
@@ -223,7 +245,7 @@ async def add_note(
     note: str = Query(..., min_length=1, max_length=2000),
     request: Request = None,
     current_user: UserORM = Depends(require_role("analyst")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(DetectionORM).where(DetectionORM.detection_id == detection_id))
     detection = result.scalar_one_or_none()
@@ -246,7 +268,7 @@ async def get_detection_events(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserORM = Depends(require_role("analyst")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Get ClickHouse events linked to this detection."""
     result = await session.execute(
@@ -282,7 +304,7 @@ async def get_detection_events(
 async def get_detection_timeline(
     detection_id: uuid.UUID,
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Build timeline from evidence bundle and audit logs."""
     result = await session.execute(select(DetectionORM).where(DetectionORM.detection_id == detection_id))

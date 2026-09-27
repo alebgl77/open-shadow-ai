@@ -45,7 +45,7 @@ def identity_config(monkeypatch, safe_config):
 @pytest.fixture
 async def identity_sessions(tmp_path, monkeypatch):
     """Real transactions locally; live integration separately verifies PostgreSQL locks."""
-    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.dialects.postgresql import JSONB, UUID
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from sqlalchemy.ext.compiler import compiles
 
@@ -58,6 +58,11 @@ async def identity_sessions(tmp_path, monkeypatch):
     @compiles(JSONB, "sqlite")
     def jsonb_sqlite(element, compiler, **kwargs):
         return "JSON"
+
+    @compiles(UUID, "sqlite")
+    def uuid_sqlite(element, compiler, **kwargs):
+        # A column declared "UUID" gets NUMERIC affinity: an all-digit hex value would become a REAL.
+        return "CHAR(32)"
 
     async def no_pg_lock(self):
         pass

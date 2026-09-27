@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 async def login(
     body: LoginRequest,
     request: Request,
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Authenticate and return a JWT access token."""
     redis = await get_redis()
@@ -80,7 +80,7 @@ async def login(
 async def logout(
     request: Request,
     current_user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Revoke the presented token until expiration; Redis errors fail closed."""
     token = await oauth2_scheme(request)
@@ -111,7 +111,7 @@ users_router = APIRouter(prefix="/api/v1/settings/users", tags=["users"])
 @users_router.get("/", response_model=list[UserRead])
 async def list_users(
     _admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(UserORM).where(UserORM.scim_deleted.is_(False)).order_by(UserORM.username))
     users = list(result.scalars().all())
@@ -124,7 +124,7 @@ async def create_user(
     body: UserCreate,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     user = UserORM(
         username=body.username,
@@ -158,7 +158,7 @@ async def update_user(
     body: UserUpdate,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(UserORM).where(UserORM.user_id == user_id).with_for_update())
     user = result.scalar_one_or_none()

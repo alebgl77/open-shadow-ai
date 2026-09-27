@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/v1/governance", tags=["governance"])
 async def list_governance(
     target_type: str | None = None,
     _user: UserORM = Depends(require_role("viewer")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     query = select(GovernanceORM)
     if target_type:
@@ -37,7 +37,7 @@ async def create_governance(
     body: GovernanceCreate,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     if body.target_type == "catalog_item":
         await session.execute(
@@ -81,7 +81,7 @@ async def update_governance(
     body: GovernanceUpdate,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(GovernanceORM).where(GovernanceORM.governance_id == governance_id))
     gov = result.scalar_one_or_none()

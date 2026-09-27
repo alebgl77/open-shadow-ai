@@ -68,14 +68,21 @@ async def get_postgres_session() -> AsyncGenerator[AsyncSession, None]:
 # ── ClickHouse ───────────────────────────────────────────────────
 def init_clickhouse(settings: DatabaseSettings) -> ClickHouseClient:
     global _ch_client
+    tls = {}
+    if settings.clickhouse_secure:
+        tls = {"secure": True, "verify": True}
+        for option in ("ca_certs", "certfile", "keyfile", "server_hostname"):
+            if value := getattr(settings, "clickhouse_" + option):
+                tls[option] = value
     _ch_client = SerializedClickHouseClient(
         host=settings.clickhouse_host,
-        port=settings.clickhouse_port,
+        port=settings.clickhouse_effective_port,
         database=settings.clickhouse_database,
         user=settings.clickhouse_user,
         password=settings.clickhouse_password,
         connect_timeout=5,
         send_receive_timeout=15,
+        **tls,
     )
     return _ch_client
 
