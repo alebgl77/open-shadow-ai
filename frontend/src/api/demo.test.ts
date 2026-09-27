@@ -31,6 +31,12 @@ describe('explicit synthetic workspace', ()=>{
     expect(()=>demoRequest('post','/not-supported')).toThrow('Demo route unavailable')
     expect(()=>demoRequest('get','/detections/not-found')).toThrow('not found')
   })
+  it('accepts exactly the sort columns the API supports', ()=>{
+    const result = demoRequest('get','/detections?sort_by=impacted_users_count&sort_order=desc&page_size=100') as {items:Array<{impacted_users_count:number}>}
+    const counts = result.items.map(item=>item.impacted_users_count)
+    expect(counts).toEqual([...counts].sort((a,b)=>b-a))
+    expect(()=>demoRequest('get','/detections?sort_by=evidence_bundle')).toThrow('Invalid sort')
+  })
   it('enters demo without a bearer credential and destroys credentials at sign-out', ()=>{
     useAuthStore.getState().login('secret', {user_id:'1',username:'analyst',email:null,role:'analyst',is_active:true})
     useAuthStore.getState().enterDemo()

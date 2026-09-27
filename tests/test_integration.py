@@ -283,7 +283,8 @@ async def test_live_identity_migration_lifecycle_and_concurrent_provisioning(mon
         async with sessions.begin() as session:
             service = SCIMService(session)
             user = await service.get("Users", user_id)
-            assert not user.is_active and user.display_name == "Renamed" and user.session_version == 2
+            # The rename ran after the deactivation and, as a profile edit, kept its revocation version.
+            assert not user.is_active and user.display_name == "Renamed" and user.session_version == 1
             group = await service.create_group(
                 {"externalId": "admins-group", "displayName": "Admins", "members": [{"value": str(user_id)}]}
             )

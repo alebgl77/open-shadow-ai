@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import signal
 import time
@@ -24,11 +25,74 @@ logger = logging.getLogger("shadai-agent")
 
 _running = True
 
+# Mirrors the API's TelemetryBatch bound per list and stays under its 2 MiB request limit.
+MAX_RECORDS_PER_LIST = 500
+MAX_BODY_BYTES = 1_500_000
+SECTIONS = ("processes", "containers", "local_ai_hits", "extensions", "model_files")
+# The server builds process events from these fields only; identical keys are identical events.
+PROCESS_KEY = ("name", "parent", "username", "listening_port")
+
 
 def _handle_signal(signum, frame):
     global _running
     logger.info(f"Received signal {signum}, shutting down...")
     _running = False
+
+
+def unique_processes(processes: list[dict]) -> list[dict]:
+    """Collapse process instances the server would record as the same observation."""
+    seen, result = set(), []
+    for process in processes:
+        key = tuple(process.get(field) for field in PROCESS_KEY)
+        if key not in seen:
+            seen.add(key)
+            result.append(process)
+    return result
+
+
+def split_batches(header: dict, sections: dict[str, list[dict]]) -> list[dict]:
+    """Split one snapshot into API-sized batches that share its hostname and timestamp."""
+
+    def empty():
+        return {**header, **{section: [] for section in SECTIONS}}
+
+    base_size = len(json.dumps(empty()))
+    batches, current, size = [], None, 0
+    for section in SECTIONS:
+        for record in sections.get(section, []):
+            record_size = len(json.dumps(record, default=str)) + 2
+            if base_size + record_size > MAX_BODY_BYTES:
+                logger.warning(f"Skipping one oversized {section} record")
+                continue
+            if current is None or len(current[section]) >= MAX_RECORDS_PER_LIST or size + record_size > MAX_BODY_BYTES:
+                current = empty()
+                batches.append(current)
+                size = base_size
+            current[section].append(record)
+            size += record_size
+    return batches or [empty()]
+
+
+def send_batch(url: str, batch: dict, headers: dict, verify) -> int | None:
+    """Return the accepted event count, or None once retries are exhausted or pointless."""
+    attempts = 3
+    for attempt in range(attempts):
+        try:
+            resp = requests.post(url, json=batch, headers=headers, timeout=30, verify=verify)
+        except requests.RequestException as e:
+            logger.warning(f"Send attempt {attempt + 1} failed: {type(e).__name__}")
+        else:
+            if resp.status_code == 200:
+                try:
+                    return int(resp.json().get("received", 0))
+                except (ValueError, AttributeError, TypeError):
+                    return 0
+            logger.warning(f"Server returned HTTP {resp.status_code}")
+            if 400 <= resp.status_code < 500 and resp.status_code not in (408, 429):
+                return None
+        if attempt + 1 < attempts:
+            time.sleep(2**attempt)
+    return None
 
 
 def main():
@@ -40,61 +104,46 @@ def main():
 
     while _running:
         try:
-            batch = {"hostname": config.hostname, "agent_version": "0.1.0", "timestamp": datetime.now(UTC).isoformat()}
+            header = {"hostname": config.hostname, "agent_version": "0.1.0", "timestamp": datetime.now(UTC).isoformat()}
+            sections: dict[str, list[dict]] = {}
 
             # Collect processes
+            processes = collect_processes() if config.collect_processes else []
+            sections["processes"] = unique_processes(processes)
             if config.collect_processes:
-                processes = collect_processes()
-                batch["processes"] = processes
-                logger.info(f"Collected {len(processes)} processes")
-            else:
-                batch["processes"] = []
-                processes = []
+                logger.info(f"Collected {len(processes)} processes ({len(sections['processes'])} distinct)")
 
             # Collect containers
             if config.collect_containers:
-                containers = collect_containers()
-                batch["containers"] = containers
-                logger.info(f"Collected {len(containers)} containers")
-            else:
-                batch["containers"] = []
+                sections["containers"] = collect_containers()
+                logger.info(f"Collected {len(sections['containers'])} containers")
 
             # Detect local AI
             if config.collect_local_ai:
-                ai_hits = detect_local_ai(processes)
-                model_files = detect_model_files()
-                batch["local_ai_hits"] = ai_hits
-                batch["model_files"] = model_files
-                if ai_hits:
-                    logger.info(f"Detected {len(ai_hits)} local AI processes")
-            else:
-                batch["local_ai_hits"] = []
-                batch["model_files"] = []
+                sections["local_ai_hits"] = detect_local_ai(processes)
+                sections["model_files"] = detect_model_files()
+                if sections["local_ai_hits"]:
+                    logger.info(f"Detected {len(sections['local_ai_hits'])} local AI processes")
 
             # Collect browser extensions
             if config.collect_extensions:
-                extensions = collect_extensions()
-                batch["extensions"] = extensions
-                logger.info(f"Collected {len(extensions)} browser extensions")
-            else:
-                batch["extensions"] = []
+                sections["extensions"] = collect_extensions()
+                logger.info(f"Collected {len(sections['extensions'])} browser extensions")
 
             # Send telemetry
             url = f"{config.server_url.rstrip('/')}/api/v1/agent/telemetry"
             headers = {"X-API-Key": config.api_key, "Content-Type": "application/json"}
-
-            for attempt in range(3):
-                try:
-                    resp = requests.post(url, json=batch, headers=headers, timeout=30, verify=config.ca_bundle or True)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        logger.info(f"Telemetry sent: {data.get('received', 0)} events accepted")
-                        break
-                    else:
-                        logger.warning(f"Server returned HTTP {resp.status_code}")
-                except requests.RequestException as e:
-                    logger.warning(f"Send attempt {attempt + 1} failed: {type(e).__name__}")
-                    time.sleep(2**attempt)
+            batches = split_batches(header, sections)
+            accepted, failed = 0, 0
+            for batch in batches:
+                received = send_batch(url, batch, headers, config.ca_bundle or True)
+                if received is None:
+                    failed += 1
+                else:
+                    accepted += received
+            if failed:
+                logger.warning(f"Telemetry partially sent: {failed} of {len(batches)} batches failed")
+            logger.info(f"Telemetry sent: {accepted} events accepted in {len(batches) - failed} batches")
 
         except Exception as e:
             logger.error(f"Collection error: {type(e).__name__}")

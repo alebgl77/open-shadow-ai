@@ -43,11 +43,35 @@ class ServerSettings(BaseModel):
 class DatabaseSettings(BaseModel):
     postgres_url: str = "postgresql+asyncpg://shadai:changeme@postgres:5432/shadai"
     clickhouse_host: str = "clickhouse"
-    clickhouse_port: int = 9000
+    clickhouse_port: int | None = Field(default=None, ge=1, le=65535)  # None: 9440 with TLS, else 9000
     clickhouse_database: str = "shadai"
     clickhouse_user: str = "default"
     clickhouse_password: str = ""
+    # Native-protocol TLS. Certificate and hostname verification are always enforced.
+    clickhouse_secure: bool = False
+    clickhouse_ca_certs: str = ""  # PEM bundle for a private CA; default: certifi
+    clickhouse_certfile: str = ""  # client certificate for mutual TLS
+    clickhouse_keyfile: str = ""
+    clickhouse_server_hostname: str = ""  # certificate name when it differs from clickhouse_host
     redis_url: str = "redis://redis:6379/0"
+
+    @model_validator(mode="after")
+    def clickhouse_tls(self):
+        tls_options = (
+            self.clickhouse_ca_certs,
+            self.clickhouse_certfile,
+            self.clickhouse_keyfile,
+            self.clickhouse_server_hostname,
+        )
+        if any(tls_options) and not self.clickhouse_secure:
+            raise ValueError("ClickHouse TLS options require clickhouse_secure")
+        if self.clickhouse_keyfile and not self.clickhouse_certfile:
+            raise ValueError("clickhouse_keyfile requires clickhouse_certfile")
+        return self
+
+    @property
+    def clickhouse_effective_port(self) -> int:
+        return self.clickhouse_port or (9440 if self.clickhouse_secure else 9000)
 
 
 class SecuritySettings(BaseModel):
@@ -181,7 +205,7 @@ def _apply_env_overrides(config: ShadAIConfig) -> ShadAIConfig:
     elif key := os.environ.get("ENCRYPTION_KEY"):
         config.security.encryption_key = key
 
-    identity_env = {
+    env_fields = {
         "OIDC_ENABLED": ("oidc", "enabled"),
         "OIDC_ISSUER": ("oidc", "issuer"),
         "OIDC_CLIENT_ID": ("oidc", "client_id"),
@@ -191,8 +215,10 @@ def _apply_env_overrides(config: ShadAIConfig) -> ShadAIConfig:
         "OIDC_ALLOW_INSECURE_LOCALHOST": ("oidc", "allow_insecure_localhost"),
         "SCIM_ENABLED": ("scim", "enabled"),
     }
+    for name in ("SECURE", "CA_CERTS", "CERTFILE", "KEYFILE", "SERVER_HOSTNAME"):
+        env_fields["CLICKHOUSE_" + name] = ("database", "clickhouse_" + name.lower())
     raw = config.model_dump()
-    for name, (section, field) in identity_env.items():
+    for name, (section, field) in env_fields.items():
         if name in os.environ:
             raw[section][field] = os.environ[name]
     for name, section, field in (

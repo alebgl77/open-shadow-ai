@@ -38,6 +38,10 @@ export interface DetectionListResponse {
   page_size: number
 }
 
+// Mirrors SORT_COLUMNS in src/shadai/api/detections.py; the API rejects any other value.
+export const DETECTION_SORT_COLUMNS = ['last_seen_at', 'first_seen_at', 'risk_score', 'confidence_score', 'entity_name', 'total_events_count', 'impacted_users_count', 'impacted_devices_count'] as const
+export type DetectionSortColumn = typeof DETECTION_SORT_COLUMNS[number]
+
 export interface DetectionFilter {
   classification?: string
   risk_level?: string
@@ -47,7 +51,7 @@ export interface DetectionFilter {
   search?: string
   page?: number
   page_size?: number
-  sort_by?: string
+  sort_by?: DetectionSortColumn
   sort_order?: string
 }
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from shadai.models.event import CanonicalEvent
 from shadai.parsers.base import BaseParser, register_parser
@@ -22,7 +22,7 @@ from shadai.utils.validators import sanitize_log_input
 @register_parser("paloalto_url_log")
 class PaloAltoURLLogParser(BaseParser):
     source_type = "proxy"
-    parser_version = "1.0.0"
+    parser_version = "1.1.0"
 
     def parse(self, raw_line: str) -> CanonicalEvent | None:
         line = sanitize_log_input(raw_line.strip())
@@ -116,10 +116,22 @@ class PaloAltoURLLogParser(BaseParser):
             return None
 
     def _parse_timestamp(self, ts_str: str) -> datetime:
-        for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%b %d %H:%M:%S"):
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
             try:
-                dt = datetime.strptime(ts_str, fmt)
-                return dt.replace(tzinfo=UTC)
+                return datetime.strptime(ts_str, fmt).replace(tzinfo=UTC)
             except ValueError:
                 continue
-        return datetime.now(UTC)
+        try:
+            # receive_time/time_generated use the firewall's local clock.
+            return self.localize(datetime.strptime(ts_str, "%Y/%m/%d %H:%M:%S"))
+        except ValueError:
+            pass
+        now = datetime.now(UTC)
+        try:
+            # BSD syslog timestamps omit the year: take the most recent one not in the future.
+            local = datetime.strptime(f"{now.astimezone(self.timezone).year} {ts_str}", "%Y %b %d %H:%M:%S")
+            if self.localize(local) > now + timedelta(days=1):
+                local = local.replace(year=local.year - 1)
+        except ValueError:
+            return now
+        return self.localize(local)

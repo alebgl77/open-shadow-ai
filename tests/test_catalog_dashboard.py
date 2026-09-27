@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 from shadai.config import CatalogSettings
 from shadai.engine.catalog_loader import build_catalog_index, load_catalog_from_yaml, sync_catalog
@@ -109,3 +110,119 @@ async def test_readiness_fails_without_dependencies(monkeypatch):
     monkeypatch.setattr("shadai.database.get_clickhouse", fail)
     result = await readiness()
     assert result.status_code == 503
+
+
+def test_shared_signatures_resolve_independently_of_catalog_order():
+    api = CatalogItemRead(
+        catalog_item_id="b-api",
+        canonical_name="Vendor API",
+        category="api_platform",
+        domains=["shared.example", "api.shared.example"],
+        url_patterns=["/v1/*"],
+        user_agent_patterns=["vendor-sdk/*"],
+    )
+    chat = CatalogItemRead(
+        catalog_item_id="a-chat",
+        canonical_name="Vendor Chat",
+        category="chat_assistant",
+        domains=["shared.example", "chat.shared.example"],
+        url_patterns=["/v1/chat/completions"],
+        user_agent_patterns=["vendor-sdk/*"],
+    )
+    forward, reverse = (CatalogMatcher(build_catalog_index(items)) for items in ([api, chat], [chat, api]))
+    cases = [
+        (CanonicalEvent(domain="shared.example"), "a-chat"),
+        (CanonicalEvent(source_type="proxy", domain="eu.shared.example"), "a-chat"),
+        (CanonicalEvent(source_type="proxy", url_path="/v1/chat/completions"), "a-chat"),
+        (CanonicalEvent(source_type="proxy", url_path="/v1/models"), "b-api"),
+        # Equal confidence: the item corroborated by two signal types wins over the lower ID.
+        (CanonicalEvent(source_type="proxy", user_agent="vendor-sdk/1.0", url_path="/v1/models"), "b-api"),
+        (CanonicalEvent(source_type="proxy", domain="api.shared.example"), "b-api"),
+    ]
+    for event, expected in cases:
+        assert forward.match_event(event) == reverse.match_event(event)
+        assert forward.match_event(event).catalog_item_id == expected
+
+
+def test_real_catalog_attribution_is_stable_under_reordering():
+    import random
+
+    items = load_catalog_from_yaml(str(Path("catalog/builtin")), str(Path("catalog/local")))
+    events = [CanonicalEvent(source_type="dns", domain=d) for item in items for d in item.domains]
+    events += [CanonicalEvent(source_type="proxy", domain=d) for item in items for d in item.domains]
+    events += [CanonicalEvent(source_type="endpoint", process_name=p) for item in items for p in item.processes]
+    events += [
+        CanonicalEvent(source_type="proxy", url_path=p)
+        for item in items
+        for p in item.url_patterns
+        if not any(c in p for c in "*?[")
+    ]
+    events += [
+        CanonicalEvent(source_type="proxy", user_agent=p.replace("*", "1.0"))
+        for item in items
+        for p in item.user_agent_patterns
+    ]
+    baseline = CatalogMatcher(build_catalog_index(items))
+    expected = [baseline.match_event(event) for event in events]
+    rng = random.Random(7)
+    for _ in range(5):
+        shuffled = items[:]
+        rng.shuffle(shuffled)
+        matcher = CatalogMatcher(build_catalog_index(shuffled))
+        assert [matcher.match_event(event) for event in events] == expected
+
+
+async def test_user_count_sort_is_accepted_and_stable():
+    from shadai.api.detections import SORT_COLUMNS, list_detections
+
+    session = AsyncMock()
+    session.scalar.return_value = 0
+    session.execute.return_value = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+    await list_detections(
+        sort_by="impacted_users_count", sort_order="desc", page=1, page_size=100, _user=None, session=session
+    )
+    sql = str(session.execute.call_args.args[0])
+    assert "ORDER BY detections.impacted_users_count DESC, detections.detection_id" in sql
+    frontend = Path("frontend/src/api/detections.ts")
+    if frontend.exists():
+        declared = frontend.read_text().split("DETECTION_SORT_COLUMNS = [", 1)[1].split("]", 1)[0]
+        assert tuple(column.strip().strip("'") for column in declared.split(",")) == SORT_COLUMNS
+
+
+async def test_export_applies_every_discovery_filter():
+    from shadai.api.exports import export_detections
+
+    session = AsyncMock()
+    session.add = lambda entry: setattr(session, "audit", entry)
+    session.execute.return_value = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+    user = SimpleNamespace(user_id=None, username="analyst")
+    request = SimpleNamespace(client=None)
+    await export_detections(
+        format="json",
+        classification="unsanctioned",
+        risk_level="high,critical",
+        confidence_level="very_high",
+        entity_type="saas_app",
+        analyst_status="new",
+        search="chat",
+        sort_by="risk_score",
+        sort_order="desc",
+        request=request,
+        current_user=user,
+        session=session,
+    )
+    sql = str(session.execute.call_args.args[0])
+    for fragment in (
+        "detections.classification IN",
+        "detections.risk_score BETWEEN",
+        "detections.confidence_score >=",
+        "detections.entity_type IN",
+        "detections.analyst_status IN",
+        "lower(detections.entity_name) LIKE lower",
+    ):
+        assert fragment in sql
+    assert session.audit.details["filters"]["risk_level"] == "high,critical"
+    with pytest.raises(HTTPException):
+        await export_detections(
+            format="csv", risk_level="severe", request=request, current_user=user, session=AsyncMock()
+        )

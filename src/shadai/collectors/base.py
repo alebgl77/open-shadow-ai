@@ -9,7 +9,7 @@ import structlog
 
 from shadai.models.event import CanonicalEvent
 from shadai.parsers.base import BaseParser
-from shadai.utils.metrics import EVENTS_INGESTED
+from shadai.utils.metrics import EVENTS_INGESTED, EVENTS_REJECTED
 
 logger = structlog.get_logger()
 
@@ -31,19 +31,29 @@ class BaseCollector(ABC):
         if not events:
             return 0
 
-        pipe = self.redis.pipeline()
-        for event in events:
-            from shadai.api.ingestion import prepare_event
+        from shadai.api.ingestion import prepare_event
 
-            event = prepare_event(event, trusted_collector=True)
+        pipe = self.redis.pipeline()
+        accepted = 0
+        for event in events:
+            try:
+                event = prepare_event(event, trusted_collector=True)
+            except ValueError as exc:
+                # One out-of-window event must not drop its neighbours or the TCP connection.
+                EVENTS_REJECTED.labels(source_type=self.source_type).inc()
+                logger.warning("event_rejected", collector=self.collector_id, reason=str(exc))
+                continue
             event.collector_id = self.collector_id
             stream_key = f"events:{event.source_type}"
             pipe.xadd(stream_key, {"data": event.model_dump_json()})
+            accepted += 1
 
+        if not accepted:
+            return 0
         await pipe.execute()
-        EVENTS_INGESTED.labels(source_type=self.source_type).inc(len(events))
-        logger.debug("events_pushed", collector=self.collector_id, count=len(events))
-        return len(events)
+        EVENTS_INGESTED.labels(source_type=self.source_type).inc(accepted)
+        logger.debug("events_pushed", collector=self.collector_id, count=accepted)
+        return accepted
 
     @abstractmethod
     async def run(self) -> None:

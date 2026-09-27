@@ -1,5 +1,5 @@
 import { AxiosError, AxiosHeaders, type AxiosAdapter } from 'axios'
-import type { Detection } from './detections'
+import { DETECTION_SORT_COLUMNS, type Detection } from './detections'
 import type { Governance, CatalogItem } from '@/types'
 
 const NOW = Date.now()
@@ -51,6 +51,7 @@ export function demoRequest(method: string, input: string, body: Record<string, 
     let items = detections.filter(d => ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status'].every(key => !params.get(key) || params.get(key)!.split(',').includes(String(d[key as keyof Detection]))))
     if (params.get('search')) items = items.filter(d => d.entity_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
     const sort = (params.get('sort_by') || 'last_seen_at') as keyof Detection
+    if (!(DETECTION_SORT_COLUMNS as readonly string[]).includes(sort)) throw new Error('Invalid sort')
     const direction = params.get('sort_order') === 'asc' ? 1 : -1
     items = [...items].sort((a, b) => (typeof a[sort] === 'number' ? Number(a[sort]) - Number(b[sort]) : String(a[sort]).localeCompare(String(b[sort]))) * direction)
     const page = Math.max(1, Number(params.get('page') || 1)); const size = Math.max(10, Math.min(100, Number(params.get('page_size') || 25)))

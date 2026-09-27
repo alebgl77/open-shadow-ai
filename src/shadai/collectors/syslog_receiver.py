@@ -122,7 +122,8 @@ async def main() -> None:
         if source.get("type") != "syslog" or not source.get("enabled", False):
             continue
         parser_name = source["config"]["parser"]
-        parser = get_parser(parser_name)
+        # Zone for device-local timestamps that carry no offset (IANA name, default UTC).
+        parser = get_parser(parser_name, timezone=source["config"].get("timezone", "UTC"))
         collector = SyslogCollector(
             collector_id=source["name"],
             parser=parser,

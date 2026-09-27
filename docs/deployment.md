@@ -36,6 +36,8 @@ The API listens on HTTP internally despite port 8443. Place a reverse proxy with
 
 Use an exact `CORS_ORIGINS` JSON array only when clients need cross-origin access. The bundled frontend uses same-origin requests. Endpoint agents and the AD uploader require HTTPS and validate certificates. Supply `SHADAI_CA_BUNDLE` for a private CA; never disable validation.
 
+Compose keeps its stores on the private project network. When the API and workers reach an external ClickHouse, enable native TLS with `CLICKHOUSE_SECURE=true` (port 9440 unless `CLICKHOUSE_PORT` is set). Certificate and hostname verification are always on; `CLICKHOUSE_CA_CERTS`, `CLICKHOUSE_CERTFILE`/`CLICKHOUSE_KEYFILE` and `CLICKHOUSE_SERVER_HOSTNAME` cover a private CA, mutual TLS and a certificate name that differs from the host. The same keys exist under `database:` in `shadai.yaml`. PostgreSQL and Redis take TLS through `DATABASE_URL` and a `rediss://` `REDIS_URL`.
+
 ## Optional console SSO and provisioning
 
 The base Compose file keeps OIDC/SCIM disabled and requires only the six bootstrap secrets. The optional [identity guide](sso-scim.md) describes `docker-compose.sso.yml`, two operator-provisioned secret files and Entra/generic OIDC setup. SCIM controls console accounts, separately from collected directory inventory. Keep a tested local administrator for recovery.
@@ -86,7 +88,7 @@ Restore Redis from its stopped volume backup using your volume platform, or deli
 
 ## Kubernetes
 
-See [deploy/kubernetes/README.md](../deploy/kubernetes/README.md). The manifests use external PostgreSQL, Redis and ClickHouse and provide no operator, database HA or public credentials. Resources are deliberately constrained and need load testing. TLS ingress and a NetworkPolicy-enforcing CNI are prerequisites for network publication.
+See [deploy/kubernetes/README.md](../deploy/kubernetes/README.md). The manifests use external PostgreSQL, Redis and ClickHouse (native TLS on port 9440 by default) and provide no operator, database HA or public credentials. Resources are deliberately constrained and need load testing. TLS ingress and a NetworkPolicy-enforcing CNI are prerequisites for network publication.
 
 ## Readiness gates
 

@@ -8,7 +8,8 @@ server:
   cors_origins: []
 database:
   clickhouse_host: clickhouse
-  clickhouse_port: 9000
+  clickhouse_port: 9440
+  clickhouse_secure: true
   clickhouse_database: shadai
 retention:
   events_days: 90

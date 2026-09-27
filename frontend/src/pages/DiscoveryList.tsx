@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth'
 import { downloadCsv } from '@/lib/export'
 import { Search, Download, ChevronUp, ChevronDown, Filter, X } from 'lucide-react'
-import { listDetections, updateDetection, type DetectionFilter } from '@/api/detections'
+import { DETECTION_SORT_COLUMNS, listDetections, updateDetection, type DetectionFilter, type DetectionSortColumn } from '@/api/detections'
 import RiskBadge from '@/components/badges/RiskBadge'
 import ApprovalBadge from '@/components/badges/ApprovalBadge'
 import ConfidenceBadge from '@/components/badges/ConfidenceBadge'
@@ -33,7 +33,7 @@ export default function DiscoveryList() {
     analyst_status: searchParams.get('analyst_status') || undefined,
     page: Math.max(1, Math.floor(Number(searchParams.get('page')) || 1)),
     page_size: PAGE_SIZES.includes(Number(searchParams.get('page_size'))) ? Number(searchParams.get('page_size')) : 25,
-    sort_by: searchParams.get('sort_by') || 'last_seen_at',
+    sort_by: (DETECTION_SORT_COLUMNS as readonly string[]).includes(searchParams.get('sort_by') || '') ? searchParams.get('sort_by') as DetectionSortColumn : 'last_seen_at',
     sort_order: searchParams.get('sort_order') || 'desc',
   }
 

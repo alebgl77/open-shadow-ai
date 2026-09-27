@@ -333,7 +333,7 @@ async def test_groups_roles_remove_forms_and_deactivation_never_revives_tokens(
     assert (await scim_client.get(user_url)).json()["groups"][0]["value"] == group_url.rsplit("/", 1)[1]
 
 
-async def test_membership_delta_revokes_tokens_with_stale_stored_role_and_noops_do_not(
+async def test_only_role_reductions_revoke_tokens_and_membership_churn_does_not(
     scim_client, identity_config, identity_sessions
 ):
     identity_config.scim.group_role_map = {}
@@ -348,12 +348,13 @@ async def test_membership_delta_revokes_tokens_with_stale_stored_role_and_noops_
     url = PREFIX + "/Groups/" + group["id"]
     async with identity_sessions() as session:
         row = await session.get(UserORM, uid)
-        assert row.role == "viewer" and row.session_version == 1
+        # Joining a group that grants nothing leaves the session untouched.
+        assert row.role == "viewer" and row.session_version == 0
         token = create_access_token(str(uid), "viewer", row.session_version)
     auth = {"Authorization": "Bearer " + token}
     identity_config.scim.group_role_map = {"admins-group": "admin"}
     assert (await scim_client.get("/api/v1/auth/me", headers=auth)).json()["role"] == "admin"
-    # Redundant adds, removes and net-zero changes must not revoke the token.
+    # Redundant adds, removes, net-zero changes and unmapped groups must not revoke the token.
     for operations in (
         [{"op": "add", "path": "members", "value": [{"value": user["id"]}]}],
         [{"op": "remove", "path": "members", "value": [{"value": str(uuid4())}]}],
@@ -364,19 +365,57 @@ async def test_membership_delta_revokes_tokens_with_stale_stored_role_and_noops_
     ):
         assert (await scim_client.patch(url, json=patch(*operations))).status_code == 204
         assert (await scim_client.get("/api/v1/auth/me", headers=auth)).status_code == 200
+    unmapped = (
+        await scim_client.post(
+            PREFIX + "/Groups",
+            json={"externalId": "project-group", "displayName": "Project", "members": [{"value": user["id"]}]},
+        )
+    ).json()
+    assert (await scim_client.delete(PREFIX + "/Groups/" + unmapped["id"])).status_code == 204
+    assert (await scim_client.get("/api/v1/auth/me", headers=auth)).status_code == 200
     assert (
         await scim_client.patch(url, json=patch({"op": "remove", "path": "members", "value": [{"value": user["id"]}]}))
     ).status_code == 204
     assert (await scim_client.get("/api/v1/auth/me", headers=auth)).status_code == 401
     async with identity_sessions() as session:
         row = await session.get(UserORM, uid)
-        assert row.role == "viewer" and row.session_version == 2
+        assert row.role == "viewer" and row.session_version == 1
+        token = create_access_token(str(uid), "viewer", row.session_version)
+    auth = {"Authorization": "Bearer " + token}
+    # A grant applies on the next request without signing the user out.
     assert (
         await scim_client.patch(url, json=patch({"op": "add", "path": "members", "value": [{"value": user["id"]}]}))
     ).status_code == 204
+    assert (await scim_client.get("/api/v1/auth/me", headers=auth)).json()["role"] == "admin"
     async with identity_sessions() as session:
         row = await session.get(UserORM, uid)
-        assert row.role == "admin" and row.session_version == 3
+        assert row.role == "admin" and row.session_version == 1
+    # Deleting the granting group is a reduction.
+    assert (await scim_client.delete(url)).status_code == 204
+    assert (await scim_client.get("/api/v1/auth/me", headers=auth)).status_code == 401
+
+
+async def test_profile_sync_keeps_sessions_and_deactivation_ends_them(scim_client, identity_sessions):
+    user = await create_user(scim_client)
+    url = PREFIX + "/Users/" + user["id"]
+    auth = {"Authorization": "Bearer " + create_access_token(user["id"], "viewer", 0)}
+    for operation in (
+        {"op": "replace", "path": "displayName", "value": "Alice Renamed"},
+        {"op": "replace", "path": "userName", "value": "alice.renamed"},
+        {"op": "replace", "path": 'emails[type eq "work"].value', "value": "alice.renamed@example.test"},
+        {"op": "replace", "path": "active", "value": True},
+    ):
+        assert (await scim_client.patch(url, json=patch(operation))).status_code == 200
+        assert (await scim_client.get("/api/v1/auth/me", headers=auth)).status_code == 200
+    replacement = user_payload("alice.renamed") | {"displayName": "Alice Again"}
+    assert (await scim_client.put(url, json=replacement)).status_code == 200
+    assert (await scim_client.get("/api/v1/auth/me", headers=auth)).status_code == 200
+    assert (
+        await scim_client.patch(url, json=patch({"op": "replace", "path": "active", "value": False}))
+    ).status_code == 200
+    assert (await scim_client.get("/api/v1/auth/me", headers=auth)).status_code == 401
+    async with identity_sessions() as session:
+        assert (await session.get(UserORM, UUID(user["id"]))).session_version == 1
 
 
 async def test_group_multioperation_failure_rolls_back_members_and_roles(scim_client, identity_sessions):

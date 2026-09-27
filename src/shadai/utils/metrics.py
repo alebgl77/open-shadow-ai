@@ -21,6 +21,12 @@ PARSE_ERRORS = Counter(
     ["parser"],
 )
 
+EVENTS_REJECTED = Counter(
+    "shadai_events_rejected_total",
+    "Parsed events refused at the ingestion boundary (timestamp window, organization, hostname)",
+    ["source_type"],
+)
+
 # ── Matching metrics ─────────────────────────────────────────────
 EVENTS_MATCHED = Counter(
     "shadai_events_matched_total",

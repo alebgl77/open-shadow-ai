@@ -413,7 +413,9 @@ class SCIMService:
         changes = patch_user(body, row.scim_emails) if patch else normalize_user(body, complete=True)
         if "external_id" in changes and changes["external_id"] != row.external_id:
             raise SCIMError(detail="externalId is immutable", scim_type="mutability")
-        if any(getattr(row, key) != value for key, value in changes.items()):
+        # Tokens carry no profile data and roles resolve per request: only an activation
+        # change ends sessions. Profile syncs must not sign users out.
+        if "is_active" in changes and changes["is_active"] != row.is_active:
             row.session_version += 1
         for key, value in changes.items():
             setattr(row, key, value)
@@ -433,8 +435,21 @@ class SCIMService:
         await self.audit("scim_delete_user", "user", row.user_id)
 
     async def set_members(self, group, members):
+        from shadai.security.auth import ROLE_RANKS, effective_roles
+
         old = await self.members(group.group_id)
         added, removed = members - old, old - members
+        affected = sorted(added | removed)
+        before = {}
+        for offset in range(0, len(affected), 1000):
+            users = list(
+                (
+                    await self.session.execute(
+                        select(UserORM).where(UserORM.user_id.in_(affected[offset : offset + 1000]))
+                    )
+                ).scalars()
+            )
+            before.update(await effective_roles(self.session, users))
         if added:
             found = set(
                 (
@@ -456,9 +471,6 @@ class SCIMService:
         for user_id in added:
             self.session.add(MembershipORM(group_id=group.group_id, user_id=user_id))
         await self.flush()
-        from shadai.security.auth import effective_roles
-
-        affected = sorted(added | removed)
         for offset in range(0, len(affected), 1000):
             users = list(
                 (
@@ -469,10 +481,11 @@ class SCIMService:
             )
             roles = await effective_roles(self.session, users)
             for user in users:
-                # Stored roles may predate the current role map. Every actual
-                # membership change revokes sessions, even if that cache agrees.
+                # Requests resolve the current role, so a grant applies immediately. Only a
+                # reduction ends sessions; unrelated group churn must not sign users out.
                 user.role = roles[user.user_id]
-                user.session_version += 1
+                if ROLE_RANKS[roles[user.user_id]] < ROLE_RANKS[before[user.user_id]]:
+                    user.session_version += 1
                 # Group membership never activates a deprovisioned user.
         await self.flush()
 
@@ -561,6 +574,7 @@ class SCIMService:
     async def delete_group(self, group_id):
         await self.lock()
         row = await self.get("Groups", group_id)
-        row.deleted = True
+        # Resolve members' roles while the group still grants them, so removal counts as a reduction.
         await self.set_members(row, set())
+        row.deleted = True
         await self.audit("scim_delete_group", "group", row.group_id)

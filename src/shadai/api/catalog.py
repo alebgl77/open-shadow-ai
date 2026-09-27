@@ -29,7 +29,7 @@ async def list_catalog(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     query = select(CatalogItemORM).where(CatalogItemORM.status == status)
     if search:
@@ -49,7 +49,7 @@ async def list_catalog(
 async def get_catalog_item(
     catalog_item_id: str,
     _user: UserORM = Depends(get_current_user),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(CatalogItemORM).where(CatalogItemORM.catalog_item_id == catalog_item_id))
     item = result.scalar_one_or_none()
@@ -63,7 +63,7 @@ async def create_catalog_item(
     body: CatalogItemCreate,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     item = CatalogItemORM(
         catalog_item_id=body.catalog_item_id,
@@ -108,7 +108,7 @@ async def update_catalog_item(
     body: CatalogItemUpdate,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(CatalogItemORM).where(CatalogItemORM.catalog_item_id == catalog_item_id))
     item = result.scalar_one_or_none()
@@ -142,7 +142,7 @@ async def delete_catalog_item(
     catalog_item_id: str,
     request: Request,
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(select(CatalogItemORM).where(CatalogItemORM.catalog_item_id == catalog_item_id))
     item = result.scalar_one_or_none()
@@ -168,7 +168,7 @@ async def delete_catalog_item(
 @router.get("/export/yaml")
 async def export_catalog(
     admin: UserORM = Depends(require_role("admin")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     result = await session.execute(
         select(CatalogItemORM).where(CatalogItemORM.status == "active").order_by(CatalogItemORM.catalog_item_id)

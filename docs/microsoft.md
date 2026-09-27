@@ -50,6 +50,24 @@ See `catalog/local/entra-app.yaml.example`: it contains an explicitly fake UUID 
 
 The repository supplies `scripts/Install-AgentWindows.ps1`, an operator-run **local** installer. It does not create, link or edit a GPO. Build an agent wheel, approve its dependencies in an offline wheelhouse, record SHA256, and distribute Python through your normal software-management process.
 
+The scheduled task runs as SYSTEM, so the installer refuses anything a standard user could alter beforehand or afterwards:
+
+- The install directory (default `%ProgramData%\OpenShadowAI`) must not exist. It is created with a protected ACL (SYSTEM and Administrators only, owner Administrators); an existing directory is never reused. After installation every file is reset to that ACL and owner, then checked.
+- The Python installation used for the virtual environment (for example `C:\Program Files\Python313`) and the wheelhouse, including every wheel in it, must be owned by SYSTEM, Administrators or TrustedInstaller and writable only by them.
+- No parent directory of these paths may be a junction or symbolic link, or be renamable or re-permissionable by another principal.
+- The agent wheel is copied into the protected directory and its SHA256 is checked on that copy before installation.
+
+A per-user Python installation or a wheelhouse under a default `C:\` or `%ProgramData%` subfolder fails these checks, because authenticated users can write there. Prepare a protected wheelhouse first:
+
+```powershell
+$wheelhouse = Join-Path $env:ProgramData 'OpenShadowAI-wheelhouse'
+New-Item -ItemType Directory -Path $wheelhouse | Out-Null
+icacls $wheelhouse /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+icacls $wheelhouse /setowner '*S-1-5-32-544'
+# Copy the approved wheels in, then re-apply ownership to them.
+icacls $wheelhouse /setowner '*S-1-5-32-544' /T
+```
+
 1. Choose a pilot OU and security group, document collection, and approve endpoint access.
 2. Provision the API key separately using a protected management channel; do not put it in SYSVOL or a broadly readable GPO script.
 3. Review/sign the install script and its generated runner according to your PowerShell policy.
@@ -58,7 +76,7 @@ The repository supplies `scripts/Install-AgentWindows.ps1`, an operator-run **lo
 6. Define rollback: stop/unregister `OpenShadowAI-Agent`, remove its approved install directory and revoke/rotate the key if needed. Preserve evidence required by policy.
 
 ```powershell
-./scripts/Install-AgentWindows.ps1 -Python 'C:/Program Files/Python313/python.exe' -WheelPath $approvedWheel -WheelSha256 $approvedHash -Wheelhouse 'C:/Approved/wheels' -ApiKeyFile 'C:/Protected/collector-key.txt' -ServerUrl 'https://ai-inventory.example.com' -WhatIf
+./scripts/Install-AgentWindows.ps1 -Python 'C:/Program Files/Python313/python.exe' -WheelPath $approvedWheel -WheelSha256 $approvedHash -Wheelhouse $wheelhouse -ApiKeyFile 'C:/Protected/collector-key.txt' -ServerUrl 'https://ai-inventory.example.com' -WhatIf
 ```
 
 Running as SYSTEM may not reveal every user's browser profile. Inventory coverage varies by OS, permissions and collector. Package signing, restart behavior, upgrade/uninstall and rollout through GPO remain fleet acceptance tests.

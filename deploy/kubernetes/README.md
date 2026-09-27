@@ -11,6 +11,16 @@ Create the namespace, then provision Secret `open-shadow-ai-runtime` through you
 
 The deployment is one organization. Set `SHADAI_TENANT_ID` in the ConfigMap. External store credentials must be dedicated to it. Use private encrypted connectivity appropriate to your infrastructure; verify driver TLS configuration instead of assuming port numbers enable TLS.
 
+ClickHouse uses the native protocol over TLS by default here (`CLICKHOUSE_SECURE=true`, port 9440) with certificate and hostname verification. Optional settings, as environment variables or `database.clickhouse_*` keys:
+
+| Variable | Purpose |
+|---|---|
+| `CLICKHOUSE_CA_CERTS` | PEM bundle for a private CA (default: the public `certifi` bundle) |
+| `CLICKHOUSE_CERTFILE`, `CLICKHOUSE_KEYFILE` | Client certificate and key for mutual TLS |
+| `CLICKHOUSE_SERVER_HOSTNAME` | Certificate name to verify when it differs from `CLICKHOUSE_HOST` |
+
+Mount certificates and keys read-only from a Secret. Verification cannot be disabled. Only for a store reachable exclusively over an already-encrypted private path, set `CLICKHOUSE_SECURE=false` and `CLICKHOUSE_PORT=9000`, and change the `external-stores` NetworkPolicy port accordingly. For PostgreSQL and Redis, put TLS parameters in `DATABASE_URL` and a `rediss://` `REDIS_URL`.
+
 ## Network and migrations
 
 Replace TEST-NET CIDR `192.0.2.0/24` in `external-stores` with the actual database CIDRs and ports. It intentionally grants no usable production route by default. Adapt the DNS and ingress-controller namespace selectors to your cluster. These policies apply only if the CNI enforces them.

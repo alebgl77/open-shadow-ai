@@ -221,3 +221,74 @@ def test_canonical_ingestion_authenticates_missing_empty_wrong_and_valid_keys(mo
     assert [call.args[0] for call in pipe.xadd.call_args_list] == ["events:dns", "events:directory"]
     assert client.get("/api/v1/agent/config").status_code == 401
     assert client.get("/api/v1/agent/config", headers=headers).status_code == 200
+
+
+def test_every_route_commits_before_responding():
+    """A request-scoped session commits after the response is sent: failures would look like success."""
+    from fastapi import APIRouter
+    from fastapi.routing import APIRoute
+
+    from shadai import main
+    from shadai.database import get_postgres_session
+
+    def scopes(dependant):
+        for dependency in dependant.dependencies:
+            if dependency.call is get_postgres_session:
+                yield dependency.scope
+            yield from scopes(dependency)
+
+    checked = 0
+    for router in (value for value in vars(main).values() if isinstance(value, APIRouter)):
+        for route in router.routes:
+            if isinstance(route, APIRoute):
+                for scope in scopes(route.dependant):
+                    assert scope == "function", route.path
+                    checked += 1
+    assert checked > 20
+
+
+async def test_failed_deactivation_commit_is_reported_as_failure(identity_sessions):
+    import httpx
+    from sqlalchemy.exc import OperationalError
+
+    from shadai.database import get_postgres_session
+    from shadai.main import app
+    from shadai.models.user import UserORM
+
+    async with identity_sessions.begin() as session:
+        admin = UserORM(username="admin", password_hash="!", role="admin")
+        target = UserORM(username="departing", password_hash="!", role="analyst")
+        session.add_all([admin, target])
+    commits = {"fail": True}
+
+    async def database():
+        async with identity_sessions() as session:
+            if commits["fail"]:
+
+                async def unavailable():
+                    raise OperationalError("COMMIT", {}, Exception("connection lost"))
+
+                session.commit = unavailable
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_postgres_session] = database
+    app.dependency_overrides[get_current_user] = lambda: admin
+    try:
+        transport = httpx.ASGITransport(app, raise_app_exceptions=False)
+        async with httpx.AsyncClient(transport=transport, base_url="https://example.test") as client:
+            url = f"/api/v1/settings/users/{target.user_id}"
+            response = await client.put(url, json={"is_active": False})
+            assert response.status_code == 500
+            async with identity_sessions() as session:
+                assert (await session.get(UserORM, target.user_id)).is_active
+            commits["fail"] = False
+            assert (await client.put(url, json={"is_active": False})).json()["is_active"] is False
+            async with identity_sessions() as session:
+                assert not (await session.get(UserORM, target.user_id)).is_active
+    finally:
+        app.dependency_overrides.clear()

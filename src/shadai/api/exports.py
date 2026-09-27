@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shadai.api.detections import filter_detections, order_detections
 from shadai.database import get_postgres_session
 from shadai.models.detection import DetectionORM, DetectionRead
 from shadai.models.user import UserORM
@@ -32,15 +33,25 @@ async def export_detections(
     format: str = Query("csv", pattern="^(csv|json)$"),
     classification: str | None = None,
     risk_level: str | None = None,
+    confidence_level: str | None = None,
+    entity_type: str | None = None,
+    analyst_status: str | None = None,
+    search: str | None = None,
+    sort_by: str = "risk_score",
+    sort_order: str = "desc",
     request: Request = None,
     current_user: UserORM = Depends(require_role("analyst")),
-    session: AsyncSession = Depends(get_postgres_session),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
-    query = select(DetectionORM).where(DetectionORM.shadow_ai_status.notin_(["archived"]))
-    if classification:
-        query = query.where(DetectionORM.classification.in_(classification.split(",")))
-
-    query = query.order_by(DetectionORM.risk_score.desc())
+    filters = {
+        "classification": classification,
+        "risk_level": risk_level,
+        "confidence_level": confidence_level,
+        "entity_type": entity_type,
+        "analyst_status": analyst_status,
+        "search": search,
+    }
+    query = order_detections(filter_detections(select(DetectionORM), **filters), sort_by, sort_order)
     result = await session.execute(query)
     detections = [DetectionRead.model_validate(d) for d in result.scalars().all()]
 
@@ -49,7 +60,11 @@ async def export_detections(
         current_user.user_id,
         current_user.username,
         "export_detections",
-        details={"format": format, "count": len(detections)},
+        details={
+            "format": format,
+            "count": len(detections),
+            "filters": {key: value for key, value in filters.items() if value},
+        },
         ip_address=request.client.host if request.client else None,
     )
 

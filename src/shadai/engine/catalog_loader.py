@@ -16,23 +16,43 @@ logger = structlog.get_logger()
 
 
 class CatalogIndex:
-    """In-memory index for fast event-to-catalog matching."""
+    """In-memory index for fast event-to-catalog matching.
+
+    Several items may share a signature (a vendor's API and chat products on one host,
+    a common SDK user agent). Exact keys keep every owner and patterns keep their
+    specificity, so attribution never depends on the order items were loaded.
+    """
 
     def __init__(self):
-        self.domain_index: dict[str, str] = {}  # domain -> catalog_item_id
-        self.url_pattern_index: list[tuple[re.Pattern, str]] = []
-        self.process_index: dict[str, str] = {}  # process name (lower) -> catalog_item_id
-        self.extension_index: dict[str, str] = {}
-        self.oauth_app_index: dict[str, str] = {}
-        self.port_index: dict[int, str] = {}
-        self.container_pattern_index: list[tuple[re.Pattern, str]] = []
-        self.user_agent_pattern_index: list[tuple[re.Pattern, str]] = []
+        self.domain_index: dict[str, tuple[str, ...]] = {}  # domain -> catalog_item_ids
+        self.url_pattern_index: list[tuple[int, re.Pattern, str]] = []  # (specificity, regex, item)
+        self.process_index: dict[str, tuple[str, ...]] = {}  # process name (lower, no .exe)
+        self.extension_index: dict[str, tuple[str, ...]] = {}
+        self.oauth_app_index: dict[str, tuple[str, ...]] = {}
+        self.port_index: dict[int, tuple[str, ...]] = {}
+        self.container_pattern_index: list[tuple[int, re.Pattern, str]] = []
+        self.user_agent_pattern_index: list[tuple[int, re.Pattern, str]] = []
         self.items: dict[str, CatalogItemRead] = {}
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern:
     """Convert a glob pattern (fnmatch) to a compiled regex."""
     return re.compile(fnmatch.translate(pattern), re.IGNORECASE)
+
+
+def _add_owner(index: dict, key, item_id: str) -> None:
+    owners = index.get(key, ())
+    if item_id not in owners:
+        index[key] = tuple(sorted((*owners, item_id)))
+
+
+def _add_pattern(index: list, pattern: str, item_id: str) -> None:
+    try:
+        compiled = _glob_to_regex(pattern)
+    except re.error:
+        return
+    # Literal characters measure specificity: "/v1/chat/completions" outranks "/v1/*".
+    index.append((len(pattern) - sum(pattern.count(c) for c in "*?[]"), compiled, item_id))
 
 
 def load_catalog_from_yaml(builtin_path: str, local_path: str) -> list[CatalogItemRead]:
@@ -112,60 +132,44 @@ def build_catalog_index(items: list[CatalogItemRead]) -> CatalogIndex:
     """Build an in-memory index for O(1) lookups."""
     index = CatalogIndex()
 
-    for item in items:
+    for item in sorted(items, key=lambda entry: entry.catalog_item_id):
         if item.status != "active":
             continue
 
-        index.items[item.catalog_item_id] = item
-
-        # Domain index (exact, lowercased)
+        item_id = item.catalog_item_id
+        index.items[item_id] = item
         for domain in item.domains:
-            index.domain_index[domain.lower()] = item.catalog_item_id
-
-        # URL pattern index (compiled regex)
-        for pattern in item.url_patterns:
-            try:
-                index.url_pattern_index.append((_glob_to_regex(pattern), item.catalog_item_id))
-            except re.error:
-                pass
-
-        # Process index (exact, lowercased, strip .exe)
+            _add_owner(index.domain_index, domain.lower().rstrip("."), item_id)
         for proc in item.processes:
-            name = proc.lower().removesuffix(".exe")
-            index.process_index[name] = item.catalog_item_id
-
-        # Extension index (exact)
+            _add_owner(index.process_index, proc.lower().removesuffix(".exe"), item_id)
         for ext_id in item.extension_ids:
-            index.extension_index[ext_id] = item.catalog_item_id
-
-        # OAuth app index (exact)
+            _add_owner(index.extension_index, ext_id, item_id)
         for oauth_id in item.oauth_app_ids:
-            index.oauth_app_index[oauth_id] = item.catalog_item_id
-
-        # Port index (exact)
+            _add_owner(index.oauth_app_index, oauth_id, item_id)
         for port in item.local_ports:
-            index.port_index[port] = item.catalog_item_id
-
-        # Container pattern index (compiled regex)
+            _add_owner(index.port_index, port, item_id)
+        for pattern in item.url_patterns:
+            _add_pattern(index.url_pattern_index, pattern, item_id)
         for pattern in item.container_patterns:
-            try:
-                index.container_pattern_index.append((_glob_to_regex(pattern), item.catalog_item_id))
-            except re.error:
-                pass
-
-        # User-Agent pattern index (compiled regex)
+            _add_pattern(index.container_pattern_index, pattern, item_id)
         for pattern in item.user_agent_patterns:
-            try:
-                index.user_agent_pattern_index.append((_glob_to_regex(pattern), item.catalog_item_id))
-            except re.error:
-                pass
+            _add_pattern(index.user_agent_pattern_index, pattern, item_id)
 
+    for patterns in (index.url_pattern_index, index.container_pattern_index, index.user_agent_pattern_index):
+        patterns.sort(key=lambda entry: (-entry[0], entry[2], entry[1].pattern))
+
+    shared = sum(
+        len(owners) > 1
+        for table in (index.domain_index, index.process_index, index.extension_index, index.port_index)
+        for owners in table.values()
+    )
     logger.info(
         "catalog_index_built",
         domains=len(index.domain_index),
         processes=len(index.process_index),
         extensions=len(index.extension_index),
         ports=len(index.port_index),
+        shared_signatures=shared,
     )
     return index
 

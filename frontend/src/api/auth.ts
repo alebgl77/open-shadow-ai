@@ -60,7 +60,10 @@ export function exchangeSsoSession(): Promise<LoginResponse> {
   return pendingSsoExchange
 }
 
-export async function logout(): Promise<void> { await client.post('/auth/logout') }
+// The token is passed explicitly: local sign-out clears the store before this request is sent.
+export async function logout(token: string): Promise<void> {
+  await client.post('/auth/logout', undefined, { headers: { Authorization: `Bearer ${token}` } })
+}
 export async function getMe(): Promise<User> {
   const { data } = await client.get<User>('/auth/me')
   return data

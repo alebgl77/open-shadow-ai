@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 
 from shadai.models.event import CanonicalEvent
 from shadai.parsers.base import BaseParser, register_parser
@@ -48,7 +48,7 @@ class BindQueryLogParser(BaseParser):
         # Parse timestamp
         try:
             timestamp = datetime.strptime(ts_str.split(".")[0], "%d-%b-%Y %H:%M:%S")
-            timestamp = timestamp.replace(tzinfo=UTC)
+            timestamp = self.localize(timestamp)
         except ValueError:
             return None
 

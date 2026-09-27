@@ -166,7 +166,7 @@ def check_resource(resource):
 
 
 @router.get("/{resource}")
-async def collection(resource: str, request: Request, session=Depends(get_postgres_session)):
+async def collection(resource: str, request: Request, session=Depends(get_postgres_session, scope="function")):
     check_resource(resource)
     try:
         start, count = int(request.query_params.get("startIndex", "1")), int(request.query_params.get("count", "100"))
@@ -178,7 +178,7 @@ async def collection(resource: str, request: Request, session=Depends(get_postgr
 
 
 @router.post("/{resource}")
-async def create(resource: str, request: Request, session=Depends(get_postgres_session)):
+async def create(resource: str, request: Request, session=Depends(get_postgres_session, scope="function")):
     check_resource(resource)
     service, payload = SCIMService(session), await body(request)
     row = await (service.create_user(payload) if resource == "Users" else service.create_group(payload))
@@ -188,7 +188,7 @@ async def create(resource: str, request: Request, session=Depends(get_postgres_s
 
 
 @router.get("/{resource}/{resource_id}")
-async def read(resource: str, resource_id: str, session=Depends(get_postgres_session)):
+async def read(resource: str, resource_id: str, session=Depends(get_postgres_session, scope="function")):
     if resource == "Schemas":
         match = next((item for item in attributes() if item["id"] == resource_id), None)
         if match:
@@ -203,7 +203,9 @@ async def read(resource: str, resource_id: str, session=Depends(get_postgres_ses
 
 @router.put("/{resource}/{resource_id}")
 @router.patch("/{resource}/{resource_id}")
-async def update(resource: str, resource_id: str, request: Request, session=Depends(get_postgres_session)):
+async def update(
+    resource: str, resource_id: str, request: Request, session=Depends(get_postgres_session, scope="function")
+):
     check_resource(resource)
     service, payload, patch = SCIMService(session), await body(request), request.method == "PATCH"
     row = await (
@@ -220,7 +222,7 @@ async def update(resource: str, resource_id: str, request: Request, session=Depe
 
 
 @router.delete("/{resource}/{resource_id}")
-async def remove(resource: str, resource_id: str, session=Depends(get_postgres_session)):
+async def remove(resource: str, resource_id: str, session=Depends(get_postgres_session, scope="function")):
     check_resource(resource)
     service = SCIMService(session)
     await (service.delete_user(resource_id) if resource == "Users" else service.delete_group(resource_id))
