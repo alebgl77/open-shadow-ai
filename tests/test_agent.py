@@ -49,3 +49,19 @@ def test_client_errors_are_not_retried_and_server_errors_are(monkeypatch):
     assert agent.send_batch("https://x", {}, {}, True) is None and calls == [503, 503, 503]
     monkeypatch.setattr(agent.requests, "post", respond(200, {"received": 12}))
     assert agent.send_batch("https://x", {}, {}, True) == 12
+
+
+def test_one_nonconforming_record_cannot_sink_its_batch():
+    records = [
+        {"pid": 1, "name": None, "path": "C:/" + "x" * 5000, "username": None, "listening_port": 11434},
+        {"pid": 2, "name": "ollama", "parent": 42, "listening_port": "8080"},
+        {"pid": 3, "name": "svc", "listening_port": 70000},
+        {"pid": 4, "name": "flag", "listening_port": True},
+    ]
+    extensions = [{"id": "abc", "name": {"unexpected": "object"}, "browser": "chrome"}]
+    [batch] = agent.split_batches(HEADER, {"processes": records, "extensions": extensions})
+    TelemetryBatch.model_validate(batch)
+    assert [p["pid"] for p in batch["processes"]] == [1, 2, 3, 4]
+    assert batch["processes"][0]["name"] == "" and len(batch["processes"][0]["path"]) == agent.MAX_TEXT_LENGTH
+    assert batch["processes"][0]["listening_port"] == 11434 and batch["processes"][1]["parent"] == "42"
+    assert all("listening_port" not in p for p in batch["processes"][1:])

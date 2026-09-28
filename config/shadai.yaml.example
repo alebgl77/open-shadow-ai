@@ -10,6 +10,10 @@ database:
   clickhouse_host: clickhouse
   clickhouse_port: 9000
   clickhouse_database: shadai
+  # External ClickHouse over native TLS (verification is always enforced):
+  # clickhouse_port: 9440
+  # clickhouse_secure: true
+  # clickhouse_ca_certs: /run/secrets/clickhouse-ca.pem
 retention:
   events_days: 90
   detections_days: 365

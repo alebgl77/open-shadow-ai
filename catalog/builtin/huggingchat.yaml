@@ -8,8 +8,7 @@ rule_tags:
 - chat
 - open_source
 signatures:
-  domains:
-  - huggingface.co
+  domains: []
   url_patterns:
   - /chat*
   processes: []

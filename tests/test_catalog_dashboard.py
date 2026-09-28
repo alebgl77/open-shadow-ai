@@ -226,3 +226,27 @@ async def test_export_applies_every_discovery_filter():
         await export_detections(
             format="csv", risk_level="severe", request=request, current_user=user, session=AsyncMock()
         )
+
+
+def test_builtin_exact_signatures_have_a_single_owner():
+    """Evidence cannot choose between two items claiming the same exact identifier."""
+    from collections import defaultdict
+
+    owners = defaultdict(set)
+    for item in load_catalog_from_yaml("catalog/builtin", "catalog/no-local-overrides"):
+        for field in ("domains", "processes", "extension_ids", "oauth_app_ids", "local_ports", "container_patterns"):
+            for value in getattr(item, field):
+                key = str(value).lower().removesuffix(".exe").rstrip(".")
+                owners[field, key].add(item.catalog_item_id)
+    assert {key: sorted(ids) for key, ids in owners.items() if len(ids) > 1} == {}
+    matcher = CatalogMatcher(
+        build_catalog_index(load_catalog_from_yaml("catalog/builtin", "catalog/no-local-overrides"))
+    )
+    for domain, expected in {
+        "api.cohere.com": "cohere-api",
+        "generativelanguage.googleapis.com": "google-ai-api",
+        "huggingface.co": "huggingface",
+        "api.together.xyz": "together-api",
+        "gemini.google.com": "gemini",
+    }.items():
+        assert matcher.match_event(CanonicalEvent(source_type="proxy", domain=domain)).catalog_item_id == expected
