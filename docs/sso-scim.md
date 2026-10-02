@@ -20,7 +20,7 @@ sequenceDiagram
     App->>App: Verify token and active provisioned identity
     App-->>Browser: Fixed /auth/callback, short-lived HttpOnly cookie
     Browser->>App: Same-origin session exchange with CSRF header
-    App-->>Browser: Console access token held in memory
+    App-->>Browser: Console session as an HttpOnly SameSite=Strict cookie
     Provisioner->>App: Disable account or change managed access
     App->>App: Revoke affected sessions on receipt
 ```
@@ -38,7 +38,7 @@ Use a single HTTPS origin, such as `https://ai-inventory.example.com`, serving t
 | Same-origin session exchange | `POST /api/v1/auth/sso/session` |
 | SCIM tenant URL | `/api/v1/scim/v2` |
 
-Do not register the frontend completion page as the OIDC redirect URI. The session exchange requires `Origin` to equal the configured public origin and the header `X-SSO-CSRF: 1`. It consumes a one-use cookie; access tokens are not put in callback URLs or persistent browser storage.
+Do not register the frontend completion page as the OIDC redirect URI. The session exchange requires `Origin` to equal the configured public origin and the header `X-SSO-CSRF: 1`. It consumes a one-use cookie and returns the console session as an HttpOnly, SameSite=Strict cookie; access tokens are never put in callback URLs or in storage that scripts can read.
 
 ## Microsoft Entra ID: sign-in
 
@@ -139,7 +139,7 @@ The reference protocols are [SCIM core schema, RFC 7643](https://www.rfc-editor.
 
 1. Confirm the local recovery administrator still signs in and `/api/v1/auth/providers` exposes only the intended SSO label and login route.
 2. Complete SCIM Test Connection and provision a scoped user with matching `externalId`. Verify that an unprovisioned identity cannot sign in and an email collision never links a local account.
-3. Sign in through the registered HTTPS callback. Check that the session exchange uses the exact origin and that no tokens enter URLs or persistent browser storage. Test denied consent and an expired/replayed login.
+3. Sign in through the registered HTTPS callback. Check that the session exchange uses the exact origin, that no tokens enter URLs or script-readable storage, and that the session cookie is `__Host-`, Secure, HttpOnly and SameSite=Strict. Test denied consent and an expired/replayed login.
 4. Add/remove the pilot user in each mapped group and verify effective console permissions. Renaming a group must not change its role mapping.
 5. While the user has an active console session, disable the account upstream. Record when SCIM arrives, verify the existing token is then rejected, and verify that reactivation does not revive that old token. Repeat with deprovisioning and removal from a role-granting group. Verify that a profile change or an unmapped group change does not end the session.
 6. Check every proxy, ingress and tracing layer for authorization codes, tokens, cookies and secrets. Keep only sanitized diagnostic events. Test local recovery during an IdP outage.

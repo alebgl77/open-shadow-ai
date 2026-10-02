@@ -23,7 +23,7 @@ Document exact observed fields and permissions. Include positive, negative, malf
 
 ## Catalog changes
 
-Edit `catalog/builtin/*.yaml` directly; `scripts/generate_catalog.py` is a historical bootstrap and would overwrite reviewed entries. An exact signature (domain, process, extension ID, OAuth application ID, local port, container pattern) must belong to a single entry, because the evidence cannot choose between two owners; CI rejects duplicates. Put an API host in the API or platform entry, not in the consumer application that may call it. The ingestion boundary discards URL paths and user agents, so URL and user-agent patterns do not currently contribute to production matching.
+Edit `catalog/builtin/*.yaml` directly; `scripts/generate_catalog.py` is a historical bootstrap and would overwrite reviewed entries. An exact signature (domain, process, extension ID, OAuth application ID, local port, container pattern) must belong to a single entry, because the evidence cannot choose between two owners; CI rejects duplicates. Put an API host in the API or platform entry, not in the consumer application that may call it. URL patterns apply only on a host: `/path` on the entry's own domains, `host/path` on that host (use the latter for a product that shares its vendor's domain, such as `huggingface.co/chat`). User-agent patterns corroborate the entry's domains; an entry without domains, such as a CLI, is identified by its user agent on any host. Paths and user agents are evaluated at ingestion and then discarded, so a pattern must identify the product from the path or client name alone.
 
 ## Pull requests
 

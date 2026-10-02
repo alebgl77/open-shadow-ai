@@ -133,15 +133,25 @@ def test_shared_signatures_resolve_independently_of_catalog_order():
     cases = [
         (CanonicalEvent(domain="shared.example"), "a-chat"),
         (CanonicalEvent(source_type="proxy", domain="eu.shared.example"), "a-chat"),
-        (CanonicalEvent(source_type="proxy", url_path="/v1/chat/completions"), "a-chat"),
-        (CanonicalEvent(source_type="proxy", url_path="/v1/models"), "b-api"),
-        # Equal confidence: the item corroborated by two signal types wins over the lower ID.
-        (CanonicalEvent(source_type="proxy", user_agent="vendor-sdk/1.0", url_path="/v1/models"), "b-api"),
+        (CanonicalEvent(source_type="proxy", url_host="shared.example", url_path="/v1/chat/completions"), "a-chat"),
+        (CanonicalEvent(source_type="proxy", url_host="api.shared.example", url_path="/v1/models"), "b-api"),
+        # Equal confidence: the item corroborated by more signal types wins over the lower ID.
+        (
+            CanonicalEvent(
+                source_type="proxy", url_host="shared.example", user_agent="vendor-sdk/1.0", url_path="/v1/models"
+            ),
+            "b-api",
+        ),
         (CanonicalEvent(source_type="proxy", domain="api.shared.example"), "b-api"),
+        # A generic path or SDK name on another host is not evidence for these entries.
+        (CanonicalEvent(source_type="proxy", url_host="llm.unrelated.example", url_path="/v1/chat/completions"), None),
+        (CanonicalEvent(source_type="proxy", url_host="llm.unrelated.example", user_agent="vendor-sdk/1.0"), None),
+        (CanonicalEvent(source_type="proxy", url_path="/v1/chat/completions"), None),
     ]
     for event, expected in cases:
         assert forward.match_event(event) == reverse.match_event(event)
-        assert forward.match_event(event).catalog_item_id == expected
+        match = forward.match_event(event)
+        assert (match.catalog_item_id if match else None) == expected
 
 
 def test_real_catalog_attribution_is_stable_under_reordering():
@@ -197,7 +207,7 @@ async def test_export_applies_every_discovery_filter():
     session.execute.return_value = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
     user = SimpleNamespace(user_id=None, username="analyst")
     request = SimpleNamespace(client=None)
-    await export_detections(
+    exported = await export_detections(
         format="json",
         classification="unsanctioned",
         risk_level="high,critical",
@@ -222,6 +232,7 @@ async def test_export_applies_every_discovery_filter():
     ):
         assert fragment in sql
     assert session.audit.details["filters"]["risk_level"] == "high,critical"
+    assert exported.headers["cache-control"] == "no-store" and "attachment" in exported.headers["content-disposition"]
     with pytest.raises(HTTPException):
         await export_detections(
             format="csv", risk_level="severe", request=request, current_user=user, session=AsyncMock()
@@ -232,12 +243,22 @@ def test_builtin_exact_signatures_have_a_single_owner():
     """Evidence cannot choose between two items claiming the same exact identifier."""
     from collections import defaultdict
 
+    from shadai.engine.catalog_loader import url_pattern_scope
+
     owners = defaultdict(set)
     for item in load_catalog_from_yaml("catalog/builtin", "catalog/no-local-overrides"):
         for field in ("domains", "processes", "extension_ids", "oauth_app_ids", "local_ports", "container_patterns"):
             for value in getattr(item, field):
                 key = str(value).lower().removesuffix(".exe").rstrip(".")
                 owners[field, key].add(item.catalog_item_id)
+        domains = tuple(sorted({domain.lower().rstrip(".") for domain in item.domains}))
+        for pattern in item.url_patterns:
+            glob, hosts = url_pattern_scope(pattern, domains)
+            for host in hosts:
+                owners["url_patterns", host, glob.lower()].add(item.catalog_item_id)
+        for pattern in item.user_agent_patterns:
+            for host in domains or ("any host",):
+                owners["user_agent_patterns", host, pattern.lower()].add(item.catalog_item_id)
     assert {key: sorted(ids) for key, ids in owners.items() if len(ids) > 1} == {}
     matcher = CatalogMatcher(
         build_catalog_index(load_catalog_from_yaml("catalog/builtin", "catalog/no-local-overrides"))
@@ -250,3 +271,33 @@ def test_builtin_exact_signatures_have_a_single_owner():
         "gemini.google.com": "gemini",
     }.items():
         assert matcher.match_event(CanonicalEvent(source_type="proxy", domain=domain)).catalog_item_id == expected
+
+
+def test_paths_and_user_agents_identify_products_only_on_their_hosts():
+    matcher = CatalogMatcher(
+        build_catalog_index(load_catalog_from_yaml("catalog/builtin", "catalog/no-local-overrides"))
+    )
+
+    def match(**fields):
+        result = matcher.match_event(CanonicalEvent(source_type="proxy", **fields))
+        return result and (result.catalog_item_id, result.matched_field, result.matched_value)
+
+    # HuggingChat shares huggingface.co with the hub; only its path tells them apart.
+    assert match(url_host="huggingface.co", url_path="/chat/conversation/a1b2?key=secret") == (
+        "huggingchat",
+        "url_pattern",
+        "huggingface.co/chat/*",
+    )
+    assert match(url_host="huggingface.co", url_path="/chat")[0] == "huggingchat"
+    assert match(url_host="huggingface.co", url_path="/models?next=/chat")[0] == "huggingface"
+    assert match(url_host="example.org", url_path="/chat/support") is None
+    # An OpenAI-compatible path on a private gateway is not an OpenAI or Together call.
+    assert match(url_host="llm.corp.example", url_path="/v1/chat/completions") is None
+    assert match(url_host="api.together.xyz", url_path="/v1/chat/completions")[0] == "together-api"
+    # SDK user agents corroborate their vendor's hosts; a client-identified tool needs none.
+    assert match(url_host="api.groq.com", user_agent="openai-python/1.40")[0] == "groq"
+    assert match(url_host="gateway.corp.example", user_agent="claude-code/1.0.3") == (
+        "claude-code",
+        "user_agent",
+        "claude-code/*",
+    )

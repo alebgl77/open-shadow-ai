@@ -22,6 +22,8 @@ Protect the SCIM bearer token as an administrative credential: its holder can pr
 
 Deprovisioning, deactivation and role reductions invalidate affected sessions when received by the application; profile synchronization does not. Directory synchronization delays remain outside its control. MFA and Conditional Access are enforced by the identity provider; the application does not independently enforce an MFA claim. Signing out of the console does not end the identity-provider session.
 
+Console sessions use an HttpOnly, SameSite=Strict cookie that scripts cannot read; it is `__Host-` prefixed and Secure on every host except loopback (`SESSION_COOKIE_SECURE` overrides the choice). Cookie-authenticated writes must carry the session's `X-CSRF-Token`; API clients keep using bearer tokens without cookies. Signing out revokes the token on the server and deletes the cookie.
+
 Never log authorization codes, bearer tokens, cookies or client secrets. The bundled nginx omits query strings/referrers, suppresses callback error logs, and the API image disables raw access logs. Apply equivalent controls at ingress, load balancers and tracing systems. Keep TLS verification enabled. See the [identity operations guide](docs/sso-scim.md) for configuration, rotation and validation boundaries.
 
 ## Supported versions

@@ -21,6 +21,7 @@ x-runtime: &runtime
     AGENT_API_KEY_FILE: /run/secrets/agent_api_key
     SHADAI_TENANT_ID: ${SHADAI_TENANT_ID:-default}
     CORS_ORIGINS: ${CORS_ORIGINS:-[]}
+    SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-auto}
   secrets: &app-secrets
     - pg_password
     - redis_password

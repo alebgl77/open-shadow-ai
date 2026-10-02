@@ -1,6 +1,7 @@
 import { AxiosError, AxiosHeaders, type AxiosAdapter } from 'axios'
-import { DETECTION_SORT_COLUMNS, type Detection } from './detections'
+import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, type Detection } from './detections'
 import type { Governance, CatalogItem } from '@/types'
+import { csvCell } from '@/lib/export'
 
 const NOW = Date.now()
 const ago = (hours: number) => new Date(NOW - hours * 3600000).toISOString()
@@ -38,6 +39,15 @@ const audit: Array<Record<string, unknown>> = []
 export function resetDemo() { detections = seedDetections(); policies = policies.slice(0, 1); audit.length = 0 }
 const catalog: CatalogItem[] = seeds.map(([name, type, , , , , , source, sample], i) => ({ catalog_item_id: `catalog-${i + 1}`, canonical_name: name, aliases: [], category: type, vendor: name, description: 'Synthetic demo catalog entry.', domains: ['dns', 'proxy'].includes(source) ? [sample] : [], processes: source === 'endpoint' ? [name.toLowerCase()] : [], url_patterns: [], extension_ids: [], oauth_app_ids: [], local_ports: [], local_paths: [], container_patterns: [], user_agent_patterns: [], rule_tags: [], default_trust_level: 'unknown', status: 'active', source_of_truth: 'synthetic demo', local_override: false, created_at: ago(72), updated_at: ago(2) }))
 
+function matchingDetections(params: URLSearchParams, defaultSort: keyof Detection): Detection[] {
+  let items = detections.filter(d => ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status'].every(key => !params.get(key) || params.get(key)!.split(',').includes(String(d[key as keyof Detection]))))
+  if (params.get('search')) items = items.filter(d => d.entity_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
+  const sort = (params.get('sort_by') || defaultSort) as keyof Detection
+  if (!(DETECTION_SORT_COLUMNS as readonly string[]).includes(sort)) throw new Error('Invalid sort')
+  const direction = params.get('sort_order') === 'asc' ? 1 : -1
+  return [...items].sort((a, b) => (typeof a[sort] === 'number' ? Number(a[sort]) - Number(b[sort]) : String(a[sort]).localeCompare(String(b[sort]))) * direction)
+}
+
 export function demoRequest(method: string, input: string, body: Record<string, unknown> = {}): unknown {
   const url = new URL(input, 'https://demo.invalid')
   const path = url.pathname
@@ -48,14 +58,16 @@ export function demoRequest(method: string, input: string, body: Record<string, 
   if (path === '/dashboard/source-health') return ['proxy', 'dns', 'endpoint', 'browser', 'oauth', 'instrumented', 'directory'].map((source, i) => ({ source_type: source, status: i === 6 ? 'inactive' : i === 3 ? 'warning' : 'active', last_event: i === 6 ? null : ago(i === 3 ? 8 : .08), events_per_minute: i === 6 ? 0 : [3.2, 1.8, .5, 0, .2, .4][i], events_1h: i === 6 ? 0 : [192, 108, 30, 0, 12, 24][i], window_hours: 1 }))
   if (path === '/dashboard/evidence') return { window_days: 30, window_start: ago(720), window_end: ago(0), total_events: 1777, by_category: [{ category: 'network', events: 1518 }, { category: 'endpoint', events: 89 }, { category: 'oauth', events: 42 }, { category: 'instrumented', events: 128 }], by_source: ['proxy', 'dns', 'endpoint', 'browser', 'oauth', 'instrumented'].map(source => ({ source_type: source, evidence_type: source, events: detections.filter(d => d.source_types.includes(source)).reduce((sum, d) => sum + d.total_events_count, 0) })), models: [{ provider: 'openai', model: 'gpt-4.1-mini', model_provenance: 'instrumented', events: 128 }], measurement: { model_known_events: 128, tokens_reported_events: 128, cost_reported_events: 0, input_tokens: 341200, output_tokens: 98400, cost_usd: null }, unique_users: 31, unique_devices: 27 }
   if (path === '/detections' && method === 'get') {
-    let items = detections.filter(d => ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status'].every(key => !params.get(key) || params.get(key)!.split(',').includes(String(d[key as keyof Detection]))))
-    if (params.get('search')) items = items.filter(d => d.entity_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
-    const sort = (params.get('sort_by') || 'last_seen_at') as keyof Detection
-    if (!(DETECTION_SORT_COLUMNS as readonly string[]).includes(sort)) throw new Error('Invalid sort')
-    const direction = params.get('sort_order') === 'asc' ? 1 : -1
-    items = [...items].sort((a, b) => (typeof a[sort] === 'number' ? Number(a[sort]) - Number(b[sort]) : String(a[sort]).localeCompare(String(b[sort]))) * direction)
+    const items = matchingDetections(params, 'last_seen_at')
     const page = Math.max(1, Number(params.get('page') || 1)); const size = Math.max(10, Math.min(100, Number(params.get('page_size') || 25)))
     return { items: items.slice((page - 1) * size, page * size), total: items.length, page, page_size: size }
+  }
+  if (path === '/exports/detections' && method === 'post') {
+    const items = matchingDetections(params, 'risk_score')
+    const filters = Object.fromEntries([...params].filter(([key]) => key !== 'format'))
+    audit.unshift({ audit_id: String(audit.length + 1), timestamp: new Date().toISOString(), username: 'Demo reviewer', action: 'export_detections', resource_type: null, resource_id: null, ip_address: null, details: { format: 'csv', count: items.length, filters } })
+    const rows = [['entity_name', 'entity_type', 'classification', 'risk_score', 'impacted_users', 'last_seen'], ...items.map(d => [d.entity_name, d.entity_type, d.classification, d.risk_score, d.impacted_users_count, d.last_seen_at])]
+    return `# WARNING: Synthetic demo export. ${ANTI_HR_NOTICE}\n` + rows.map(row => row.map(csvCell).join(',')).join('\r\n')
   }
   if (path.startsWith('/detections/')) {
     const id = path.split('/')[2]; const found = detections.find(d => d.detection_id === id)

@@ -22,6 +22,8 @@ Many devices log their local wall clock without an offset. Set `timezone` on the
 
 Events outside that window are dropped individually and counted in `shadai_events_rejected_total{source_type}`; neighbouring lines and the TCP connection are unaffected. A rising counter usually means a zone or clock mismatch on the source.
 
+URL paths and user agents never leave the ingestion boundary. Syslog collectors and `POST /api/v1/ingest/events` compare them in memory with the active catalog (paths without their query string or fragment), keep only the matched catalog entry and signal type, and then discard them. URL patterns count only on the product's hosts, so a generic path such as `/v1/chat/completions` on an internal gateway is not attributed to a public service. This is what distinguishes HuggingChat from other Hugging Face traffic. The collector reads the catalog from PostgreSQL at the catalog reload interval; while the database is unavailable, events are still ingested and matched on their retained fields. Set `privacy.match_transient_signals: false` to turn the comparison off.
+
 ## Generic inventory ingestion
 
 `POST /api/v1/ingest/events` takes `X-API-Key` using the deployment's `AGENT_API_KEY`. The body contains one to 500 events. Event timestamps must have a timezone; event IDs are UUIDs and must be reused for retries. Unknown fields are rejected.

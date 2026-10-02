@@ -18,7 +18,7 @@ export default function Login() {
   if (auth.isAuthenticated) return <Navigate to="/dashboard" replace />
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setError(''); setLoading(true)
-    try { const res = await apiLogin(username, password); auth.login(res.access_token, res.user); navigate('/dashboard') }
+    try { const res = await apiLogin(username, password); auth.login(res.csrf_token, res.user); navigate('/dashboard') }
     catch (error) { setError(axios.isAxiosError(error) && error.response?.status === 401 ? 'The username or password is incorrect.' : 'Unable to reach your workspace. Check the service connection and try again.') }
     finally { setLoading(false) }
   }

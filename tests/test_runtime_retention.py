@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 from starlette.requests import Request
+from starlette.responses import Response
 
 from shadai.api.ingestion import prepare_event
 from shadai.config import DatabaseSettings, RetentionSettings
@@ -84,11 +85,20 @@ async def test_logout_revokes_exact_token_until_expiry(monkeypatch):
     monkeypatch.setattr("shadai.api.auth.get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr("shadai.api.auth.log_audit", AsyncMock())
     request = Request(
-        {"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())], "client": ("127.0.0.1", 123)}
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/logout",
+            "headers": [(b"authorization", f"Bearer {token}".encode()), (b"host", b"console.example.test")],
+            "client": ("127.0.0.1", 123),
+        }
     )
-    await logout(request, user, AsyncMock())
+    response = Response()
+    await logout(request, response, token, user, AsyncMock())
     assert redis.set.call_args.args == (f"revoked:{decode_access_token(token).jti}", "1")
     assert 0 < redis.set.call_args.kwargs["ex"] <= 24 * 3600
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith('__Host-shadai-session=""') and "Max-Age=0" in cookie and "Secure" in cookie
 
 
 def test_clickhouse_tls_is_verified_and_configurable(monkeypatch):

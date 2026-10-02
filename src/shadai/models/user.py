@@ -88,8 +88,11 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+    """Bearer clients receive the token; browser sessions get an HttpOnly cookie and a CSRF token."""
+
+    access_token: str | None = None
+    token_type: Literal["bearer", "cookie"] = "bearer"
+    csrf_token: str | None = None
     user: UserRead
 
 

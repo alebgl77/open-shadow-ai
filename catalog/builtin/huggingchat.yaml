@@ -10,7 +10,8 @@ rule_tags:
 signatures:
   domains: []
   url_patterns:
-  - /chat*
+  - huggingface.co/chat
+  - huggingface.co/chat/*
   processes: []
   extension_ids: []
   oauth_app_ids: []

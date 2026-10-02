@@ -28,3 +28,5 @@ catalog:
 privacy:
   strip_query_params: true
   no_url_path_retention: true
+  # Match URL paths and user agents in memory at ingestion; only the catalog match is kept.
+  match_transient_signals: true
