@@ -70,3 +70,17 @@ export const updateDetection = (id: string, body: { classification?: string; ana
 
 export const getDetectionTimeline = (id: string) =>
   client.get<Array<{ type: string; timestamp: string; description: string }>>(`/detections/${id}/timeline`).then(r => r.data)
+
+export const ANTI_HR_NOTICE = 'Open Shadow AI is an IT governance tool. This data must not be used for individual employee surveillance, disciplinary action, performance evaluation or behavioural profiling.'
+const EXPORT_FILTERS = ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status', 'search', 'sort_by', 'sort_order'] as const
+
+/** Every discovery matching the filters, exported and audited by the server (analyst role). */
+export async function exportDetections(filters: DetectionFilter): Promise<{ blob: Blob; filename: string }> {
+  const params = new URLSearchParams({ format: 'csv' })
+  EXPORT_FILTERS.forEach(key => { const value = filters[key]; if (value) params.set(key, String(value)) })
+  const response = await client.post<Blob | string>(`/exports/detections?${params}`, undefined, { responseType: 'blob' })
+  const disposition = String(response.headers?.['content-disposition'] ?? '')
+  const suggested = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? 'open-shadow-ai-discoveries.csv'
+  const blob = response.data instanceof Blob ? response.data : new Blob([String(response.data)], { type: 'text/csv;charset=utf-8;' })
+  return { blob, filename: suggested.replace(/[^\w.-]/g, '_') }
+}

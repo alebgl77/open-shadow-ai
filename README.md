@@ -93,7 +93,7 @@ The Python package and environment variable prefix remain `shadai` for compatibi
 
 ## Evidence, privacy and limits
 
-The default configuration strips query parameters and avoids URL-path retention. Treat usernames, device identifiers and directory exports as personal or organizational data. Set retention and access according to your deployment.
+The default configuration never stores URL paths, query strings or user agents. At ingestion, paths (without their query string) and user agents are compared in memory with catalog patterns scoped to each product's hosts; only the matched catalog entry is kept. Set `privacy.match_transient_signals: false` to skip that comparison. Treat usernames, device identifiers and directory exports as personal or organizational data. Set retention and access according to your deployment.
 
 DNS resolution indicates contact with a domain, not a completed AI interaction. An installed extension or directory application indicates presence or permission, not usage. Model identifiers are declared evidence; token totals and costs require instrumentation. Cost calculations remain estimates unless reconciled against provider billing.
 

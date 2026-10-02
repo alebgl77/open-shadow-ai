@@ -11,7 +11,6 @@ signatures:
   domains:
   - coral.cohere.com
   - dashboard.cohere.com
-  - api.cohere.com
   url_patterns:
   - /v1/chat
   - /v2/chat

@@ -1,4 +1,8 @@
-"""Generate 100+ AI tool catalog YAML entries."""
+"""Generate 100+ AI tool catalog YAML entries.
+
+Historical bootstrap only: catalog/builtin/*.yaml has since been curated by hand and is the
+source of truth. Re-running this script overwrites those reviewed entries.
+"""
 import os, yaml
 
 CATALOG_DIR = os.path.join(os.path.dirname(__file__), "..", "catalog", "builtin")

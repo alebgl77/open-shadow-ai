@@ -13,7 +13,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const provider = { local_enabled: true, sso: { enabled: true, label: 'Company identity', login_url: SSO_LOGIN_PATH } }
 const disabled = { local_enabled: true, sso: { enabled: false, label: 'Single sign-on', login_url: SSO_LOGIN_PATH } }
-const session: LoginResponse = { access_token: 'trusted-session-token', token_type: 'bearer', user: { user_id: 'sso-user', username: 'SSO analyst', email: 'analyst@example.test', role: 'analyst', is_active: true } }
+const session: LoginResponse = { access_token: null, token_type: 'cookie', csrf_token: 'csrf-from-server', user: { user_id: 'sso-user', username: 'SSO analyst', email: 'analyst@example.test', role: 'analyst', is_active: true } }
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -80,7 +80,7 @@ describe('one-use SSO callback', () => {
     expect(post).toHaveBeenCalledWith('/auth/sso/session',undefined,{withCredentials:true,headers:{'X-SSO-CSRF':'1'}})
     await act(async()=>{ request.resolve({data:session}); await request.promise })
     expect(await screen.findByText('Workspace ready')).toBeTruthy()
-    expect(useAuthStore.getState()).toMatchObject({token:'trusted-session-token',mode:'live',isAuthenticated:true,session:previousSession+1})
+    expect(useAuthStore.getState()).toMatchObject({csrfToken:'csrf-from-server',mode:'live',isAuthenticated:true,session:previousSession+1})
     expect(queryClient.getQueryData(['private-evidence'])).toBeUndefined()
     expect(screen.getByTestId('route').textContent).toBe('/dashboard')
     expect(storage).not.toHaveBeenCalled()
@@ -104,7 +104,7 @@ describe('one-use SSO callback', () => {
     view.unmount()
     useAuthStore.getState().enterDemo()
     await act(async()=>{ request.resolve({data:session}); await request.promise })
-    expect(useAuthStore.getState()).toMatchObject({mode:'demo',token:null,user:{user_id:'demo-reviewer'}})
+    expect(useAuthStore.getState()).toMatchObject({mode:'demo',csrfToken:null,user:{user_id:'demo-reviewer'}})
   })
   it('does not authenticate when sign-out invalidates the pending callback session', async () => {
     const request=deferred<{data:LoginResponse}>()
@@ -113,7 +113,7 @@ describe('one-use SSO callback', () => {
     act(()=>useAuthStore.getState().logout())
     await act(async()=>{ request.resolve({data:session}); await request.promise })
     expect(await screen.findByRole('alert')).toBeTruthy()
-    expect(useAuthStore.getState()).toMatchObject({isAuthenticated:false,token:null})
+    expect(useAuthStore.getState()).toMatchObject({isAuthenticated:false,csrfToken:null})
   })
   it('does not let a different session join an older pending exchange', async () => {
     const request=deferred<{data:LoginResponse}>()
@@ -142,7 +142,7 @@ describe('existing sign-in paths', () => {
     fireEvent.change(screen.getByLabelText('Password'),{target:{value:'local-password'}})
     fireEvent.click(screen.getByRole('button',{name:'Sign in to workspace'}))
     expect(await screen.findByText('Workspace ready')).toBeTruthy()
-    expect(post).toHaveBeenCalledWith('/auth/login',{username:'local-admin',password:'local-password'})
+    expect(post).toHaveBeenCalledWith('/auth/login',{username:'local-admin',password:'local-password'},{headers:{'X-Session-Mode':'cookie'}})
   })
   it('still enters the explicitly labeled demo without using SSO or persisting credentials', async () => {
     vi.spyOn(client,'get').mockResolvedValue({data:provider})
@@ -150,7 +150,7 @@ describe('existing sign-in paths', () => {
     renderAuth('/login')
     fireEvent.click(screen.getByRole('button',{name:'Explore the demo'}))
     expect(await screen.findByText('Workspace ready')).toBeTruthy()
-    expect(useAuthStore.getState()).toMatchObject({mode:'demo',token:null})
+    expect(useAuthStore.getState()).toMatchObject({mode:'demo',csrfToken:null})
     expect(post).not.toHaveBeenCalled()
   })
 })

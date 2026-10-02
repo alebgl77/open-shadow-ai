@@ -20,6 +20,8 @@ from shadai.security.rbac import require_role
 router = APIRouter(prefix="/api/v1/catalog", tags=["catalog"])
 
 
+# Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
+@router.get("", response_model=list[CatalogItemRead], include_in_schema=False)
 @router.get("/", response_model=list[CatalogItemRead])
 async def list_catalog(
     response: Response,
@@ -58,6 +60,8 @@ async def get_catalog_item(
     return CatalogItemRead.model_validate(item)
 
 
+# Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
+@router.post("", response_model=CatalogItemRead, status_code=201, include_in_schema=False)
 @router.post("/", response_model=CatalogItemRead, status_code=201)
 async def create_catalog_item(
     body: CatalogItemCreate,

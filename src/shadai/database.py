@@ -52,6 +52,12 @@ async def init_postgres(settings: DatabaseSettings) -> None:
     )
 
 
+def postgres_session_factory() -> async_sessionmaker[AsyncSession]:
+    if _async_session_factory is None:
+        raise RuntimeError("PostgreSQL not initialized. Call init_postgres first.")
+    return _async_session_factory
+
+
 async def get_postgres_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency that yields a Postgres session."""
     if _async_session_factory is None:

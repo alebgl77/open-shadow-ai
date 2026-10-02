@@ -58,16 +58,29 @@ def _domain_parents(domain: str) -> list[str]:
     return parents
 
 
-def _pattern_owners(entries: list, value: str) -> tuple[str, ...]:
-    """Owners of the most specific matching pattern(s); entries are sorted by specificity."""
-    best, owners = None, []
-    for specificity, pattern, item_id in entries:
-        if best is not None and specificity < best:
+def _event_hosts(event: CanonicalEvent) -> frozenset[str]:
+    hosts = set()
+    for value in (event.url_host, event.domain, event.sni):
+        host = value.lower().rstrip(".")
+        name, colon, port = host.rpartition(":")
+        hosts.add(name if colon and port.isdigit() and ":" not in name else host)
+    return frozenset(hosts - {""})
+
+
+def _in_scope(scope: tuple[str, ...] | None, hosts: frozenset[str]) -> bool:
+    return scope is None or any(host == allowed or host.endswith("." + allowed) for host in hosts for allowed in scope)
+
+
+def _pattern_matches(entries: list, value: str, hosts: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
+    """(item, catalog pattern) for the most specific in-scope match; entries are sorted by specificity."""
+    best, found = None, set()
+    for entry in entries:
+        if best is not None and entry.specificity < best:
             break
-        if pattern.match(value):
-            best = specificity
-            owners.append(item_id)
-    return tuple(sorted(set(owners)))
+        if _in_scope(entry.hosts, hosts) and entry.regex.match(value):
+            best = entry.specificity
+            found.add((entry.item_id, entry.text))
+    return sorted(found)
 
 
 class CatalogMatcher:
@@ -81,11 +94,23 @@ class CatalogMatcher:
     def __init__(self, index: CatalogIndex):
         self._index = index
 
+    def upstream_match(self, event: CanonicalEvent) -> CatalogMatch | None:
+        """A match the ingestion boundary computed from signals it then discarded."""
+        if event.catalog_match_id not in self._index.items:
+            return None  # none, or an entry that is no longer active
+        return CatalogMatch(
+            catalog_item_id=event.catalog_match_id,
+            matched_field=event.match_field,
+            matched_value="",
+            match_confidence=event.match_confidence,
+        )
+
     def match_event(self, event: CanonicalEvent) -> CatalogMatch | None:
         """Match an event against the catalog. Returns best match by confidence."""
         if event.source_type == "directory":
             return None
         candidates: list[CatalogMatch] = []
+        hosts = _event_hosts(event)
 
         def add(owners, field: str, value: str, confidence: float) -> None:
             candidates.extend(
@@ -94,6 +119,11 @@ class CatalogMatcher:
                 )
                 for item_id in owners
             )
+
+        def add_patterns(matches: list[tuple[str, str]], field: str, confidence: float) -> None:
+            # Report the catalog pattern: paths and user agents are evaluated, never repeated.
+            for item_id, pattern in matches:
+                add((item_id,), field, pattern, confidence)
 
         # 1. Extension ID (highest specificity)
         if event.extension_id:
@@ -116,7 +146,10 @@ class CatalogMatcher:
         # 3. Container image pattern
         if event.container_image:
             add(
-                _pattern_owners(self._index.container_pattern_index, event.container_image),
+                [
+                    item_id
+                    for item_id, _ in _pattern_matches(self._index.container_pattern_index, event.container_image)
+                ],
                 "container_image",
                 event.container_image,
                 SIGNAL_CONFIDENCE["container_image"],
@@ -139,12 +172,12 @@ class CatalogMatcher:
                 SIGNAL_CONFIDENCE["port_only"],
             )
 
-        # 6. URL pattern match
-        if event.url_path:
-            add(
-                _pattern_owners(self._index.url_pattern_index, event.url_path),
+        # 6. URL pattern match on the request's host; query strings are never evaluated
+        if event.url_path and hosts:
+            path = event.url_path.split("?", 1)[0].split("#", 1)[0]
+            add_patterns(
+                _pattern_matches(self._index.url_pattern_index, path, hosts),
                 "url_pattern",
-                event.url_path,
                 SIGNAL_CONFIDENCE["url_pattern"],
             )
 
@@ -166,10 +199,9 @@ class CatalogMatcher:
 
         # 8. User-Agent pattern match
         if event.user_agent:
-            add(
-                _pattern_owners(self._index.user_agent_pattern_index, event.user_agent),
+            add_patterns(
+                _pattern_matches(self._index.user_agent_pattern_index, event.user_agent, hosts),
                 "user_agent",
-                event.user_agent,
                 SIGNAL_CONFIDENCE["user_agent"],
             )
 

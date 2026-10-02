@@ -40,7 +40,9 @@ class EventProcessor:
         self.session_factory, self.matcher = session_factory, matcher
 
     async def __call__(self, data):
-        event = prepare_event(CanonicalEvent.model_validate_json(data["data"]))
+        # Streams carry only events prepared at an ingestion boundary, where untrusted match
+        # fields were cleared and paths or user agents were evaluated before being discarded.
+        event = prepare_event(CanonicalEvent.model_validate_json(data["data"]), trusted_collector=True)
         async with self.session_factory() as session:
             async with session.begin():
                 await session.execute(
@@ -49,7 +51,11 @@ class EventProcessor:
                 )
                 if await session.get(IngestReceiptORM, event.event_id):
                     return
-                match = self.matcher.match_event(event)
+                match = self.matcher.upstream_match(event)
+                if match is None:
+                    # No boundary match, or one whose catalog entry is no longer active.
+                    event.catalog_match_id, event.match_field, event.match_confidence = "", "", 0
+                    match = self.matcher.match_event(event)
                 if match:
                     event.catalog_match_id = match.catalog_item_id
                     event.match_field = match.matched_field

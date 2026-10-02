@@ -2,9 +2,9 @@ import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth'
-import { downloadCsv } from '@/lib/export'
+import { downloadBlob, downloadCsv } from '@/lib/export'
 import { Search, Download, ChevronUp, ChevronDown, Filter, X } from 'lucide-react'
-import { DETECTION_SORT_COLUMNS, listDetections, updateDetection, type DetectionFilter, type DetectionSortColumn } from '@/api/detections'
+import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, exportDetections, listDetections, updateDetection, type DetectionFilter, type DetectionSortColumn } from '@/api/detections'
 import RiskBadge from '@/components/badges/RiskBadge'
 import ApprovalBadge from '@/components/badges/ApprovalBadge'
 import ConfidenceBadge from '@/components/badges/ConfidenceBadge'
@@ -40,7 +40,12 @@ export default function DiscoveryList() {
   const [searchInput, setSearchInput] = useState(filters.search || '')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showFilters, setShowFilters] = useState(false)
+  const [confirmExport, setConfirmExport] = useState(false)
   const canEdit = useAuthStore(s => s.user?.role !== 'viewer')
+  const exportAll = useMutation({
+    mutationFn: () => exportDetections(filters),
+    onSuccess: ({ blob, filename }) => { downloadBlob(blob, filename); setConfirmExport(false) },
+  })
   useEffect(() => { setSelectedIds(new Set()); setSearchInput(searchParams.get('search') || '') }, [searchParams])
 
   const setFilter = useCallback((key: string, value: string | undefined) => {
@@ -120,7 +125,25 @@ export default function DiscoveryList() {
         <button disabled={!data?.items.length} onClick={() => downloadCsv([['Tool','Type','Classification','Risk','Events','Last seen'], ...(data?.items.map(d=>[d.entity_name,d.entity_type,d.classification,d.risk_score_stale ? 'Needs recalculation' : d.risk_score,d.total_events_count,d.last_seen_at]) || [])], 'open-shadow-ai-visible-discoveries.csv')} className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-800 text-slate-400 border border-surface-600/40 rounded-lg hover:text-slate-200 transition-colors">
           <Download className="w-4 h-4" /> Export page
         </button>
+        {canEdit && (
+          <button disabled={!data?.total} onClick={() => { exportAll.reset(); setConfirmExport(true) }} aria-expanded={confirmExport} aria-controls="export-all"
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-800 text-slate-400 border border-surface-600/40 rounded-lg hover:text-slate-200 transition-colors">
+            <Download className="w-4 h-4" /> Export all
+          </button>
+        )}
       </div>
+
+      {confirmExport && (
+        <section id="export-all" aria-labelledby="export-all-title" className="stat-card space-y-3">
+          <h2 id="export-all-title" className="text-sm font-medium">Export all {data?.total ?? 0} matching discoveries</h2>
+          <p className="text-xs text-slate-400 leading-relaxed">{ANTI_HR_NOTICE} The server records this export, with its filters, in the audit log.</p>
+          <div className="flex gap-2">
+            <button onClick={() => exportAll.mutate()} disabled={exportAll.isPending} className="primary-button">{exportAll.isPending ? 'Exporting…' : 'Confirm export'}</button>
+            <button onClick={() => setConfirmExport(false)} className="secondary-button">Cancel</button>
+          </div>
+          {exportAll.isError && <p role="alert" className="text-xs text-red-400">The export could not be completed. Check your role and try again.</p>}
+        </section>
+      )}
 
       {/* Expandable filters */}
       {showFilters && (

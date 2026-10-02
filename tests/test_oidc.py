@@ -195,6 +195,14 @@ def csrf(flow):
     return {"Origin": flow.config.oidc.public_base_url, "X-SSO-CSRF": "1"}
 
 
+def session_cookie(response):
+    """The console session is delivered only as a host-only, HttpOnly, SameSite=Strict cookie."""
+    [cookie] = [c for c in response.headers.get_list("set-cookie") if c.startswith("__Host-shadai-session=")]
+    assert "HttpOnly" in cookie and "Secure" in cookie and "SameSite=strict" in cookie and "Path=/" in cookie
+    assert "Domain=" not in cookie
+    return cookie.split(";", 1)[0].split("=", 1)[1]
+
+
 async def begin(flow):
     response = await flow.client.get("/api/v1/auth/sso/login")
     assert response.status_code == 303
@@ -229,11 +237,14 @@ async def test_signed_flow_issues_only_local_session_and_clears_cookies(flow, cl
     assert "access_token" not in stored and "never-use-idp-access" not in stored
     response = await flow.client.post("/api/v1/auth/sso/session", headers=csrf(flow))
     assert response.status_code == 200
-    token = decode_access_token(response.json()["access_token"])
+    token = decode_access_token(session_cookie(response))
     assert token.sub == flow.user_id and token.role == "viewer"  # stale stored admin is ignored
-    assert response.json()["user"]["role"] == "viewer" and response.json()["user"]["identity_kind"] == "scim"
+    body = response.json()
+    assert body["access_token"] is None and body["token_type"] == "cookie" and body["csrf_token"]
+    assert body["user"]["role"] == "viewer" and body["user"]["identity_kind"] == "scim"
     assert response.headers["cache-control"] == "no-store" and response.headers["referrer-policy"] == "no-referrer"
-    assert not list(flow.client.cookies) and not flow.redis.values
+    # The one-use SSO cookies are gone; only the console session remains.
+    assert [cookie.name for cookie in flow.client.cookies.jar] == ["__Host-shadai-session"] and not flow.redis.values
     async with flow.sessions() as session:
         user = await session.get(UserORM, flow.user_id)
         audit = (await session.execute(select(AuditLogORM))).scalar_one()
@@ -383,7 +394,7 @@ async def test_current_group_mapping_applied_at_handoff(flow):
     flow.config.scim.group_role_map["admins-group"] = "analyst"
     response = await flow.client.post("/api/v1/auth/sso/session", headers=csrf(flow))
     assert response.status_code == 200 and response.json()["user"]["role"] == "analyst"
-    assert decode_access_token(response.json()["access_token"]).role == "analyst"
+    assert decode_access_token(session_cookie(response)).role == "analyst"
 
 
 async def test_disabled_provider_fails_closed_with_local_available(flow):
@@ -673,7 +684,7 @@ async def test_entra_discovery_without_optional_pkce_metadata_still_uses_s256(fl
     await callback(flow)  # the mock verifies S256 challenge and the exchanged verifier
     assert len(flow.idp.token_forms[0]["code_verifier"]) >= 43
     response = await flow.client.post("/api/v1/auth/sso/session", headers=csrf(flow))
-    assert response.status_code == 200 and decode_access_token(response.json()["access_token"]).sub == flow.user_id
+    assert response.status_code == 200 and decode_access_token(session_cookie(response)).sub == flow.user_id
 
 
 async def test_uppercase_https_still_uses_secure_host_cookies(flow):

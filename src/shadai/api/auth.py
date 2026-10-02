@@ -6,7 +6,7 @@ import hashlib
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,12 +15,15 @@ from shadai.database import get_postgres_session, get_redis
 from shadai.models.user import LoginRequest, LoginResponse, UserCreate, UserORM, UserRead, UserUpdate
 from shadai.security.audit import log_audit
 from shadai.security.auth import (
+    clear_session_cookie,
     create_access_token,
+    csrf_token_for,
     decode_access_token,
     effective_roles,
     get_current_user,
     hash_password,
-    oauth2_scheme,
+    request_token,
+    set_session_cookie,
     verify_password,
 )
 from shadai.security.rbac import require_role
@@ -32,9 +35,10 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 async def login(
     body: LoginRequest,
     request: Request,
+    response: Response,
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
-    """Authenticate and return a JWT access token."""
+    """Authenticate. Browsers ask for an HttpOnly session cookie; API clients get a bearer token."""
     redis = await get_redis()
     peer = request.client.host if request.client else "unknown"
     bucket = int(datetime.now(UTC).timestamp()) // 60
@@ -70,20 +74,35 @@ async def login(
         ip_address=request.client.host if request.client else None,
     )
 
+    response.headers["Cache-Control"] = "no-store"
+    if request.headers.get("X-Session-Mode", "").lower() == "cookie":
+        set_session_cookie(response, request, token)
+        return LoginResponse(token_type="cookie", csrf_token=csrf_token_for(token), user=UserRead.model_validate(user))
+    return LoginResponse(access_token=token, user=UserRead.model_validate(user))
+
+
+@router.get("/session", response_model=LoginResponse)
+async def current_session(
+    response: Response,
+    token: str = Depends(request_token),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """Restore a browser session after a reload: the user and the session's CSRF token."""
+    response.headers["Cache-Control"] = "no-store"
     return LoginResponse(
-        access_token=token,
-        user=UserRead.model_validate(user),
+        token_type="cookie", csrf_token=csrf_token_for(token), user=UserRead.model_validate(current_user)
     )
 
 
 @router.post("/logout")
 async def logout(
     request: Request,
+    response: Response,
+    token: str = Depends(request_token),
     current_user: UserORM = Depends(get_current_user),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
-    """Revoke the presented token until expiration; Redis errors fail closed."""
-    token = await oauth2_scheme(request)
+    """Revoke the presented token until expiration and drop the cookie; Redis errors fail closed."""
     payload = decode_access_token(token)
     redis = await get_redis()
     ttl = max(1, payload.exp - int(datetime.now(UTC).timestamp()))
@@ -95,6 +114,7 @@ async def logout(
         "logout",
         ip_address=request.client.host if request.client else None,
     )
+    clear_session_cookie(response, request)
     return {"message": "logged out"}
 
 
@@ -108,6 +128,8 @@ async def get_me(current_user: UserORM = Depends(get_current_user)):
 users_router = APIRouter(prefix="/api/v1/settings/users", tags=["users"])
 
 
+# Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
+@users_router.get("", response_model=list[UserRead], include_in_schema=False)
 @users_router.get("/", response_model=list[UserRead])
 async def list_users(
     _admin: UserORM = Depends(require_role("admin")),
@@ -119,6 +141,8 @@ async def list_users(
     return [UserRead.model_validate(user).model_copy(update={"role": roles[user.user_id]}) for user in users]
 
 
+# Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
+@users_router.post("", response_model=UserRead, status_code=201, include_in_schema=False)
 @users_router.post("/", response_model=UserRead, status_code=201)
 async def create_user(
     body: UserCreate,

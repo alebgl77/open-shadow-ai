@@ -7,9 +7,11 @@ import asyncio
 import redis.asyncio as aioredis
 import structlog
 import yaml
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from shadai.collectors.base import BaseCollector
 from shadai.config import load_config
+from shadai.engine.catalog_loader import load_database_catalog
 from shadai.parsers.base import BaseParser, get_parser
 
 logger = structlog.get_logger()
@@ -26,8 +28,9 @@ class SyslogCollector(BaseCollector):
         host: str = "0.0.0.0",
         port: int = 1514,
         protocol: str = "tcp",
+        catalog_loader=None,
     ):
-        super().__init__(collector_id, parser, redis_client)
+        super().__init__(collector_id, parser, redis_client, catalog_loader)
         self.host = host
         self.port = port
         self.protocol = protocol.lower()
@@ -107,6 +110,12 @@ class SyslogUDPProtocol(asyncio.DatagramProtocol):
 async def main() -> None:
     config = load_config()
     redis_client = aioredis.from_url(config.database.redis_url, decode_responses=True)
+    engine = create_async_engine(config.database.postgres_url, pool_pre_ping=True, pool_size=2, max_overflow=0)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def load_catalog():
+        async with sessions() as session:
+            return await load_database_catalog(session)
 
     # Load sources config
     sources_path = "/app/config/sources.yaml"
@@ -131,6 +140,7 @@ async def main() -> None:
             host="0.0.0.0",
             port=source["config"].get("listen_port", 1514),
             protocol=source["config"].get("protocol", "tcp"),
+            catalog_loader=load_catalog,
         )
         collectors.append(collector.run())
 
@@ -139,7 +149,9 @@ async def main() -> None:
         from shadai.parsers.dns.bind import BindQueryLogParser
 
         parser = BindQueryLogParser()
-        collector = SyslogCollector("default-syslog", parser, redis_client, port=1514, protocol="both")
+        collector = SyslogCollector(
+            "default-syslog", parser, redis_client, port=1514, protocol="both", catalog_loader=load_catalog
+        )
         collectors.append(collector.run())
 
     logger.info("starting_collectors", count=len(collectors))
@@ -147,6 +159,7 @@ async def main() -> None:
         await asyncio.gather(*collectors)
     finally:
         await redis_client.aclose()
+        await engine.dispose()
 
 
 if __name__ == "__main__":

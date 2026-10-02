@@ -37,12 +37,12 @@ describe('explicit synthetic workspace', ()=>{
     expect(counts).toEqual([...counts].sort((a,b)=>b-a))
     expect(()=>demoRequest('get','/detections?sort_by=evidence_bundle')).toThrow('Invalid sort')
   })
-  it('enters demo without a bearer credential and destroys credentials at sign-out', ()=>{
-    useAuthStore.getState().login('secret', {user_id:'1',username:'analyst',email:null,role:'analyst',is_active:true})
+  it('enters demo without a live CSRF token and forgets it at sign-out', ()=>{
+    useAuthStore.getState().login('csrf-secret', {user_id:'1',username:'analyst',email:null,role:'analyst',is_active:true})
     useAuthStore.getState().enterDemo()
-    expect(useAuthStore.getState()).toMatchObject({token:null, mode:'demo',isAuthenticated:true})
+    expect(useAuthStore.getState()).toMatchObject({csrfToken:null, mode:'demo',isAuthenticated:true})
     useAuthStore.getState().logout()
-    expect(useAuthStore.getState()).toMatchObject({token:null,user:null,isAuthenticated:false,mode:'live'})
+    expect(useAuthStore.getState()).toMatchObject({csrfToken:null,user:null,isAuthenticated:false,mode:'live'})
   })
   it('never falls back to fixtures when a live request fails', async()=>{
     const failure = vi.fn(async()=>{ throw new AxiosError('Offline','ERR_NETWORK') })
@@ -52,12 +52,12 @@ describe('explicit synthetic workspace', ()=>{
   })
   it('does not expire a new session because of an older request response', async()=>{
     const user = {user_id:'1',username:'analyst',email:null,role:'analyst' as const,is_active:true}
-    useAuthStore.getState().login('old-token',user)
+    useAuthStore.getState().login('old-csrf',user)
     await expect(client.get('/dashboard/summary',{adapter:async config=>{
-      useAuthStore.getState().login('new-token',user)
+      useAuthStore.getState().login('new-csrf',user)
       throw new AxiosError('Unauthorized','401',config,null,{data:{},status:401,statusText:'Unauthorized',headers:new AxiosHeaders(),config})
     }})).rejects.toThrow('Unauthorized')
-    expect(useAuthStore.getState().token).toBe('new-token')
+    expect(useAuthStore.getState()).toMatchObject({csrfToken:'new-csrf',isAuthenticated:true})
   })
   it('expires the matching live session on unauthorized response', async()=>{
     useAuthStore.getState().login('expired',{user_id:'1',username:'analyst',email:null,role:'analyst',is_active:true})

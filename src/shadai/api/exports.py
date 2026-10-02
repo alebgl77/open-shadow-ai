@@ -117,7 +117,10 @@ async def export_detections(
         return StreamingResponse(
             output,
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=shadai_detections_{datetime.now():%Y%m%d}.csv"},
+            headers={
+                "Content-Disposition": f"attachment; filename=shadai_detections_{datetime.now():%Y%m%d}.csv",
+                "Cache-Control": "no-store",
+            },
         )
     else:
         data = {
@@ -129,5 +132,8 @@ async def export_detections(
         return StreamingResponse(
             io.StringIO(json.dumps(data, indent=2, default=str)),
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=shadai_detections_{datetime.now():%Y%m%d}.json"},
+            headers={
+                "Content-Disposition": f"attachment; filename=shadai_detections_{datetime.now():%Y%m%d}.json",
+                "Cache-Control": "no-store",
+            },
         )

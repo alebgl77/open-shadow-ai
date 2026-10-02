@@ -188,6 +188,9 @@ class Correlator:
         reasoning = generate_reasoning_summary(confidence, conf_factors, risk, risk_factors)
 
         status = "suspected" if confidence < 0.70 else "probable" if confidence < 0.90 else "high_confidence"
+        # URL paths and user agents are matched at ingestion and never retained.
+        value = getattr(event, match_field, "")
+        observed = f"{match_field}={value}" if value not in ("", None) else f"{match_field} matched at ingestion"
 
         return DetectionORM(
             entity_type=entity_type,
@@ -204,10 +207,7 @@ class Correlator:
             impacted_devices_count=len(devices_set),
             total_events_count=1,
             source_types=[event.source_type],
-            primary_evidence=(
-                f"{event.evidence_type} evidence via {event.source_type}: "
-                f"{match_field}={getattr(event, match_field, '')}"
-            ),
+            primary_evidence=f"{event.evidence_type} evidence via {event.source_type}: {observed}",
             evidence_bundle={
                 "_users": users_set,
                 "_devices": devices_set,
@@ -220,7 +220,7 @@ class Correlator:
                     "event_count": 1,
                     "matched_field": match_field,
                     "confidence_base": match_confidence,
-                    "sample_values": [getattr(event, match_field, "")],
+                    "sample_values": [value] if value not in ("", None) else [],
                 },
                 "confidence_factors": conf_factors,
                 "risk_factors": risk_factors,

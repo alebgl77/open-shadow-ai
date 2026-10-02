@@ -10,7 +10,6 @@ rule_tags:
 signatures:
   domains:
   - gemini.google.com
-  - generativelanguage.googleapis.com
   - bard.google.com
   url_patterns:
   - /v1beta/models*
