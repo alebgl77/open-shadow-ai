@@ -173,3 +173,5 @@ else:
     Get-ChildItem -LiteralPath $resolved -Recurse -File -Force | ForEach-Object { $_.IsReadOnly = $false }
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
+# Expected native failures must not leak into the CI wrapper after every assertion and cleanup succeeded.
+$global:LASTEXITCODE = 0
