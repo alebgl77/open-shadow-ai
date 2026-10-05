@@ -19,6 +19,8 @@ from shadai.security.rbac import require_role
 router = APIRouter(prefix="/api/v1/governance", tags=["governance"])
 
 
+# Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
+@router.get("", response_model=list[GovernanceRead], include_in_schema=False)
 @router.get("/", response_model=list[GovernanceRead])
 async def list_governance(
     target_type: str | None = None,
@@ -32,6 +34,8 @@ async def list_governance(
     return [GovernanceRead.model_validate(g) for g in result.scalars().all()]
 
 
+# Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
+@router.post("", response_model=GovernanceRead, status_code=201, include_in_schema=False)
 @router.post("/", response_model=GovernanceRead, status_code=201)
 async def create_governance(
     body: GovernanceCreate,

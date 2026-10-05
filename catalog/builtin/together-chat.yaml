@@ -9,7 +9,6 @@ rule_tags:
 - saas
 signatures:
   domains:
-  - api.together.xyz
   - together.ai
   url_patterns:
   - /v1/chat/completions

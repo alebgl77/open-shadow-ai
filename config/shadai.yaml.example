@@ -10,6 +10,10 @@ database:
   clickhouse_host: clickhouse
   clickhouse_port: 9000
   clickhouse_database: shadai
+  # External ClickHouse over native TLS (verification is always enforced):
+  # clickhouse_port: 9440
+  # clickhouse_secure: true
+  # clickhouse_ca_certs: /run/secrets/clickhouse-ca.pem
 retention:
   events_days: 90
   detections_days: 365
@@ -24,3 +28,5 @@ catalog:
 privacy:
   strip_query_params: true
   no_url_path_retention: true
+  # Match URL paths and user agents in memory at ingestion; only the catalog match is kept.
+  match_transient_signals: true

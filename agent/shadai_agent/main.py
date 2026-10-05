@@ -31,6 +31,11 @@ MAX_BODY_BYTES = 1_500_000
 SECTIONS = ("processes", "containers", "local_ai_hits", "extensions", "model_files")
 # The server builds process events from these fields only; identical keys are identical events.
 PROCESS_KEY = ("name", "parent", "username", "listening_port")
+# The API rejects a whole batch for one text field that is not a string of at most 2048
+# characters, or one port outside 0-65535. Records are brought within that contract first.
+TEXT_FIELDS = ("name", "path", "parent", "username", "image", "process_name", "tool_name", "id", "browser")
+PORT_FIELDS = ("port", "listening_port")
+MAX_TEXT_LENGTH = 2048
 
 
 def _handle_signal(signum, frame):
@@ -50,6 +55,20 @@ def unique_processes(processes: list[dict]) -> list[dict]:
     return result
 
 
+def conform(record: dict) -> dict:
+    """Coerce a collected record to the API's field contract without dropping the observation."""
+    record = dict(record)
+    for field in TEXT_FIELDS:
+        if field in record:
+            value = record[field]
+            record[field] = ("" if value is None else str(value))[:MAX_TEXT_LENGTH]
+    for field in PORT_FIELDS:
+        value = record.get(field)
+        if field in record and (isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 65535):
+            del record[field]
+    return record
+
+
 def split_batches(header: dict, sections: dict[str, list[dict]]) -> list[dict]:
     """Split one snapshot into API-sized batches that share its hostname and timestamp."""
 
@@ -59,7 +78,7 @@ def split_batches(header: dict, sections: dict[str, list[dict]]) -> list[dict]:
     base_size = len(json.dumps(empty()))
     batches, current, size = [], None, 0
     for section in SECTIONS:
-        for record in sections.get(section, []):
+        for record in map(conform, sections.get(section, [])):
             record_size = len(json.dumps(record, default=str)) + 2
             if base_size + record_size > MAX_BODY_BYTES:
                 logger.warning(f"Skipping one oversized {section} record")

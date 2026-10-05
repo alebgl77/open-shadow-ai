@@ -120,6 +120,8 @@ def order_detections(query, sort_by: str, sort_order: str):
     return query.order_by(column.asc() if sort_order == "asc" else column.desc(), DetectionORM.detection_id)
 
 
+# Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
+@router.get("", response_model=DetectionListResponse, include_in_schema=False)
 @router.get("/", response_model=DetectionListResponse)
 async def list_detections(
     classification: str | None = None,

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import InvalidTokenError
 from pydantic import ValidationError
@@ -19,8 +22,69 @@ from shadai.config import get_config
 from shadai.database import get_postgres_session, get_redis
 from shadai.models.user import TokenPayload, UserORM
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 ROLE_RANKS = {"viewer": 0, "analyst": 1, "admin": 2}
+
+# Browser sessions: the JWT lives in an HttpOnly SameSite=Strict cookie that scripts cannot
+# read. Cookie-authenticated writes must echo a CSRF token derived from that session.
+SESSION_COOKIE = "shadai-session"
+CSRF_HEADER = "X-CSRF-Token"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+def session_cookie_secure(request: Request) -> bool:
+    configured = get_config().server.session_cookie_secure
+    if configured is not None:
+        return configured
+    host = (request.url.hostname or "").lower()
+    return host not in LOOPBACK_HOSTS and not host.endswith(".localhost")
+
+
+def session_cookie_name(secure: bool) -> str:
+    # __Host- cookies are Secure, Path=/ and host-only: a sibling subdomain cannot plant one.
+    return ("__Host-" if secure else "") + SESSION_COOKIE
+
+
+def csrf_token_for(token: str) -> str:
+    digest = hmac.new(get_config().security.jwt_secret.encode(), b"csrf:" + token.encode(), hashlib.sha256)
+    return base64.urlsafe_b64encode(digest.digest()).rstrip(b"=").decode()
+
+
+def set_session_cookie(response: Response, request: Request, token: str) -> None:
+    secure = session_cookie_secure(request)
+    response.set_cookie(
+        session_cookie_name(secure),
+        token,
+        max_age=get_config().security.jwt_expiration_hours * 3600,
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def clear_session_cookie(response: Response, request: Request) -> None:
+    secure = session_cookie_secure(request)
+    response.delete_cookie(session_cookie_name(secure), path="/", secure=secure, httponly=True, samesite="strict")
+
+
+async def request_token(request: Request, bearer: str | None = Depends(oauth2_scheme)) -> str:
+    """Bearer for API clients; otherwise the session cookie, with CSRF proof for unsafe methods."""
+    if bearer:
+        return bearer
+    token = request.cookies.get(session_cookie_name(session_cookie_secure(request)))
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if request.method not in SAFE_METHODS:
+        supplied = request.headers.get(CSRF_HEADER, "")
+        if not hmac.compare_digest(supplied.encode(), csrf_token_for(token).encode()):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing or invalid CSRF token")
+    return token
 
 
 def hash_password(plain: str) -> str:
@@ -75,7 +139,7 @@ def decode_access_token(token: str) -> TokenPayload:
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    token: str = Depends(request_token),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ) -> UserORM:
     """FastAPI dependency: extract and validate current user from JWT."""

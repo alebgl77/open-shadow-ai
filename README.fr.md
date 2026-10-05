@@ -55,6 +55,8 @@ La connexion OIDC et le provisionnement SCIM 2.0 des comptes de la console sont 
 
 Une résolution DNS n'est pas une preuve de prompt. Une application présente dans l'annuaire ou une extension installée n'est pas une preuve d'usage. Les identifiants de modèle, tokens et coûts nécessitent des événements instrumentés ; les coûts calculés sont des estimations.
 
+Les chemins d'URL, chaînes de requête et user-agents ne sont jamais stockés. À l'ingestion, le chemin (sans sa chaîne de requête) et le user-agent sont comparés en mémoire aux motifs du catalogue, limités aux hôtes de chaque produit ; seule l'entrée du catalogue reconnue est conservée. `privacy.match_transient_signals: false` désactive cette comparaison.
+
 Les tableaux distinguent observations, inventaires et informations indisponibles. Les appareils non gérés, modèles locaux non collectés, proxys de contournement, domaines partagés et IA intégrée aux SaaS peuvent rester invisibles.
 
 ## Du pilote à l'entreprise

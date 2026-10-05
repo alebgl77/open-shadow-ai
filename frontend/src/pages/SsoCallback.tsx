@@ -15,11 +15,11 @@ export default function SsoCallback() {
     let active = true
     const startedSession = useAuthStore.getState().session
     // No query string, fragment, provider token, or redirect target is consumed.
-    // The backend validates a one-use HttpOnly ticket before returning a session.
+    // The backend validates a one-use HttpOnly ticket, then sets the HttpOnly session cookie.
     exchangeSsoSession().then(session => {
       if (!active) return
       if (useAuthStore.getState().session !== startedSession) { setFailed(true); return }
-      login(session.access_token, session.user)
+      login(session.csrf_token, session.user)
       navigate('/dashboard', { replace: true })
     }).catch(() => { if (active) setFailed(true) })
     return () => { active = false }

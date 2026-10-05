@@ -16,7 +16,7 @@ from shadai.config import get_config
 from shadai.database import get_postgres_session, get_redis
 from shadai.models.user import LoginResponse, UserORM, UserRead
 from shadai.security.audit import log_audit
-from shadai.security.auth import create_access_token, effective_role
+from shadai.security.auth import create_access_token, csrf_token_for, effective_role, set_session_cookie
 from shadai.security.oidc import HANDOFF_TTL, STATE_TTL, OIDCClient, OIDCError, consume_bound, origin, store_bound
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -208,13 +208,16 @@ async def exchange_session(request: Request, session: AsyncSession = Depends(get
         )
         await session.flush()
         await session.refresh(user, attribute_names=["last_login_at", "updated_at"])
+        token = create_access_token(str(user.user_id), role, user.session_version)
         result = LoginResponse(
-            access_token=create_access_token(str(user.user_id), role, user.session_version),
-            user=UserRead.model_validate(user),
+            token_type="cookie", csrf_token=csrf_token_for(token), user=UserRead.model_validate(user)
         )
         # Dependency cleanup can run after response delivery; persist the audit
         # and release the user lock before exposing a usable session token.
         await session.commit()
     except (OIDCError, RedisError, ValueError, KeyError, TypeError):
         return failure(config)
-    return clear_cookies(JSONResponse(result.model_dump(mode="json"), headers=HEADERS), config)
+    response = clear_cookies(JSONResponse(result.model_dump(mode="json"), headers=HEADERS), config)
+    # The browser receives the session as an HttpOnly cookie, never as a readable token.
+    set_session_cookie(response, request, token)
+    return response

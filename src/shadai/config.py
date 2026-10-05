@@ -19,6 +19,8 @@ class ServerSettings(BaseModel):
     debug: bool = False
     log_level: str = "INFO"
     cors_origins: list[str] = Field(default_factory=list)
+    # None: Secure session cookie except on loopback hosts (the default HTTP install).
+    session_cookie_secure: bool | None = None
 
     @field_validator("cors_origins")
     @classmethod
@@ -107,6 +109,9 @@ class CatalogSettings(BaseModel):
 class PrivacySettings(BaseModel):
     strip_query_params: bool = True
     no_url_path_retention: bool = False
+    # Evaluate URL paths (never query strings) and user agents against catalog patterns at
+    # the ingestion boundary, keep only the resulting catalog match, then discard them.
+    match_transient_signals: bool = True
 
 
 def trusted_url(value: str, allow_local: bool = False, *, origin_only: bool = False) -> str:
@@ -218,6 +223,8 @@ def _apply_env_overrides(config: ShadAIConfig) -> ShadAIConfig:
     for name in ("SECURE", "CA_CERTS", "CERTFILE", "KEYFILE", "SERVER_HOSTNAME"):
         env_fields["CLICKHOUSE_" + name] = ("database", "clickhouse_" + name.lower())
     raw = config.model_dump()
+    if (secure := os.environ.get("SESSION_COOKIE_SECURE")) is not None:
+        raw["server"]["session_cookie_secure"] = None if secure.strip().lower() in {"", "auto"} else secure
     for name, (section, field) in env_fields.items():
         if name in os.environ:
             raw[section][field] = os.environ[name]

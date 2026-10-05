@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import structlog
 import yaml
@@ -15,23 +16,36 @@ from shadai.models.catalog import CatalogItemRead, CatalogYAMLEntry
 logger = structlog.get_logger()
 
 
+class PatternEntry(NamedTuple):
+    specificity: int  # literal characters: "/v1/chat/completions" outranks "/v1/*"
+    regex: re.Pattern
+    item_id: str
+    text: str  # the catalog pattern, safe to report; never the observed value
+    hosts: tuple[str, ...] | None  # hosts (and their subdomains) where it applies; None: any
+
+
 class CatalogIndex:
     """In-memory index for fast event-to-catalog matching.
 
     Several items may share a signature (a vendor's API and chat products on one host,
     a common SDK user agent). Exact keys keep every owner and patterns keep their
     specificity, so attribution never depends on the order items were loaded.
+
+    URL patterns apply only on a host: "/path" on the entry's own domains, "host/path" on
+    that host. User-agent patterns corroborate the entry's domains; an entry without domains
+    is identified by its client alone. A generic path or SDK name thus never attributes
+    traffic to an unrelated service.
     """
 
     def __init__(self):
         self.domain_index: dict[str, tuple[str, ...]] = {}  # domain -> catalog_item_ids
-        self.url_pattern_index: list[tuple[int, re.Pattern, str]] = []  # (specificity, regex, item)
+        self.url_pattern_index: list[PatternEntry] = []
         self.process_index: dict[str, tuple[str, ...]] = {}  # process name (lower, no .exe)
         self.extension_index: dict[str, tuple[str, ...]] = {}
         self.oauth_app_index: dict[str, tuple[str, ...]] = {}
         self.port_index: dict[int, tuple[str, ...]] = {}
-        self.container_pattern_index: list[tuple[int, re.Pattern, str]] = []
-        self.user_agent_pattern_index: list[tuple[int, re.Pattern, str]] = []
+        self.container_pattern_index: list[PatternEntry] = []
+        self.user_agent_pattern_index: list[PatternEntry] = []
         self.items: dict[str, CatalogItemRead] = {}
 
 
@@ -46,13 +60,22 @@ def _add_owner(index: dict, key, item_id: str) -> None:
         index[key] = tuple(sorted((*owners, item_id)))
 
 
-def _add_pattern(index: list, pattern: str, item_id: str) -> None:
+def _add_pattern(index: list, pattern: str, item_id: str, glob: str | None = None, hosts=None) -> None:
+    glob = pattern if glob is None else glob
     try:
-        compiled = _glob_to_regex(pattern)
+        compiled = _glob_to_regex(glob)
     except re.error:
         return
-    # Literal characters measure specificity: "/v1/chat/completions" outranks "/v1/*".
-    index.append((len(pattern) - sum(pattern.count(c) for c in "*?[]"), compiled, item_id))
+    specificity = len(glob) - sum(glob.count(c) for c in "*?[]")
+    index.append(PatternEntry(specificity, compiled, item_id, pattern, hosts))
+
+
+def url_pattern_scope(pattern: str, domains: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+    """Split a URL pattern into its path glob and the hosts where it applies."""
+    if pattern.startswith("/"):
+        return pattern, domains
+    host, slash, path = pattern.partition("/")
+    return ("/" + path if slash else "*"), (host.lower().removeprefix("*.").rstrip("."),)
 
 
 def load_catalog_from_yaml(builtin_path: str, local_path: str) -> list[CatalogItemRead]:
@@ -138,8 +161,9 @@ def build_catalog_index(items: list[CatalogItemRead]) -> CatalogIndex:
 
         item_id = item.catalog_item_id
         index.items[item_id] = item
-        for domain in item.domains:
-            _add_owner(index.domain_index, domain.lower().rstrip("."), item_id)
+        domains = tuple(sorted({domain.lower().rstrip(".") for domain in item.domains}))
+        for domain in domains:
+            _add_owner(index.domain_index, domain, item_id)
         for proc in item.processes:
             _add_owner(index.process_index, proc.lower().removesuffix(".exe"), item_id)
         for ext_id in item.extension_ids:
@@ -149,14 +173,15 @@ def build_catalog_index(items: list[CatalogItemRead]) -> CatalogIndex:
         for port in item.local_ports:
             _add_owner(index.port_index, port, item_id)
         for pattern in item.url_patterns:
-            _add_pattern(index.url_pattern_index, pattern, item_id)
+            glob, hosts = url_pattern_scope(pattern, domains)
+            _add_pattern(index.url_pattern_index, pattern, item_id, glob, hosts)
         for pattern in item.container_patterns:
             _add_pattern(index.container_pattern_index, pattern, item_id)
         for pattern in item.user_agent_patterns:
-            _add_pattern(index.user_agent_pattern_index, pattern, item_id)
+            _add_pattern(index.user_agent_pattern_index, pattern, item_id, hosts=domains or None)
 
     for patterns in (index.url_pattern_index, index.container_pattern_index, index.user_agent_pattern_index):
-        patterns.sort(key=lambda entry: (-entry[0], entry[2], entry[1].pattern))
+        patterns.sort(key=lambda entry: (-entry.specificity, entry.item_id, entry.text))
 
     shared = sum(
         len(owners) > 1
@@ -170,6 +195,8 @@ def build_catalog_index(items: list[CatalogItemRead]) -> CatalogIndex:
         extensions=len(index.extension_index),
         ports=len(index.port_index),
         shared_signatures=shared,
+        # "/path" patterns on an entry without domains have no host to apply to.
+        unscoped_url_patterns=sum(entry.hosts == () for entry in index.url_pattern_index),
     )
     return index
 
