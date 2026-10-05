@@ -22,7 +22,8 @@ _SQUID_RE = re.compile(
     r"(\S+)\s+"  # method
     r"(\S+)\s+"  # URL
     r"(\S+)\s+"  # ident
-    r"(\S+)/(\S+)\s*"  # hierarchy/server
+    r"(\S+)/(\S+)\s+"  # hierarchy/server
+    r"\S+(?:\s|$)"  # content type; require a complete native record to avoid shifted identity fields
 )
 
 
@@ -45,6 +46,7 @@ class SquidAccessLogParser(BaseParser):
         response_bytes = int(match.group(6))
         method = match.group(7).upper()
         url_raw = match.group(8)
+        username = match.group(9)
 
         timestamp = datetime.fromtimestamp(ts_epoch, tz=UTC)
 
@@ -66,6 +68,7 @@ class SquidAccessLogParser(BaseParser):
         return CanonicalEvent(
             source_type=self.source_type,
             timestamp=timestamp,
+            username="" if username == "-" else username,
             src_ip=client_ip,
             domain=domain,
             url_host=url_host,

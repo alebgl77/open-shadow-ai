@@ -131,8 +131,8 @@ def test_shared_signatures_resolve_independently_of_catalog_order():
     )
     forward, reverse = (CatalogMatcher(build_catalog_index(items)) for items in ([api, chat], [chat, api]))
     cases = [
-        (CanonicalEvent(domain="shared.example"), "a-chat"),
-        (CanonicalEvent(source_type="proxy", domain="eu.shared.example"), "a-chat"),
+        (CanonicalEvent(domain="shared.example"), None),
+        (CanonicalEvent(source_type="proxy", domain="eu.shared.example"), None),
         (CanonicalEvent(source_type="proxy", url_host="shared.example", url_path="/v1/chat/completions"), "a-chat"),
         (CanonicalEvent(source_type="proxy", url_host="api.shared.example", url_path="/v1/models"), "b-api"),
         # Equal confidence: the item corroborated by more signal types wins over the lower ID.

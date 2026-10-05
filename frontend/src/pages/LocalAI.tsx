@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Cpu } from 'lucide-react'
 import { listDetections } from '@/api/detections'
 import RiskBadge from '@/components/badges/RiskBadge'
@@ -39,7 +39,7 @@ export default function LocalAI() {
         <span className="text-sm text-slate-400">{(runtimes?.total ?? 0) + (containers?.total ?? 0)} tool{items.length !== 1 ? 's' : ''}</span>
       </div>
 
-      <p className="text-xs text-slate-400">Showing up to 100 runtimes and 100 containers. <a href="/discoveries" className="text-accent">Open Discoveries</a> to filter and page through all records. Unmanaged devices are outside endpoint coverage.</p>{isLoading && <TableSkeleton rows={6} columns={7} />}
+      <p className="text-xs text-slate-400">Showing up to 100 runtimes and 100 containers. <Link to="/discoveries" className="text-accent">Open Discoveries</Link> to filter and page through all records. Unmanaged devices are outside endpoint coverage.</p>{isLoading && <TableSkeleton rows={6} columns={7} />}
       {isError && <ErrorAlert onRetry={() => { r1(); r2() }} />}
 
       {!isLoading && !isError && items.length === 0 && (

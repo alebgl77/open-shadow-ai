@@ -17,7 +17,7 @@ from shadai.api.ingestion import SOURCE_TYPES, prepare_event
 from shadai.config import load_config, validate_security
 from shadai.database import init_clickhouse
 from shadai.engine.catalog_loader import load_database_catalog
-from shadai.engine.matcher import CatalogMatcher
+from shadai.engine.matcher import AMBIGUOUS_MATCH_FIELD, CatalogMatcher
 from shadai.models.event import CanonicalEvent
 from shadai.models.receipts import IngestReceiptORM
 from shadai.workers.streams import StreamConsumer
@@ -51,11 +51,16 @@ class EventProcessor:
                 )
                 if await session.get(IngestReceiptORM, event.event_id):
                     return
-                match = self.matcher.upstream_match(event)
-                if match is None:
-                    # No boundary match, or one whose catalog entry is no longer active.
-                    event.catalog_match_id, event.match_field, event.match_confidence = "", "", 0
-                    match = self.matcher.match_event(event)
+                if event.match_field == AMBIGUOUS_MATCH_FIELD:
+                    # Discarded URL/UA evidence tied: retained fields must not pick a weaker winner.
+                    event.catalog_match_id, event.match_confidence = "", 0
+                    match = None
+                else:
+                    match = self.matcher.upstream_match(event)
+                    if match is None:
+                        # No boundary match, or one whose catalog entry is no longer active.
+                        event.catalog_match_id, event.match_field, event.match_confidence = "", "", 0
+                        match = self.matcher.match_event(event)
                 if match:
                     event.catalog_match_id = match.catalog_item_id
                     event.match_field = match.matched_field

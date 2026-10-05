@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Key, ShieldAlert } from 'lucide-react'
 import { listDetections } from '@/api/detections'
 import RiskBadge from '@/components/badges/RiskBadge'
@@ -30,7 +30,7 @@ export default function OAuthApps() {
         <span className="text-sm text-slate-400">{data?.total ?? 0} app{(data?.total ?? 0) !== 1 ? 's' : ''} discovered</span>
       </div>
 
-      <p className="text-xs text-slate-400">Showing up to 100 applications. <a href="/discoveries?entity_type=oauth_app" className="text-accent">Open the complete paginated list</a>. Permissions indicate a grant, not confirmed access.</p>
+      <p className="text-xs text-slate-400">Showing up to 100 applications. <Link to="/discoveries?entity_type=oauth_app" className="text-accent">Open the complete paginated list</Link>. Permissions indicate a grant, not confirmed access.</p>
       {items.some(d => !d.risk_score_stale && (d.risk_level === 'critical' || d.risk_level === 'high')) && (
         <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5 text-sm text-red-400">
           <ShieldAlert className="w-4 h-4" />

@@ -38,7 +38,8 @@ export default function DiscoveryList() {
   }
 
   const [searchInput, setSearchInput] = useState(filters.search || '')
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const selectionKey = searchParams.toString()
+  const [selection, setSelection] = useState({ key: selectionKey, ids: new Set<string>() })
   const [showFilters, setShowFilters] = useState(false)
   const [confirmExport, setConfirmExport] = useState(false)
   const canEdit = useAuthStore(s => s.user?.role !== 'viewer')
@@ -46,7 +47,7 @@ export default function DiscoveryList() {
     mutationFn: () => exportDetections(filters),
     onSuccess: ({ blob, filename }) => { downloadBlob(blob, filename); setConfirmExport(false) },
   })
-  useEffect(() => { setSelectedIds(new Set()); setSearchInput(searchParams.get('search') || '') }, [searchParams])
+  useEffect(() => { setConfirmExport(false); setSearchInput(searchParams.get('search') || '') }, [searchParams])
 
   const setFilter = useCallback((key: string, value: string | undefined) => {
     const next = new URLSearchParams(searchParams)
@@ -55,11 +56,23 @@ export default function DiscoveryList() {
     setSearchParams(next)
   }, [searchParams, setSearchParams])
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isError, isFetching, isPlaceholderData, refetch } = useQuery({
     queryKey: ['detections', Object.fromEntries(searchParams)],
     queryFn: () => listDetections(filters),
-    placeholderData: (prev: any) => prev,
+    placeholderData: prev => prev,
   })
+  const actionsDisabled = isLoading || isError || isPlaceholderData
+  const selectedIds = new Set(!actionsDisabled && selection.key === selectionKey
+    ? [...selection.ids].filter(id => data?.items.some(d => d.detection_id === id)) : [])
+  const setSelectedIds = (ids: Set<string>) => setSelection({ key: selectionKey, ids })
+
+  useEffect(() => {
+    setSelection(current => {
+      const ids = current.key === selectionKey && !isPlaceholderData && !isError
+        ? new Set([...current.ids].filter(id => data?.items.some(d => d.detection_id === id))) : new Set<string>()
+      return current.key === selectionKey && ids.size === current.ids.size ? current : { key: selectionKey, ids }
+    })
+  }, [selectionKey, data?.items, isPlaceholderData, isError])
 
   const bulkMutation = useMutation({
     mutationFn: async ({ ids, classification }: { ids: string[]; classification: string }) => {
@@ -81,9 +94,9 @@ export default function DiscoveryList() {
       setSearchParams(next)
     }
   }
-  const toggleSelect = (id: string) => { const n = new Set(selectedIds); n.has(id) ? n.delete(id) : n.add(id); setSelectedIds(n) }
+  const toggleSelect = (id: string) => { if (actionsDisabled) return; const n = new Set(selectedIds); n.has(id) ? n.delete(id) : n.add(id); setSelectedIds(n) }
   const toggleSelectAll = () => {
-    if (!data) return
+    if (!data || actionsDisabled) return
     setSelectedIds(selectedIds.size === data.items.length ? new Set() : new Set(data.items.map(d => d.detection_id)))
   }
 
@@ -107,6 +120,7 @@ export default function DiscoveryList() {
         <h1 className="text-2xl font-bold tracking-tight">Discoveries</h1>
         <span className="text-sm text-slate-400">{data ? `${data.total} results` : 'Loading results…'}</span>
       </div>
+      {isFetching && !isLoading && <p role="status" className="text-sm text-slate-400">Updating results…</p>}
 
       {/* Search + filter toggle */}
       <div className="flex flex-wrap gap-3 items-center">
@@ -122,11 +136,11 @@ export default function DiscoveryList() {
           <Filter className="w-4 h-4" /> Filters
           {activeFilterCount > 0 && <span className="w-5 h-5 rounded-full bg-accent text-surface-950 text-[10px] font-bold flex items-center justify-center">{activeFilterCount}</span>}
         </button>
-        <button disabled={!data?.items.length} onClick={() => downloadCsv([['Tool','Type','Classification','Risk','Events','Last seen'], ...(data?.items.map(d=>[d.entity_name,d.entity_type,d.classification,d.risk_score_stale ? 'Needs recalculation' : d.risk_score,d.total_events_count,d.last_seen_at]) || [])], 'open-shadow-ai-visible-discoveries.csv')} className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-800 text-slate-400 border border-surface-600/40 rounded-lg hover:text-slate-200 transition-colors">
+        <button disabled={actionsDisabled || !data?.items.length} onClick={() => downloadCsv([['Tool','Type','Classification','Risk','Events','Last seen'], ...(data?.items.map(d=>[d.entity_name,d.entity_type,d.classification,d.risk_score_stale ? 'Needs recalculation' : d.risk_score,d.total_events_count,d.last_seen_at]) || [])], 'open-shadow-ai-visible-discoveries.csv')} className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-800 text-slate-400 border border-surface-600/40 rounded-lg hover:text-slate-200 transition-colors">
           <Download className="w-4 h-4" /> Export page
         </button>
         {canEdit && (
-          <button disabled={!data?.total} onClick={() => { exportAll.reset(); setConfirmExport(true) }} aria-expanded={confirmExport} aria-controls="export-all"
+          <button disabled={actionsDisabled || !data?.total} onClick={() => { exportAll.reset(); setConfirmExport(true) }} aria-expanded={confirmExport} aria-controls="export-all"
             className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-800 text-slate-400 border border-surface-600/40 rounded-lg hover:text-slate-200 transition-colors">
             <Download className="w-4 h-4" /> Export all
           </button>
@@ -138,7 +152,7 @@ export default function DiscoveryList() {
           <h2 id="export-all-title" className="text-sm font-medium">Export all {data?.total ?? 0} matching discoveries</h2>
           <p className="text-xs text-slate-400 leading-relaxed">{ANTI_HR_NOTICE} The server records this export, with its filters, in the audit log.</p>
           <div className="flex gap-2">
-            <button onClick={() => exportAll.mutate()} disabled={exportAll.isPending} className="primary-button">{exportAll.isPending ? 'Exporting…' : 'Confirm export'}</button>
+            <button onClick={() => exportAll.mutate()} disabled={actionsDisabled || exportAll.isPending} className="primary-button">{exportAll.isPending ? 'Exporting…' : 'Confirm export'}</button>
             <button onClick={() => setConfirmExport(false)} className="secondary-button">Cancel</button>
           </div>
           {exportAll.isError && <p role="alert" className="text-xs text-red-400">The export could not be completed. Check your role and try again.</p>}
@@ -175,7 +189,7 @@ export default function DiscoveryList() {
           <span className="text-sm text-accent font-medium">{selectedIds.size} selected</span>
           <div className="flex gap-2">
             {(['sanctioned', 'tolerated', 'unsanctioned'] as const).map(cls => (
-              <button disabled={bulkMutation.isPending} key={cls} onClick={() => bulkMutation.mutate({ ids: Array.from(selectedIds), classification: cls })}
+              <button disabled={actionsDisabled || bulkMutation.isPending} key={cls} onClick={() => bulkMutation.mutate({ ids: Array.from(selectedIds), classification: cls })}
                 className="px-3 py-1 text-xs bg-surface-700 text-slate-300 rounded hover:bg-surface-600 transition-colors capitalize">{cls}</button>
             ))}
           </div>
@@ -195,7 +209,7 @@ export default function DiscoveryList() {
               <thead>
                 <tr className="border-b border-surface-600/30 text-left text-xs text-slate-500 uppercase tracking-wider">
                   <th className="px-4 py-3 w-10">
-                    <input aria-label="Select visible discoveries" disabled={!canEdit || bulkMutation.isPending} type="checkbox" checked={data ? selectedIds.size === data.items.length && data.items.length > 0 : false}
+                    <input aria-label="Select visible discoveries" disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={data ? selectedIds.size === data.items.length && data.items.length > 0 : false}
                       onChange={toggleSelectAll} className="rounded bg-surface-900 border-surface-600" />
                   </th>
                   <SortHeader col="entity_name" label="AI Tool" />
@@ -220,7 +234,7 @@ export default function DiscoveryList() {
                 {data?.items.map((d) => (
                   <tr key={d.detection_id} className="data-row cursor-pointer group">
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <input aria-label={`Select ${d.entity_name}`} disabled={!canEdit || bulkMutation.isPending} type="checkbox" checked={selectedIds.has(d.detection_id)} onChange={() => toggleSelect(d.detection_id)}
+                      <input aria-label={`Select ${d.entity_name}`} disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={selectedIds.has(d.detection_id)} onChange={() => toggleSelect(d.detection_id)}
                         className="rounded bg-surface-900 border-surface-600" />
                     </td>
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}>

@@ -11,7 +11,7 @@ from shadai.config import get_config
 from shadai.database import get_redis, postgres_session_factory
 from shadai.engine.catalog_cache import CatalogCache
 from shadai.engine.catalog_loader import load_database_catalog
-from shadai.engine.matcher import CatalogMatcher
+from shadai.engine.matcher import AMBIGUOUS_MATCH_FIELD, CatalogMatcher
 from shadai.models.event import CanonicalEvent
 
 SOURCE_TYPES = ("dns", "proxy", "endpoint", "browser", "oauth", "directory", "instrumented", "casb")
@@ -56,11 +56,17 @@ def prepare_event(
         event.match_confidence = 0
     if matcher is not None and has_transient_signals(event):
         # Evaluated in memory only: the catalog match is kept, the path and user agent are not.
-        match = matcher.match_event(event)
+        resolution = matcher.resolve_event(event)
+        match = resolution.match
         if match is not None:
             event.catalog_match_id = match.catalog_item_id
             event.match_field = match.matched_field
             event.match_confidence = match.match_confidence
+        elif resolution.ambiguous:
+            # The worker cannot safely re-evaluate weaker evidence after these signals disappear.
+            event.catalog_match_id = ""
+            event.match_field = AMBIGUOUS_MATCH_FIELD
+            event.match_confidence = 0
     # Paths are deliberately discarded at the common ingestion boundary; free-form URL
     # components and process paths may contain credentials or prompt text.
     event.url_path = ""

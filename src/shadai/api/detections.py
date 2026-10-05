@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -249,7 +250,9 @@ async def add_note(
     current_user: UserORM = Depends(require_role("analyst")),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
-    result = await session.execute(select(DetectionORM).where(DetectionORM.detection_id == detection_id))
+    result = await session.execute(
+        select(DetectionORM).where(DetectionORM.detection_id == detection_id).with_for_update()
+    )
     detection = result.scalar_one_or_none()
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found")
@@ -260,6 +263,17 @@ async def add_note(
     detection.analyst_notes = f"{existing}\n{note_line}".strip()
     detection.analyst_id = current_user.user_id
     detection.reviewed_at = datetime.now(UTC)
+
+    await log_audit(
+        session,
+        current_user.user_id,
+        current_user.username,
+        "update_detection",
+        resource_type="detection",
+        resource_id=str(detection_id),
+        details={"note_added": True},
+        ip_address=request.client.host if request and request.client else None,
+    )
 
     return {"message": "Note added"}
 
@@ -284,7 +298,8 @@ async def get_detection_events(
     ch = get_clickhouse()
     offset = (page - 1) * page_size
 
-    events = ch.execute(
+    events = await asyncio.to_thread(
+        ch.execute,
         """
         SELECT * FROM (
             SELECT * FROM events WHERE catalog_match_id = %(cid)s AND tenant_id = %(tenant)s
@@ -294,9 +309,12 @@ async def get_detection_events(
         {"cid": catalog_item_id, "tenant": get_config().tenant_id, "limit": page_size, "offset": offset},
     )
 
-    total = ch.execute(
-        "SELECT uniqExact(event_id) FROM events WHERE catalog_match_id = %(cid)s AND tenant_id = %(tenant)s",
-        {"cid": catalog_item_id, "tenant": get_config().tenant_id},
+    total = (
+        await asyncio.to_thread(
+            ch.execute,
+            "SELECT uniqExact(event_id) FROM events WHERE catalog_match_id = %(cid)s AND tenant_id = %(tenant)s",
+            {"cid": catalog_item_id, "tenant": get_config().tenant_id},
+        )
     )[0][0]
 
     return {"items": events, "total": total, "page": page, "page_size": page_size}
