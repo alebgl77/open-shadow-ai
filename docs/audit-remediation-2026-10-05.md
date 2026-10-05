@@ -37,12 +37,18 @@ The following local results were recorded while preparing this change set:
 | Frontend | `npm test`: 59 tests passed across 8 files; `npm run build`: TypeScript and Vite passed. |
 | Detection, governance and security regressions | `python -m pytest tests/test_detection_remediation.py tests/test_governance.py tests/test_security.py tests/test_integration.py -q`: 53 passed, including 11 new detection regressions; 3 integrations skipped without services. |
 | Evidence and agent regressions | `python -m pytest tests/test_evidence_remediation.py tests/test_agent_remediation.py tests/test_catalog_dashboard.py tests/test_transient_signals.py tests/test_parsers.py tests/test_agent.py -q`: 100 passed. |
-| Proxy and session regressions | `python -m pytest tests/test_proxy_rate_limit.py tests/test_sessions.py -q`: 14 passed. |
+| Proxy and session regressions | `python -m pytest tests/test_proxy_rate_limit.py tests/test_sessions.py -q`: 15 passed, including integration collection with an isolated copy of the proxy tests and no deployment assets. |
 | Windows permission boundaries | `scripts/test-bootstrap-security.ps1 -BoundaryOnly`: passed on PowerShell 7 and Windows PowerShell 5.1 outside the sandbox. This does not execute the full secret-generation/repeat-run path. |
+| Windows subprocess and cleanup regressions | The harness exercises PowerShell 7 → Python → Windows PowerShell 5.1 with an inherited Core module path, checking child module-path isolation without changing either parent environment. The cleanup prefix now normalizes trailing separators; parsing and 9 in-memory boundary cases passed on both PowerShell versions, including drive roots and sibling refusal, without deleting files. Complete bootstrap execution remains pending in CI. |
 | Changed Python files | Targeted Ruff checks and formatting checks passed for the completed API/evidence/proxy lots. |
-| Final complete regression run | `python -m pytest -q`: 322 passed, 3 integrations skipped, 2 warnings, 15.41 seconds. These totals include the subsets above. |
+| Final complete regression run | `python -m pytest -q`: 323 passed, 3 integrations skipped, 2 warnings, 17.73 seconds. These totals include the subsets above. |
 | Final combined lint and review | Ruff passed for `src`, `tests`, `agent/shadai_agent` and `scripts/bootstrap.py`. Independent code review approved after the ancestor-permission and concurrent-note fixes; no remaining code blocker was reported. |
 | Final CI and real-store checks | Pending. Record the tested commit, run link and job results after execution. |
+
+The [first CI run](https://github.com/alebgl77/open-shadow-ai/actions/runs/37367556770)
+exposed Windows subprocess module-path compatibility and collection-time reads of
+deployment files absent from the integration image. Both have been corrected;
+the complete CI rerun is still pending. That first run is not a complete success.
 
 On the Windows workstation, Python tests used unique `--basetemp` directories
 under `tmp/`. Frontend commands used the installed Node executable and npm CLI;

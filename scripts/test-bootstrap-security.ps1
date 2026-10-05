@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$Python = 'python', [switch]$BoundaryOnly)
+param([string]$Python = 'python', [switch]$BoundaryOnly, [string]$TemporaryDirectory)
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'These tests require real Windows filesystem ACLs.' }
 . (Join-Path $PSScriptRoot 'Protect-BootstrapWindows.ps1')
@@ -37,7 +37,7 @@ function Add-PublicRule {
 }
 
 $workspace = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$temporary = Join-Path $workspace 'tmp'
+$temporary = if ($TemporaryDirectory) { [IO.Path]::GetFullPath($TemporaryDirectory) } else { Join-Path $workspace 'tmp' }
 [IO.Directory]::CreateDirectory($temporary) | Out-Null
 $testRoot = Join-Path $temporary ('bootstrap-security-' + [guid]::NewGuid().ToString('N'))
 $junctions = [Collections.Generic.List[string]]::new()
@@ -98,6 +98,47 @@ try {
     Assert-True (@(Get-ChildItem -LiteralPath $outside -Force).Count -eq 0) 'Junction target changed.'
     Write-Output 'PASS: real Windows creation DACL, safe repeat, explicit directory/file ACE rejection, owner classification, ancestor rights and junction refusal.'
 
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        # Pollute only the Python subprocess, never the harness or the user's environment.
+        $moduleRegression = @'
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+source, root, core_modules, boundary = sys.argv[1:]
+target = Path(root) / "module-path-deployment"
+parent_environment = os.environ.copy()
+child_environment = parent_environment.copy()
+child_environment["PSMODULEPATH"] = core_modules
+program = """
+import os
+import runpy
+import sys
+from pathlib import Path
+bootstrap = runpy.run_path(sys.argv[1])["bootstrap"]
+before = os.environ.copy()
+try:
+    bootstrap(Path(sys.argv[2]))
+finally:
+    assert os.environ == before, "Bootstrap changed its parent Python environment"
+"""
+result = subprocess.run([sys.executable, "-c", program, source, str(target)],
+                        env=child_environment, capture_output=True, text=True)
+assert os.environ == parent_environment, "Harness changed its process environment"
+if result.returncode:
+    diagnostic = result.stdout + result.stderr
+    assert boundary == "True" and ("Unsafe ACL" in diagnostic or "Untrusted owner" in diagnostic), diagnostic
+    assert not target.exists(), "Refused bootstrap wrote files"
+    print("PASS: Core module-path isolation reaches the expected ancestor ACL refusal; no files generated.")
+else:
+    assert len(list((target / "secrets").glob("*.txt"))) == 6
+    print("PASS: Core module-path isolation generates six private secrets without changing parent environments.")
+'@
+        & $Python -c $moduleRegression (Join-Path $PSScriptRoot 'bootstrap.py') $testRoot (Join-Path $PSHOME 'Modules') ([string][bool]$BoundaryOnly)
+        if ($LASTEXITCODE -ne 0) { throw 'Child PowerShell module-path regression failed.' }
+    }
+
     if (-not $BoundaryOnly) {
         $deployment = Join-Path $testRoot 'deployment'
         & (Join-Path $PSScriptRoot 'bootstrap.ps1') -Directory $deployment -Python $Python -DryRun
@@ -122,10 +163,11 @@ try {
         Write-Output 'LIMIT: BoundaryOnly skips complete bootstrap; ancestor ownership/DACL trust must be verified in Windows CI.'
     }
 } finally {
-    # Delete only this generated workspace fixture; remove junction links before recursive cleanup.
+    # Delete only this generated fixture below the explicit temporary root; remove junction links first.
     $resolved = [IO.Path]::GetFullPath($testRoot)
-    if (-not $resolved.StartsWith($temporary + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Refusing cleanup outside the workspace temporary directory.'
+    $temporaryPrefix = $temporary.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($temporaryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Refusing cleanup outside the selected temporary directory.'
     }
     foreach ($junction in $junctions) { [IO.Directory]::Delete($junction) }
     Get-ChildItem -LiteralPath $resolved -Recurse -File -Force | ForEach-Object { $_.IsReadOnly = $false }

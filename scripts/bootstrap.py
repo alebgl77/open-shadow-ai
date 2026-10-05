@@ -15,10 +15,14 @@ def bootstrap(destination: Path, dry_run: bool = False) -> None:
     destination = Path(os.path.abspath(destination))
     if os.name == "nt" and not dry_run:
         powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        # A Python process started by pwsh inherits its incompatible Core module path.
+        # Windows os.environ keys are uppercase; update that key in a child-only copy.
+        child_environment = os.environ.copy()
+        child_environment["PSMODULEPATH"] = str(powershell.parent / "Modules")
         subprocess.run([
             str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
             str(source / "scripts/Protect-BootstrapWindows.ps1"), "-Directory", str(destination),
-        ], check=True)
+        ], check=True, env=child_environment)
     else:
         destination = destination.resolve()
     generated = {
