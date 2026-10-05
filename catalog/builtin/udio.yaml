@@ -1,18 +1,16 @@
-id: grok
-canonical_name: Grok
-category: llm_chat
-vendor: xAI
-description: xAI chatbot
+id: udio
+canonical_name: Udio
+category: voice_ai
+vendor: Udio
+description: AI music generation
 rule_tags:
-- llm
-- chat
+- audio
+- music
+- gen
 - saas
 signatures:
   domains:
-  - grok.x.ai
-  - api.x.ai
-  - console.x.ai
-  - grok.com
+  - udio.com
   url_patterns: []
   processes: []
   extension_ids: []

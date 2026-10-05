@@ -71,6 +71,7 @@ Optional [OIDC sign-in and SCIM provisioning](docs/sso-scim.md) manage access to
 |---|---|
 | React investigation interface, catalog and governance workflow | Implemented; evaluate with your data |
 | DNS/proxy parsers and syslog collector | Implemented; parser and listener must match the source |
+| [Passive network analysis](docs/network-analysis.md) | Zeek/Suricata/TShark metadata imports, optional offline PCAP or explicit live sensor, and `/network` evidence view; observed names do not prove AI requests |
 | Endpoint agent | Implemented process/container/runtime/extension inventory; OS and fleet rollout verification pending |
 | Microsoft Entra collector | Implemented service-principal inventory and optional grants; AI matching requires reviewed application-ID mappings; live tenant validation pending |
 | On-prem Active Directory | OU-scoped read-only PowerShell exporter; RSAT/live AD validation pending |

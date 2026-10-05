@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -121,6 +122,24 @@ def order_detections(query, sort_by: str, sort_order: str):
     return query.order_by(column.asc() if sort_order == "asc" else column.desc(), DetectionORM.detection_id)
 
 
+def detection_for_role(detection: DetectionORM, user: UserORM) -> DetectionRead:
+    """Raw network observations require the same role as the network event API."""
+    result = DetectionRead.model_validate(detection)
+    if getattr(user, "role", None) in {"analyst", "admin"}:
+        return result
+    # Pydantic may retain references to nested JSON values from the ORM. Redact a
+    # private copy, so a viewer response cannot erase evidence for later analysts.
+    result.evidence_bundle = deepcopy(result.evidence_bundle)
+    network = result.evidence_bundle.get("network")
+    if isinstance(network, dict):
+        # Remove the entire field without trusting a historical value's structure.
+        network.pop("network_observations", None)
+    elif "network" in result.evidence_bundle:
+        # Malformed legacy sections have no trustworthy summary shape to expose.
+        result.evidence_bundle.pop("network")
+    return result
+
+
 # Also served without the trailing slash: a redirect breaks behind TLS-terminating proxies.
 @router.get("", response_model=DetectionListResponse, include_in_schema=False)
 @router.get("/", response_model=DetectionListResponse)
@@ -161,7 +180,7 @@ async def list_detections(
     detections = result.scalars().all()
 
     return DetectionListResponse(
-        items=[DetectionRead.model_validate(d) for d in detections],
+        items=[detection_for_role(d, _user) for d in detections],
         total=total,
         page=page,
         page_size=page_size,
@@ -178,7 +197,7 @@ async def get_detection(
     detection = result.scalar_one_or_none()
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found")
-    return DetectionRead.model_validate(detection)
+    return detection_for_role(detection, _user)
 
 
 @router.patch("/{detection_id}", response_model=DetectionRead)

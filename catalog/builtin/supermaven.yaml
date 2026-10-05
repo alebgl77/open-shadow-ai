@@ -1,19 +1,15 @@
-id: codeium
-canonical_name: Codeium
+id: supermaven
+canonical_name: Supermaven
 category: code_assistant
-vendor: Codeium
-description: Free AI code completion
+vendor: Supermaven
+description: Legacy AI autocomplete for existing Neovim and JetBrains customers; new subscriptions closed
 rule_tags:
 - llm
 - code
 - saas
 signatures:
   domains:
-  - codeium.com
-  - api.codeium.com
-  - server.codeium.com
-  - windsurf.com
-  - codeiumdata.com
+  - supermaven.com
   url_patterns: []
   processes: []
   extension_ids: []
@@ -22,6 +18,5 @@ signatures:
   local_paths: []
   container_patterns: []
   user_agent_patterns: []
-aliases:
-- Windsurf
+aliases: []
 default_trust_level: unknown

@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Search, Users, Key, Puzzle, Cpu, Shield, BookOpen, Database, Settings, LogOut, X, ArrowUpRight } from 'lucide-react'
+import { LayoutDashboard, Search, Users, Key, Puzzle, Cpu, Shield, BookOpen, Database, Settings, LogOut, X, ArrowUpRight, Network } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import { logout as revokeSession } from '@/api/auth'
 import Brand from '@/components/ui/Brand'
 import clsx from 'clsx'
 const sections = [
   { label: 'Workspace', items: [[ '/dashboard', LayoutDashboard, 'Overview'], ['/discoveries', Search, 'Discoveries'], ['/users', Users, 'Identity signals']] },
-  { label: 'Explore', items: [['/oauth-apps', Key, 'OAuth apps'], ['/extensions', Puzzle, 'Extensions'], ['/local-ai', Cpu, 'Local AI']] },
+  { label: 'Explore', items: [['/network', Network, 'Network'], ['/oauth-apps', Key, 'OAuth apps'], ['/extensions', Puzzle, 'Extensions'], ['/local-ai', Cpu, 'Local AI']] },
   { label: 'Governance', items: [['/governance', Shield, 'Policies'], ['/catalog', BookOpen, 'AI catalog'], ['/sources', Database, 'Sources']] },
   { label: 'Administration', admin: true, items: [['/settings', Settings, 'Settings']] },
 ]

@@ -20,6 +20,18 @@ jobs:
       - run: python -m ruff check src tests agent/shadai_agent migrations
       - run: python -m pytest -q
       - run: python scripts/verify-deployment.py
+  network-sensor:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install .
+      - name: Install offline dissector (no capture permissions)
+        run: sudo env DEBIAN_FRONTEND=noninteractive apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y tshark
+      - name: Verify real offline DNS, IPv6, HTTP, TLS and QUIC metadata
+        run: python scripts/test-network-sensor.py
   frontend:
     runs-on: ubuntu-24.04-arm
     steps:
@@ -56,6 +68,10 @@ jobs:
           # A hosted checkout may inherit broad D:\a ACLs; use trusted profile ancestors.
           ./scripts/test-bootstrap-security.ps1 -TemporaryDirectory "$env:USERPROFILE/osa-bootstrap-tests"
           ./scripts/Export-ActiveDirectory.ps1 -SearchBase 'OU=Pilot,DC=example,DC=com' -OutputDirectory "$env:RUNNER_TEMP/osa-ad" -WhatIf
+      - name: Install package for native collector credential checks
+        run: python -m pip install .
+      - name: Verify real Windows collector key-file DACLs
+        run: python scripts/test-network-key-acl.py
   compose-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
