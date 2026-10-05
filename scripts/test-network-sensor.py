@@ -14,6 +14,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 
 from cryptography.hazmat.primitives import hashes, hmac
@@ -126,36 +128,66 @@ def write_fixture(path: Path) -> None:
             output.write(value)
 
 
-def main() -> int:
+def main(argv=None) -> int:
     args = argparse.ArgumentParser(description=__doc__)
     args.add_argument("--tshark-binary", default="tshark")
     args.add_argument("--write-fixture", type=Path, help="Only create the benign fixture; never invoke capture")
-    options = args.parse_args()
+    options = args.parse_args(argv)
     if options.write_fixture:
         write_fixture(options.write_fixture)
         return 0
+    stage = "capability_probe"
+    diagnostics = {}
     try:
         ech = tshark_has_ech_field(options.tshark_binary)
+        diagnostics["ech_field"] = ech
         with tempfile.TemporaryDirectory(prefix="shadai-offline-network-") as directory:
+            stage = "fixture_generation"
             pcap = Path(directory) / "synthetic.pcap"
             write_fixture(pcap)
             command = tshark_command(options.tshark_binary, pcap=str(pcap), ech_field=ech)
+            stage = "offline_dissection"
             result = subprocess.run(command, capture_output=True, timeout=30, check=True)
+            stage = "metadata_parse"
             parser = network_parser("tshark", "ci-offline-synthetic")
-            events = [event for line in result.stdout.decode().splitlines() for event in parser.parse_record(line)]
+            events = []
+            for index, line in enumerate(result.stdout.decode().splitlines()):
+                diagnostics["export_row"] = index
+                events.extend(parser.parse_record(line))
+            diagnostics["observations"] = len(events)
+            diagnostics["protocol_counts"] = dict(Counter(event.protocol for event in events))
+            diagnostics["parser_stats"] = asdict(parser.stats)
             expected = {("DNS", "dns.example.test"), ("DNS", "ipv6.example.test"),
                         ("HTTP", "http.example.test"), ("TLS", "tls.example.test"),
                         ("QUIC", "quic.example.test")}
             actual = {(event.protocol, event.domain) for event in events}
+            diagnostics["missing_expected"] = sorted(expected - actual)
+            stage = "protocol_assertions"
             assert expected <= actual, "Real TShark dissectors did not expose all synthetic protocols"
+            stage = "ipv6_assertion"
             assert any(event.protocol == "DNS" and ":" in event.src_ip for event in events)
+            stage = "privacy_assertion"
             assert all(not event.username and not event.model and event.cost_usd is None for event in events)
             if ech:
+                stage = "ech_assertion"
                 assert parser.stats.ech_offered == 1 and ("TLS", "outer.example.test") not in actual
             print(json.dumps({"offline_tshark_smoke": "passed", "observations": len(events), "ech_field": ech}))
         return 0
-    except (AssertionError, ValueError, OSError, subprocess.SubprocessError):
-        print("offline_tshark_smoke failed; requires real TShark metadata dissectors", file=sys.stderr)
+    except (AssertionError, ValueError, OSError, subprocess.SubprocessError) as error:
+        failure = {"offline_tshark_smoke": "failed", "stage": stage, "error_type": type(error).__name__,
+                   **diagnostics}
+        # Only fixed, production-safe probe messages are surfaced. The fixture's
+        # counts and missing expected names are synthetic; stderr/commands/packets
+        # and arbitrary exception text are never dumped.
+        safe_reasons = {
+            "TShark capability probe failed", "TShark capability probe exceeded metadata bounds",
+            "TShark capability probe timed out", "invalid_metadata_record",
+        }
+        if str(error) in safe_reasons:
+            failure["reason"] = str(error)
+        if isinstance(error, subprocess.CalledProcessError):
+            failure["return_code"] = error.returncode
+        print(json.dumps(failure, sort_keys=True), file=sys.stderr)
         return 1
 
 

@@ -155,6 +155,20 @@ def test_optional_ech_capability_probe(monkeypatch, available):
     assert network.tshark_has_ech_field("tshark") is available
 
 
+def test_ech_probe_ignores_non_field_exact_abbreviation(monkeypatch):
+    import io
+
+    class Process:
+        def __init__(self, *args, **kwargs):
+            self.stdout = io.BytesIO(b"P\tExtension\t" + network.ECH_FIELD.encode() + b"\n")
+        def wait(self, **kwargs):
+            return 0
+        def poll(self):
+            return 0
+    monkeypatch.setattr(network.subprocess, "Popen", Process)
+    assert network.tshark_has_ech_field("tshark") is False
+
+
 def test_filter_exact_label_boundaries_and_no_parent_domain():
     filter_text = network.display_filter(["api.openai.com", "*.claude.ai", "api.openai.com"])
     assert "dns.flags.response == 0" in filter_text and "(?i)^" in filter_text
@@ -184,6 +198,83 @@ def test_capability_probe_output_limit(monkeypatch):
     monkeypatch.setattr(network.subprocess, "Popen", Process)
     with pytest.raises(ValueError, match="exceeded metadata bounds"):
         network.tshark_has_ech_field("tshark")
+
+
+def test_ech_probe_cumulative_limit_precedes_positive_field_and_cleans_up(monkeypatch):
+    import io
+
+    processes = []
+    class Process:
+        def __init__(self, *args, **kwargs):
+            record = b"x" * (network.MAX_LINE_BYTES - 1) + b"\n"
+            declaration = b"F\tExtension\t" + network.ECH_FIELD.encode() + b"\tFT_UINT16\n"
+            self.stdout = io.BytesIO(record * 64 + declaration)
+            self.stopped = False
+            self.reaped = False
+            processes.append(self)
+        def poll(self):
+            return None if not self.stopped else 0
+        def kill(self):
+            self.stopped = True
+        def wait(self, **kwargs):
+            self.reaped = True
+            return 0
+    monkeypatch.setattr(network.subprocess, "Popen", Process)
+    with pytest.raises(ValueError, match="exceeded metadata bounds"):
+        network.tshark_has_ech_field("tshark")
+    assert processes[0].stopped and processes[0].reaped and processes[0].stdout.closed
+
+
+def test_positive_ech_probe_stops_before_large_remaining_registry(monkeypatch):
+    import io
+
+    processes = []
+    class Process:
+        def __init__(self, *args, **kwargs):
+            declaration = b"F\tExtension\t" + network.ECH_FIELD.encode() + b"\tFT_UINT16\n"
+            self.stdout = io.BytesIO(declaration + b"x" * (network.MAX_LINE_BYTES + 1) + b"\n")
+            self.stopped = False
+            processes.append(self)
+        def poll(self):
+            return None if not self.stopped else 0
+        def kill(self):
+            self.stopped = True
+        def wait(self, **kwargs):
+            return 0
+    monkeypatch.setattr(network.subprocess, "Popen", Process)
+    assert network.tshark_has_ech_field("tshark") is True
+    assert processes[0].stopped and processes[0].stdout.closed
+
+
+def test_smoke_failure_reports_synthetic_stage_without_arbitrary_exception_text(monkeypatch, capsys):
+    import runpy
+    from pathlib import Path
+
+    script = runpy.run_path(str(Path("scripts/test-network-sensor.py")))
+    def fail(_):
+        raise ValueError("never-display-arbitrary-secret")
+    monkeypatch.setitem(script["main"].__globals__, "tshark_has_ech_field", fail)
+    assert script["main"]([]) == 1
+    captured = capsys.readouterr()
+    failure = json.loads(captured.err)
+    assert failure["stage"] == "capability_probe" and failure["error_type"] == "ValueError"
+    assert "never-display-arbitrary-secret" not in captured.out + captured.err
+
+
+def test_smoke_missing_protocol_diagnostics_preserve_mandatory_assertions(monkeypatch, capsys):
+    import runpy
+    from pathlib import Path
+
+    script = runpy.run_path(str(Path("scripts/test-network-sensor.py")))
+    monkeypatch.setitem(script["main"].__globals__, "tshark_has_ech_field", lambda _: False)
+    export_header = "\t".join(network.TSHARK_FIELDS).encode() + b"\n"
+    monkeypatch.setattr(script["main"].__globals__["subprocess"], "run",
+                        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=export_header))
+    assert script["main"]([]) == 1
+    failure = json.loads(capsys.readouterr().err)
+    assert failure["stage"] == "protocol_assertions" and failure["observations"] == 0
+    assert len(failure["missing_expected"]) == 5
+    assert failure["protocol_counts"] == {}
 
 
 def test_offline_fixture_is_deterministic_and_benign(tmp_path):

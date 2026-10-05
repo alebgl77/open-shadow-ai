@@ -55,25 +55,39 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
     item = CatalogItemRead(
         catalog_item_id=item_id, canonical_name="Network fixture", category="ai_platform", domains=[domain]
     )
+    anchor = (datetime.now(UTC) - timedelta(seconds=2)).replace(microsecond=900000)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is UTC
+            return anchor
+
     events = [
         CanonicalEvent(
             source_type="network", protocol="DNS", domain=domain, collector_id="fixture-sensor", tenant_id=tenant,
+            timestamp=anchor - timedelta(hours=24),
         ),
         CanonicalEvent(
             source_type="network", protocol="TLS", sni=domain, collector_id="fixture-sensor", tenant_id=tenant,
+            timestamp=anchor,
         ),
         CanonicalEvent(
             source_type="network", protocol="QUIC", collector_id="nameless-sensor", tenant_id=tenant,
-            dst_ip="192.0.2.1", dst_port=443,
+            dst_ip="192.0.2.1", dst_port=443, timestamp=anchor - timedelta(milliseconds=100),
         ),
         CanonicalEvent(
             source_type="network", protocol="HTTP", url_host="unknown.example.test", collector_id="fixture-sensor",
-            tenant_id=tenant,
+            tenant_id=tenant, timestamp=anchor - timedelta(milliseconds=200),
         ),
     ]
     stale = CanonicalEvent(
         source_type="network", protocol="DNS", domain=domain, collector_id="fixture-sensor", tenant_id=tenant,
-        timestamp=datetime.now(UTC) - timedelta(hours=25),
+        timestamp=anchor - timedelta(hours=24, milliseconds=1),
+    )
+    future = CanonicalEvent(
+        source_type="network", protocol="DNS", domain=domain, collector_id="fixture-sensor", tenant_id=tenant,
+        timestamp=anchor + timedelta(milliseconds=1),
     )
     foreign = CanonicalEvent(
         source_type="network", protocol="DNS", domain=domain, collector_id="foreign-sensor", tenant_id=foreign_tenant,
@@ -86,7 +100,7 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
         SimpleNamespace(xadd=isolated_xadd), ch, sessions, CatalogMatcher(build_catalog_index([item]))
     )
     try:
-        for event in events + [stale]:
+        for event in events + [stale, future]:
             await processor({"data": prepare_event(event).model_dump_json()})
         # Successful receipt retries must not create rows or duplicate matched records.
         await asyncio.gather(*[processor({"data": events[0].model_dump_json()}) for _ in range(3)])
@@ -96,6 +110,7 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
         await asyncio.to_thread(ch.execute, f"INSERT INTO events ({columns}) VALUES", [values])
         await asyncio.to_thread(ch.execute, f"INSERT INTO events ({columns}) VALUES", [foreign.to_clickhouse_dict()])
         monkeypatch.setattr(network, "get_clickhouse", lambda: ch)
+        monkeypatch.setattr(network, "datetime", FrozenDatetime)
         overview = await network.get_network_overview(hours=24, _user=SimpleNamespace(role="analyst"))
         assert overview.total_observations == 4
         assert overview.named_observations == 3
@@ -118,13 +133,15 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
         )
         assert tls.total == 1 and tls.items[0].event_id == events[1].event_id
         assert tls.items[0].catalog_match_id == item_id
-        assert await redis.xlen(stream) == 3  # DNS, TLS and the stale DNS fixture only.
+        assert await redis.xlen(stream) == 4  # DNS, TLS and both out-of-window DNS fixtures.
     finally:
         # Own UUID tenant/receipt/stream fixtures only; never touch an operator's observations.
         await redis.delete(stream)
         async with sessions.begin() as session:
             await session.execute(
-                delete(IngestReceiptORM).where(IngestReceiptORM.event_id.in_([e.event_id for e in events + [stale]]))
+                delete(IngestReceiptORM).where(
+                    IngestReceiptORM.event_id.in_([e.event_id for e in events + [stale, future]])
+                )
             )
         await asyncio.to_thread(
             ch.execute,

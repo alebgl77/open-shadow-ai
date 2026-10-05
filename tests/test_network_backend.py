@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 from uuid import uuid4
 
 import pytest
+from clickhouse_driver.util.escape import escape_params
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -328,6 +329,32 @@ def network_client(monkeypatch):
     app.dependency_overrides.pop(get_current_user, None)
 
 
+@pytest.mark.parametrize("server_timezone", ["UTC", "America/New_York"])
+def test_network_window_retains_fractional_utc_bounds_through_driver_escaping(monkeypatch, server_timezone):
+    frozen = datetime(2026, 10, 6, 22, 35, 58, 654321, tzinfo=UTC)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is UTC
+            return frozen
+
+    monkeypatch.setattr(network, "datetime", FrozenDatetime)
+    query, params = network._window(48, "TLS")
+    assert params == {
+        "tenant": "test-org", "start": "2026-10-04 22:35:58.654321",
+        "end": "2026-10-06 22:35:58.654321", "protocol": "TLS",
+    }
+    context = SimpleNamespace(server_info=SimpleNamespace(get_timezone=lambda: server_timezone))
+    escaped = escape_params(params, context)
+    assert escaped["start"] == "'2026-10-04 22:35:58.654321'"
+    assert escaped["end"] == "'2026-10-06 22:35:58.654321'"
+    assert "toDateTime64('2026-10-04 22:35:58.654321', 6, 'UTC')" in query % escaped
+    assert "toDateTime64('2026-10-06 22:35:58.654321', 6, 'UTC')" in query % escaped
+    assert "tenant_id = %(tenant)s" in query and "protocol = %(protocol)s" in query
+    assert "LIMIT 1 BY event_id" in query
+
+
 def test_network_overview_real_counts_bounded_sensor_summary_and_sql_scope(network_client):
     client, calls = network_client
     response = client.get("/api/v1/network/overview?hours=48")
@@ -346,8 +373,9 @@ def test_network_overview_real_counts_bounded_sensor_summary_and_sql_scope(netwo
     for query, params, _thread in calls:
         assert "tenant_id = %(tenant)s" in query and params["tenant"] == "test-org"
         assert "source_type = 'network'" in query and "LIMIT 1 BY event_id" in query
-        assert "timestamp >= %(start)s" in query and "timestamp <= %(end)s" in query
-        assert params["end"] - params["start"] == timedelta(hours=48)
+        assert "timestamp >= toDateTime64(%(start)s, 6, 'UTC')" in query
+        assert "timestamp <= toDateTime64(%(end)s, 6, 'UTC')" in query
+        assert datetime.fromisoformat(params["end"]) - datetime.fromisoformat(params["start"]) == timedelta(hours=48)
         assert "SELECT *" not in query
 
 

@@ -79,7 +79,12 @@ def _utc(value: datetime) -> datetime:
 
 def _window(hours: int, protocol: NetworkProtocol | None = None) -> tuple[str, dict]:
     end = datetime.now(UTC)
-    params = {"tenant": get_config().tenant_id, "start": end - timedelta(hours=hours), "end": end}
+    # The driver drops datetime fractions; UTC strings retain precise window bounds.
+    params = {
+        "tenant": get_config().tenant_id,
+        "start": (end - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S.%f"),
+        "end": end.strftime("%Y-%m-%d %H:%M:%S.%f"),
+    }
     protocol_filter = ""
     if protocol is not None:
         # The protocol is a validated enum and remains a parameter, never SQL text.
@@ -88,7 +93,8 @@ def _window(hours: int, protocol: NetworkProtocol | None = None) -> tuple[str, d
     columns = ", ".join(EVENT_COLUMNS)
     base = f"""SELECT {columns} FROM events
         WHERE tenant_id = %(tenant)s AND source_type = 'network'
-        AND timestamp >= %(start)s AND timestamp <= %(end)s{protocol_filter}
+        AND timestamp >= toDateTime64(%(start)s, 6, 'UTC')
+        AND timestamp <= toDateTime64(%(end)s, 6, 'UTC'){protocol_filter}
         ORDER BY normalized_at DESC LIMIT 1 BY event_id"""
     return base, params
 

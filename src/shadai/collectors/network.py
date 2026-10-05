@@ -217,7 +217,10 @@ def tshark_has_ech_field(binary: str) -> bool:
             if total > 16 * 1024 * 1024:
                 raise ValueError("TShark capability probe exceeded metadata bounds")
             parts = line.split(b"\t")
-            supported |= len(parts) > 2 and parts[2] == ECH_FIELD.encode()
+            if len(parts) > 2 and parts[0] == b"F" and parts[2] == ECH_FIELD.encode():
+                # A positive registration is conclusive. TShark's complete registry
+                # can exceed the bound even after this field has been confirmed.
+                return True
         raise ValueError("TShark capability probe timed out")
     except (OSError, subprocess.SubprocessError):
         raise ValueError("TShark capability probe failed") from None
