@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from ipaddress import ip_address
 
 import structlog
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,7 +24,7 @@ from shadai.engine.governance import apply_policy
 from shadai.engine.scorer import Signal, compute_confidence, compute_risk, generate_reasoning_summary
 from shadai.models.catalog import CatalogItemRead
 from shadai.models.detection import DetectionORM
-from shadai.models.event import CanonicalEvent
+from shadai.models.event import NETWORK_PROTOCOLS, CanonicalEvent, NetworkProtocol, network_hostname
 from shadai.models.governance import GovernanceORM
 from shadai.models.receipts import CorrelationReceiptORM
 
@@ -46,9 +48,62 @@ def _derive_entity_type(source_type: str, category: str) -> str:
         return "browser_extension"
     if source_type == "oauth":
         return "oauth_app"
-    if source_type in ("dns", "proxy"):
+    if source_type in ("dns", "proxy", "network"):
         return "api_service" if "api" in category or "platform" in category else "saas_app"
     return "saas_app"
+
+
+class NetworkObservation(BaseModel):
+    """Allowlisted evidence JSON; this model adds no canonical/ClickHouse columns."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime
+    protocol: NetworkProtocol
+    domain: str
+    src_ip: str
+    dst_ip: str
+    dst_port: int = Field(ge=0, le=65535)
+    collector_id: str = Field(min_length=1, max_length=255)
+    event_id: uuid.UUID
+
+    @field_validator("timestamp")
+    @classmethod
+    def timestamp_utc(cls, value):
+        return CanonicalEvent.timezone_required(value)
+
+    @field_validator("domain")
+    @classmethod
+    def hostname_only(cls, value):
+        return network_hostname(value)
+
+    @field_validator("src_ip", "dst_ip")
+    @classmethod
+    def address_only(cls, value):
+        if "%" in value:
+            raise ValueError("Scoped addresses are not retained")
+        return str(ip_address(value)) if value else ""
+
+
+def _network_context(event: CanonicalEvent, previous: dict | None = None) -> dict:
+    """Bounded metadata from validated canonical fields; never retain packet content."""
+    previous = previous or {}
+    counts = {
+        protocol: max(0, int(previous.get("protocol_counts", {}).get(protocol, 0)))
+        for protocol in NETWORK_PROTOCOLS
+    }
+    counts[event.protocol] += 1
+    observation = NetworkObservation(
+        **event.model_dump(include=set(NetworkObservation.model_fields))
+    ).model_dump(mode="json")
+    observations = []
+    for value in previous.get("network_observations", [])[-9:]:
+        try:
+            observations.append(NetworkObservation.model_validate(value).model_dump(mode="json"))
+        except ValidationError:
+            # Do not propagate unknown legacy keys or malformed evidence into the allowlist.
+            continue
+    return {"protocol_counts": counts, "network_observations": observations + [observation]}
 
 
 class Correlator:
@@ -221,6 +276,7 @@ class Correlator:
                     "matched_field": match_field,
                     "confidence_base": match_confidence,
                     "sample_values": [value] if value not in ("", None) else [],
+                    **(_network_context(event) if event.source_type == "network" else {}),
                 },
                 "confidence_factors": conf_factors,
                 "risk_factors": risk_factors,
@@ -299,6 +355,8 @@ class Correlator:
         new_val = getattr(event, match_field, "")
         if new_val and new_val not in samples:
             src_ev["sample_values"] = (samples + [new_val])[-10:]
+        if event.source_type == "network":
+            src_ev.update(_network_context(event, src_ev))
         bundle[event.source_type] = src_ev
 
         # Rebuild signals from the strongest evidence for each source.
@@ -311,7 +369,8 @@ class Correlator:
                     Signal(
                         source_type=src_type,
                         confidence_base=src_data["confidence_base"],
-                        event_count=src_data.get("event_count", 1),
+                        # Repeated packets are not independent evidence of AI use.
+                        event_count=0 if src_type == "network" else src_data.get("event_count", 1),
                         match_field=src_data.get("matched_field", ""),
                     )
                 )

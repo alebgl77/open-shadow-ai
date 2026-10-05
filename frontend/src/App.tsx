@@ -17,6 +17,7 @@ import LocalAI from '@/pages/LocalAI'
 import Governance from '@/pages/Governance'
 import Catalog from '@/pages/Catalog'
 import Sources from '@/pages/Sources'
+import Network from '@/pages/Network'
 import Settings from '@/pages/Settings'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,7 @@ export default function App() {
                     <Route path="/oauth-apps" element={<OAuthApps />} />
                     <Route path="/extensions" element={<Extensions />} />
                     <Route path="/local-ai" element={<LocalAI />} />
+                    <Route path="/network" element={<Network />} />
                     <Route path="/governance" element={<Governance />} />
                     <Route path="/catalog" element={<Catalog />} />
                     <Route path="/sources" element={<Sources />} />

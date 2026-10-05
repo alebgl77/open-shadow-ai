@@ -14,7 +14,7 @@ from shadai.engine.catalog_loader import load_database_catalog
 from shadai.engine.matcher import AMBIGUOUS_MATCH_FIELD, CatalogMatcher
 from shadai.models.event import CanonicalEvent
 
-SOURCE_TYPES = ("dns", "proxy", "endpoint", "browser", "oauth", "directory", "instrumented", "casb")
+SOURCE_TYPES = ("dns", "proxy", "endpoint", "browser", "oauth", "directory", "instrumented", "casb", "network")
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingestion"])
 
 

@@ -2,11 +2,40 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
+from ipaddress import ip_address
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+NetworkProtocol = Literal["DNS", "TLS", "QUIC", "HTTP"]
+NETWORK_PROTOCOLS = ("DNS", "TLS", "QUIC", "HTTP")
+
+
+def network_hostname(value: str) -> str:
+    """Normalize a DNS name, never treating an address or URL as a service name."""
+    if not value:
+        return ""
+    host = value.lower()
+    try:
+        host = host.encode("idna").decode("ascii").removesuffix(".")
+        # Validate pre-encoded punycode too, rather than accepting an invalid A-label.
+        host.encode("ascii").decode("idna")
+    except UnicodeError:
+        raise ValueError("Network host fields require a valid DNS name") from None
+    try:
+        ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Network host fields require a DNS name, not an IP address")
+    if len(host) > 253 or any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in host.split(".")
+    ):
+        raise ValueError("Network host fields require a valid DNS name")
+    return host
 
 
 class CanonicalEvent(BaseModel):
@@ -16,9 +45,9 @@ class CanonicalEvent(BaseModel):
 
     event_id: uuid.UUID = Field(default_factory=uuid.uuid4)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    source_type: Literal["dns", "proxy", "endpoint", "browser", "oauth", "directory", "instrumented", "casb"] = (
-        "dns"  # dns, proxy, endpoint, browser, oauth, casb
-    )
+    source_type: Literal[
+        "dns", "proxy", "endpoint", "browser", "oauth", "directory", "instrumented", "casb", "network"
+    ] = "dns"
     collector_id: str = ""
     tenant_id: str = "default"
     site_id: str = "default"
@@ -89,6 +118,52 @@ class CanonicalEvent(BaseModel):
 
     @model_validator(mode="after")
     def truthful_measurements(self):
+        if self.source_type == "network":
+            if self.evidence_type != "observation" or (
+                self.model
+                or self.provider
+                or self.model_provenance != "unknown"
+                or self.measurement_provenance != "unknown"
+                or any(value is not None for value in (self.input_tokens, self.output_tokens, self.cost_usd))
+            ):
+                raise ValueError("Network observations cannot claim models, usage or measurements")
+            if any(
+                getattr(self, field)
+                for field in (
+                    "user_id", "username", "device_id", "hostname", "identity_provider", "identity_object_id",
+                    "identity_sid", "process_name", "process_path", "parent_process", "browser_name", "extension_id",
+                    "extension_name", "software_name", "service_name", "container_name", "container_image",
+                    "local_port",
+                    "oauth_app_id", "oauth_app_name", "oauth_scopes", "url_path", "user_agent", "raw_ref",
+                )
+            ):
+                raise ValueError("Network observations contain only network metadata, without identity or content")
+            if self.protocol not in NETWORK_PROTOCOLS:
+                raise ValueError("Network protocol must be DNS, TLS, QUIC or HTTP")
+            if not self.collector_id or len(self.collector_id) > 255 or len(self.parser_version) > 255:
+                raise ValueError("Network collector and parser identifiers must be bounded")
+            for field in ("src_ip", "dst_ip"):
+                value = getattr(self, field)
+                if value:
+                    try:
+                        if "%" in value:
+                            raise ValueError()
+                        setattr(self, field, str(ip_address(value)))
+                    except ValueError:
+                        raise ValueError("Network address fields require a valid IP address") from None
+            for field in ("domain", "sni", "url_host"):
+                setattr(self, field, network_hostname(getattr(self, field)))
+            if self.protocol == "DNS":
+                if self.sni or self.url_host:
+                    raise ValueError("DNS observations contain only domain")
+            elif self.protocol in ("TLS", "QUIC"):
+                if self.url_host or (self.domain and self.domain != self.sni):
+                    raise ValueError("TLS and QUIC observations require domain to equal SNI")
+                self.domain = self.sni
+            else:
+                if self.sni or (self.domain and self.domain != self.url_host):
+                    raise ValueError("HTTP observations require domain to equal the Host header")
+                self.domain = self.url_host
         if self.source_type == "directory" and self.evidence_type != "inventory":
             raise ValueError("Directory events are inventory only")
         if self.source_type == "dns" and (

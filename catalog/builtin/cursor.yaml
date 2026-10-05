@@ -12,6 +12,8 @@ signatures:
   - cursor.sh
   - api2.cursor.sh
   - www.cursor.com
+  - cursor.com
+  - cursorapi.com
   processes:
   - cursor
   - Cursor

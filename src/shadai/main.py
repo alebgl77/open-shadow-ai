@@ -22,6 +22,7 @@ from shadai.api.detections import router as detections_router
 from shadai.api.exports import router as exports_router
 from shadai.api.governance import router as governance_router
 from shadai.api.ingestion import router as ingestion_router
+from shadai.api.network import router as network_router
 from shadai.api.scim import router as scim_router
 from shadai.api.sso import router as sso_router
 from shadai.config import get_config, validate_security
@@ -84,6 +85,7 @@ app.include_router(exports_router)
 app.include_router(audit_router)
 app.include_router(agent_router)
 app.include_router(ingestion_router)
+app.include_router(network_router)
 app.include_router(scim_router)
 app.include_router(sso_router)
 

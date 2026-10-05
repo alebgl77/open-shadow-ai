@@ -1,18 +1,16 @@
-id: grok
-canonical_name: Grok
-category: llm_chat
-vendor: xAI
-description: xAI chatbot
+id: fal-ai
+canonical_name: fal.ai
+category: ai_platform
+vendor: fal.ai
+description: Generative media model APIs
 rule_tags:
-- llm
-- chat
-- saas
+- ml
+- api
+- platform
 signatures:
   domains:
-  - grok.x.ai
-  - api.x.ai
-  - console.x.ai
-  - grok.com
+  - fal.ai
+  - fal.run
   url_patterns: []
   processes: []
   extension_ids: []

@@ -7,12 +7,17 @@
 | Squid | syslog; `squid_access_log` | Network metadata | Visible requests depend on proxy coverage |
 | Palo Alto | syslog; `paloalto_url_log` | Network metadata | Select the supported URL-log format |
 | FortiGate | syslog; `fortigate_webfilter` | Network metadata | Web-filter logs, not every traffic log format |
+| Passive network sensor | `python -m shadai.collectors.network` | DNS/TLS/QUIC/HTTP observations | Imported metadata only; optional TShark capture requires deliberate placement |
 | Endpoint | `shadai-agent` | Installed/running asset inventory | Visibility depends on OS and permissions |
 | AD | PowerShell export | Directory inventory | Object presence is not AI use |
 | Entra | `python -m shadai.collectors.entra` | Application/permission inventory | No live request or billing evidence |
 | Instrumented/custom source | authenticated event API | Explicitly supplied evidence | Native vendor adapters are not automatic |
 
 A source configuration is not a universal connector factory. The delivered YAML loader instantiates syslog listeners. Entra is a separate process. File watching and native connectors to other directories/gateways remain planned.
+
+The [network analysis guide](network-analysis.md) covers Zeek JSONL, Suricata EVE and TShark field imports, local offline PCAP analysis, CSV export and explicitly selected live interfaces. All four protocols use `source_type: "network"` and `evidence_type: "observation"`; `collector_id` records the stable sensor ID. TCP, UDP and IPv4/IPv6 are supported where the selected source observes them. No AD/DHCP or IP-to-employee join is performed.
+
+Network import uses the authenticated event API. The collector sends only canonical metadata; raw payloads and PCAP files are not uploaded. Replay preserves source timestamps and event IDs when sensor, tenant, site and parser inputs remain the same. Old events can fall outside the ingestion acceptance window. Persisted source logs support replay; live capture has no durable buffer across restarts. Imported counts and a sensor's last observation do not establish complete coverage or operational health.
 
 ## Listener configuration
 

@@ -50,6 +50,9 @@ SIGNAL_CONFIDENCE: dict[str, float] = {
     "port_only": 0.50,
     "subdomain_proxy": 0.75,
     "subdomain_dns": 0.50,
+    # Host/SNI associates a catalog service; encrypted contents and AI usage remain unknown.
+    "domain_network": 0.65,
+    "subdomain_network": 0.55,
 }
 
 # Ports too generic for standalone matching (high false positive risk)
@@ -198,17 +201,20 @@ class CatalogMatcher:
 
         # 7. Domain match with subdomain fallback (most specific parent first)
         is_proxy = event.source_type == "proxy"
+        is_network_host = event.source_type == "network" and event.protocol != "DNS"
         for domain_field in [event.url_host, event.domain, event.sni]:
             if not domain_field:
                 continue
             domain_lower = domain_field.lower().rstrip(".")
             if owners := self._index.domain_index.get(domain_lower):
-                confidence = SIGNAL_CONFIDENCE["domain_proxy"] if is_proxy else SIGNAL_CONFIDENCE["domain_dns"]
+                key = "domain_proxy" if is_proxy else "domain_network" if is_network_host else "domain_dns"
+                confidence = SIGNAL_CONFIDENCE[key]
                 add(owners, "domain", domain_field, confidence)
                 break
             parent = next((p for p in _domain_parents(domain_lower) if p in self._index.domain_index), None)
             if parent:
-                confidence = SIGNAL_CONFIDENCE["subdomain_proxy"] if is_proxy else SIGNAL_CONFIDENCE["subdomain_dns"]
+                key = "subdomain_proxy" if is_proxy else "subdomain_network" if is_network_host else "subdomain_dns"
+                confidence = SIGNAL_CONFIDENCE[key]
                 add(self._index.domain_index[parent], "domain", f"{domain_field} (via {parent})", confidence)
                 break
 

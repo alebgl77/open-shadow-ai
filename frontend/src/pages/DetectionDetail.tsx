@@ -13,6 +13,8 @@ import { DetailSkeleton } from '@/components/ui/LoadingSkeleton'
 import clsx from 'clsx'
 import { formatDistanceToNow, format } from 'date-fns'
 import { useAuthStore } from '@/stores/auth'
+import { NETWORK_NOTICE, NETWORK_PROTOCOLS, networkEndpoint } from '@/api/network'
+import { sourceLabel } from '@/components/ui/SourceIcons'
 
 function CopyableId({ id }: { id: string }) {
   const [copied, setCopied] = useState(false)
@@ -28,6 +30,28 @@ function CopyableId({ id }: { id: string }) {
   )
 }
 
+function NetworkEvidence({ data }: { data: Record<string, unknown> }) {
+  const canInspect = useAuthStore(s => s.user?.role === 'analyst' || s.user?.role === 'admin')
+  const observations = Array.isArray(data.network_observations)
+    ? data.network_observations.filter((value): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)).slice(0, 10) : []
+  const protocols = data.protocol_counts && typeof data.protocol_counts === 'object' && !Array.isArray(data.protocol_counts)
+    ? data.protocol_counts as Record<string, unknown> : {}
+  const text = (value: unknown) => typeof value === 'string' ? value : 'Not observed'
+  return <section aria-label="Network evidence" className="space-y-3 border-t border-surface-600/30 pt-3 mt-3">
+    <p className="font-sans text-slate-400 leading-relaxed">{NETWORK_NOTICE} DNS is weaker evidence; repeats and additional protocols do not create independent sources.</p>
+    <dl className="flex flex-wrap gap-3">{NETWORK_PROTOCOLS.map(protocol => typeof protocols[protocol] === 'number' && Number.isFinite(protocols[protocol]) ? <div key={protocol} className="flex gap-2"><dt>{protocol}</dt><dd>{String(protocols[protocol])}</dd></div> : null)}</dl>
+    {canInspect ? <><p className="text-slate-500">Retained sample: up to 10 observations.</p>
+    {observations.map((observation, index) => <div key={index} className="rounded bg-surface-800 p-3 space-y-2 break-words">
+      <p className="text-slate-200">{text(observation.protocol)} · {text(observation.domain)}</p>
+      <p className="text-slate-500">{text(observation.timestamp)}</p>
+      <dl className="grid sm:grid-cols-2 gap-2"><div><dt className="text-slate-500">Source address</dt><dd className="break-all">{text(observation.src_ip)}</dd></div><div><dt className="text-slate-500">Destination</dt><dd className="break-all">{networkEndpoint(typeof observation.dst_ip === 'string' ? observation.dst_ip : null, typeof observation.dst_port === 'number' ? observation.dst_port : null)}</dd></div><div><dt className="text-slate-500">Sensor</dt><dd className="break-all">{text(observation.collector_id)}</dd></div></dl>
+      <details><summary className="cursor-pointer text-accent">Observation identity</summary><p className="mt-2 break-all">{text(observation.event_id)}</p></details>
+    </div>)}
+    {!observations.length && <p className="text-slate-500">No structured network sample retained.</p>}
+    <Link to="/network" className="inline-flex text-accent font-sans">Inspect network observations</Link></> : <p className="text-slate-500">Detailed network observations are available to analysts and administrators.</p>}
+  </section>
+}
+
 function EvidenceSection({ source, data }: { source: string; data: Record<string, unknown> }) {
   const [open, setOpen] = useState(true)
   return (
@@ -36,7 +60,7 @@ function EvidenceSection({ source, data }: { source: string; data: Record<string
         className="w-full flex items-center justify-between px-4 py-2.5 bg-surface-700/30 hover:bg-surface-700/50 transition-colors">
         <div className="flex items-center gap-2">
           {open ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-          <span className="text-xs font-mono text-accent font-medium uppercase">{source}</span>
+          <span className="text-xs font-mono text-accent font-medium uppercase">{sourceLabel(source)}</span>
           <span className="text-xs text-slate-500">{String(data.event_count ?? 0)} events</span>
         </div>
         <span className="text-[10px] text-slate-600 font-mono">confidence: {String(data.confidence_base ?? '—')}</span>
@@ -53,12 +77,13 @@ function EvidenceSection({ source, data }: { source: string; data: Record<string
             <div>
               <span className="text-slate-500">Sample values:</span>
               <div className="mt-1 space-y-0.5">
-                {data.sample_values.map((v: string, i: number) => (
+                {data.sample_values.filter((value): value is string => typeof value === 'string').map((v, i) => (
                   <div key={i} className="bg-surface-800 px-2 py-1 rounded text-slate-300">{v}</div>
                 ))}
               </div>
             </div>
           )}
+          {source === 'network' && <NetworkEvidence data={data} />}
         </div>
       )}
     </div>
@@ -70,15 +95,17 @@ export default function DetectionDetail() {
   const queryClient = useQueryClient()
   const [note, setNote] = useState('')
   const canEdit = useAuthStore(s => s.user?.role !== 'viewer')
+  const mode = useAuthStore(s => s.mode)
+  const session = useAuthStore(s => s.session)
 
   const { data: detection, isLoading, isError, refetch } = useQuery({
-    queryKey: ['detection', id],
+    queryKey: ['detection', id, mode, session],
     queryFn: () => getDetection(id!),
     enabled: !!id,
   })
 
   const { data: timeline } = useQuery({
-    queryKey: ['timeline', id],
+    queryKey: ['timeline', id, mode, session],
     queryFn: () => getDetectionTimeline(id!),
     enabled: !!id,
   })
