@@ -79,6 +79,13 @@ result is reported in the [PR checks](https://github.com/alebgl77/open-shadow-ai
 the earlier head's Windows/Compose results and the local 323 Python/59 frontend
 results do not substitute for that result.
 
+Python 3.12/3.13 and frontend CI use `ubuntu-24.04-arm` to access an additional
+hosted runner pool during the queue incident; capacity is not guaranteed.
+Compose integration remains on Linux x64 (`ubuntu-latest`), and PowerShell
+remains on `windows-latest`. All five validations retain their existing commands.
+This changes CI execution only; the [PR checks](https://github.com/alebgl77/open-shadow-ai/pull/3/checks)
+remain the source for the actual aggregate result.
+
 On the Windows workstation, Python tests used unique `--basetemp` directories
 under `tmp/`. Frontend commands used the installed Node executable and npm CLI;
 esbuild required execution outside the filesystem sandbox. The API subset emitted
