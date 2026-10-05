@@ -1,14 +1,30 @@
 """Generate deployment secrets once. Uses only the Python standard library."""
 from __future__ import annotations
+
 import argparse
 import base64
 import os
 import secrets
+import subprocess
 from pathlib import Path
+
 
 def bootstrap(destination: Path, dry_run: bool = False) -> None:
     source = Path(__file__).resolve().parents[1]
-    destination = destination.resolve()
+    # Keep junctions visible until the Windows ACL/reparse preflight has checked them.
+    destination = Path(os.path.abspath(destination))
+    if os.name == "nt" and not dry_run:
+        powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        # A Python process started by pwsh inherits its incompatible Core module path.
+        # Windows os.environ keys are uppercase; update that key in a child-only copy.
+        child_environment = os.environ.copy()
+        child_environment["PSMODULEPATH"] = str(powershell.parent / "Modules")
+        subprocess.run([
+            str(powershell), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+            str(source / "scripts/Protect-BootstrapWindows.ps1"), "-Directory", str(destination),
+        ], check=True, env=child_environment)
+    else:
+        destination = destination.resolve()
     generated = {
         "pg_password.txt": lambda: secrets.token_hex(32),
         "redis_password.txt": lambda: secrets.token_hex(32),

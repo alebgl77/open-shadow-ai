@@ -5,7 +5,7 @@ Improvements over v1:
 - User-Agent matching (now wired via event.user_agent field)
 - Confidence floor for ambiguous ports (8080, 3000, etc.)
 - Returns best match by confidence, not first match
-- Shared signatures resolve deterministically, independent of catalog order
+- Shared signatures require discriminating evidence, independent of catalog order
 """
 
 from __future__ import annotations
@@ -23,6 +23,17 @@ class CatalogMatch(BaseModel):
     matched_field: str
     matched_value: str
     match_confidence: float
+
+
+class CatalogResolution(BaseModel):
+    """Distinguish absent evidence from competing, equally supported candidates."""
+
+    match: CatalogMatch | None = None
+    ambiguous: bool = False
+
+
+# Preserved in existing match metadata when discarded signals could not select an owner.
+AMBIGUOUS_MATCH_FIELD = "ambiguous"
 
 
 # Base confidence scores per signal type (from PRD section 1.3)
@@ -87,8 +98,8 @@ class CatalogMatcher:
     """Matches canonical events against the catalog index.
 
     Returns the single best match rather than first-match-wins. Shared signatures yield
-    one candidate per owner; ties go to the item corroborated by more signal types, then
-    to the lowest catalog ID, so the result never depends on catalog load order.
+    one candidate per owner; ties go to the item corroborated by more signal types.
+    Equally supported candidates remain unattributed, regardless of catalog load order.
     """
 
     def __init__(self, index: CatalogIndex):
@@ -107,8 +118,12 @@ class CatalogMatcher:
 
     def match_event(self, event: CanonicalEvent) -> CatalogMatch | None:
         """Match an event against the catalog. Returns best match by confidence."""
+        return self.resolve_event(event).match
+
+    def resolve_event(self, event: CanonicalEvent) -> CatalogResolution:
+        """Evaluate evidence while retaining unresolved ties for ingestion boundaries."""
         if event.source_type == "directory":
-            return None
+            return CatalogResolution()
         candidates: list[CatalogMatch] = []
         hosts = _event_hosts(event)
 
@@ -206,7 +221,7 @@ class CatalogMatcher:
             )
 
         if not candidates:
-            return None
+            return CatalogResolution()
 
         best: dict[str, CatalogMatch] = {}
         support: dict[str, set[str]] = {}
@@ -215,7 +230,10 @@ class CatalogMatcher:
             support.setdefault(item_id, set()).add(candidate.matched_field)
             if item_id not in best or candidate.match_confidence > best[item_id].match_confidence:
                 best[item_id] = candidate
-        return min(
-            best.values(),
-            key=lambda c: (-c.match_confidence, -len(support[c.catalog_item_id]), c.catalog_item_id),
-        )
+
+        def rank(candidate: CatalogMatch) -> tuple[float, int]:
+            return candidate.match_confidence, len(support[candidate.catalog_item_id])
+
+        best_rank = max(map(rank, best.values()))
+        winners = [candidate for candidate in best.values() if rank(candidate) == best_rank]
+        return CatalogResolution(match=winners[0]) if len(winners) == 1 else CatalogResolution(ambiguous=True)

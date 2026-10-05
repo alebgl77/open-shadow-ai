@@ -2,6 +2,8 @@
 
 Treat directory inventory, endpoint inventory and actual usage as different evidence. AD objects or Entra applications alone do not prove AI use. Hybrid identity joins are not automatic: AD objectGUID/SID, Entra object IDs and agent device IDs may differ. Preserve their provenance and validate any mapping before attributing activity to a person.
 
+For a Windows Compose host, run `scripts/bootstrap.ps1` from a trusted checkout into a private deployment directory. Bootstrap does not require administrator rights: it creates secrets under a protected current-user/SYSTEM ACL, and both its PowerShell and Python entry points check owners, the complete secret tree ACL and junctions before generating secret bytes. A safe rerun preserves existing secrets. An unsafe existing directory or replaceable ancestor is refused; review that path and prepare a private destination before retrying. These host secrets use a different trust boundary from the SYSTEM endpoint installer below.
+
 ## On-prem Active Directory
 
 Run `scripts/Export-ActiveDirectory.ps1` on a management host with RSAT ActiveDirectory and an account authorized to read the chosen OUs. Domain Administrator is not required by this script. Each `-SearchBase` must be an OU distinguished name; domain-root queries are rejected. The script calls Get-ADComputer/Get-ADUser and performs no directory mutations.

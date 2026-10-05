@@ -2,7 +2,7 @@
 
 v2 fixes:
 - User/device counts tracked via sets in evidence_bundle
-- Per-source confidence_base preserved (not overwritten with current)
+- Strongest per-source confidence_base preserved across arrival order
 - Race condition prevented via INSERT ON CONFLICT
 - Risk factors wired (bytes_out, OAuth scopes, classification)
 - Governance lookup integrated
@@ -291,16 +291,17 @@ class Correlator:
         src_ev["first_seen"] = min(src_ev["first_seen"], event_ts.isoformat())
         src_ev["last_seen"] = max(src_ev.get("last_seen", event_ts.isoformat()), event_ts.isoformat())
         src_ev["event_count"] = src_ev.get("event_count", 0) + 1
-        # Preserve per-source confidence_base (don't overwrite with current)
-        if "confidence_base" not in src_ev:
+        # Keep the strongest evidence per source, without adding confidence for repeats.
+        if match_confidence > src_ev.get("confidence_base", -1):
             src_ev["confidence_base"] = match_confidence
+            src_ev["matched_field"] = match_field
         samples = src_ev.get("sample_values", [])
         new_val = getattr(event, match_field, "")
         if new_val and new_val not in samples:
             src_ev["sample_values"] = (samples + [new_val])[-10:]
         bundle[event.source_type] = src_ev
 
-        # Rebuild signals from evidence with PRESERVED per-source confidence
+        # Rebuild signals from the strongest evidence for each source.
         signals = []
         for src_type, src_data in bundle.items():
             if src_type.startswith("_") or src_type in ("confidence_factors", "risk_factors"):

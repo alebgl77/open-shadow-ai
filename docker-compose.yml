@@ -107,7 +107,14 @@ services:
     <<: *runtime
     build: {context: ., dockerfile: docker/Dockerfile.api}
     ports: ["${SHADAI_BIND_ADDRESS:-127.0.0.1}:${SHADAI_API_PORT:-8443}:8443"]
-    networks: [backend, edge]
+    networks:
+      backend:
+      edge:
+        ipv4_address: ${SHADAI_EDGE_API_IP:-172.30.0.3}
+    environment:
+      <<: *environment
+      # Trust only the bundled nginx, never the whole bridge or arbitrary X-Forwarded-For.
+      FORWARDED_ALLOW_IPS: ${SHADAI_EDGE_FRONTEND_IP:-172.30.0.2}
     depends_on:
       migrate: {condition: service_completed_successfully}
       clickhouse: {condition: service_healthy}
@@ -186,7 +193,9 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     ports: ["${SHADAI_BIND_ADDRESS:-127.0.0.1}:${SHADAI_UI_PORT:-3000}:8080"]
-    networks: [edge]
+    networks:
+      edge:
+        ipv4_address: ${SHADAI_EDGE_FRONTEND_IP:-172.30.0.2}
     depends_on:
       api: {condition: service_healthy}
     healthcheck:
@@ -210,4 +219,7 @@ secrets:
 networks:
   backend: {internal: true}
   edge:
+    ipam:
+      config:
+        - subnet: ${SHADAI_EDGE_SUBNET:-172.30.0.0/24}
   egress:

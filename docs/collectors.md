@@ -24,6 +24,12 @@ Events outside that window are dropped individually and counted in `shadai_event
 
 URL paths and user agents never leave the ingestion boundary. Syslog collectors and `POST /api/v1/ingest/events` compare them in memory with the active catalog (paths without their query string or fragment), keep only the matched catalog entry and signal type, and then discard them. URL patterns count only on the product's hosts, so a generic path such as `/v1/chat/completions` on an internal gateway is not attributed to a public service. This is what distinguishes HuggingChat from other Hugging Face traffic. The collector reads the catalog from PostgreSQL at the catalog reload interval; while the database is unavailable, events are still ingested and matched on their retained fields. Set `privacy.match_transient_signals: false` to turn the comparison off.
 
+Shared signatures need discriminating evidence: a more specific match or additional signal types can identify one product. Equally supported candidates remain unattributed; catalog order and identifiers do not break ties. The event is still ingested. If transient URL or User-Agent evidence is ambiguous, ingestion preserves `match_field: "ambiguous"`, an empty catalog ID and zero match confidence. The worker keeps that state and creates no detection from weaker retained evidence. A later catalog update cannot resolve those events retroactively because their paths and user agents were discarded.
+
+Squid's native user field is mapped to `username`; `-` leaves it empty. The client IP is not treated as a user identity. This collector preserves the supplied name and does not implement pseudonymization. Deployments requiring pseudonyms must transform that field upstream before forwarding logs.
+
+The endpoint agent sends telemetry only to its configured URL and refuses every HTTP redirect, including redirects on the same origin. Configure the final telemetry endpoint directly. Permanent client errors stop the current batch; transient network errors, HTTP 408/429 and server errors keep the bounded three-attempt retry policy.
+
 ## Generic inventory ingestion
 
 `POST /api/v1/ingest/events` takes `X-API-Key` using the deployment's `AGENT_API_KEY`. The body contains one to 500 events. Event timestamps must have a timezone; event IDs are UUIDs and must be reused for retries. Unknown fields are rejected.

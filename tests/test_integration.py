@@ -325,3 +325,113 @@ async def test_live_identity_migration_lifecycle_and_concurrent_provisioning(mon
         async with admin_engine.begin() as connection:
             await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
         await admin_engine.dispose()
+
+
+async def test_live_concurrent_notes_preserve_both_notes_and_audits(monkeypatch):
+    """Exercise two HTTP writes while the first transaction holds its detection row lock."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import FastAPI
+    from sqlalchemy import text
+
+    from shadai.api import detections
+    from shadai.database import get_postgres_session
+    from shadai.models.audit import AuditLogORM
+    from shadai.security.auth import get_current_user
+
+    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, capture_output=True, text=True)
+    engine = create_async_engine(load_config().database.postgres_url, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    detection_id = uuid4()
+    actor = SimpleNamespace(user_id=uuid4(), username="concurrent-analyst", role="analyst")
+    locked, release, second_started, second_audited = [asyncio.Event() for _ in range(4)]
+    state = {"sessions": 0, "audits": 0, "second_pid": None}
+    original_audit = detections.log_audit
+
+    async def session_dependency():
+        async with sessions.begin() as session:
+            state["sessions"] += 1
+            if state["sessions"] == 2:
+                state["second_pid"] = await session.scalar(text("SELECT pg_backend_pid()"))
+                second_started.set()
+            yield session
+
+    async def paused_audit(session, *args, **kwargs):
+        await original_audit(session, *args, **kwargs)
+        state["audits"] += 1
+        if state["audits"] == 1:
+            locked.set()
+            await release.wait()
+        else:
+            second_audited.set()
+
+    async def wait_for_second_row_lock():
+        async with sessions() as session:
+            while True:
+                assert not second_audited.is_set(), "second note read the row without waiting for its lock"
+                waiting = await session.scalar(
+                    text("SELECT wait_event_type FROM pg_stat_activity WHERE pid=:pid"),
+                    {"pid": state["second_pid"]},
+                )
+                if waiting == "Lock":
+                    return
+                # Refresh PostgreSQL's activity snapshot on the next observation.
+                await session.rollback()
+                await asyncio.sleep(0.02)
+
+    app = FastAPI()
+    app.include_router(detections.router)
+    app.dependency_overrides[get_postgres_session] = session_dependency
+    app.dependency_overrides[get_current_user] = lambda: actor
+    monkeypatch.setattr(detections, "log_audit", paused_audit)
+    try:
+        async with sessions.begin() as session:
+            session.add(
+                DetectionORM(
+                    detection_id=detection_id,
+                    entity_type="saas_app",
+                    entity_name="Concurrent notes fixture",
+                    first_seen_at=datetime.now(UTC),
+                    last_seen_at=datetime.now(UTC),
+                    analyst_notes="Original note",
+                )
+            )
+        transport = httpx.ASGITransport(app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://example.test") as client:
+            url = f"/api/v1/detections/{detection_id}/notes"
+            tasks = [asyncio.create_task(client.post(url, params={"note": "First concurrent note"}))]
+            try:
+                await asyncio.wait_for(locked.wait(), 5)
+                tasks.append(asyncio.create_task(client.post(url, params={"note": "Second concurrent note"})))
+                await asyncio.wait_for(second_started.wait(), 5)
+                await asyncio.wait_for(wait_for_second_row_lock(), 5)
+                assert not tasks[1].done()
+                release.set()
+                responses = await asyncio.wait_for(asyncio.gather(*tasks), 10)
+                assert all(response.status_code == 200 for response in responses)
+            finally:
+                release.set()
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 10)
+        async with sessions() as session:
+            detection = await session.get(DetectionORM, detection_id)
+            lines = detection.analyst_notes.splitlines()
+            assert len(lines) == 3 and lines[0] == "Original note"
+            assert lines[1].endswith("concurrent-analyst: First concurrent note")
+            assert lines[2].endswith("concurrent-analyst: Second concurrent note")
+            audits = list(
+                await session.scalars(select(AuditLogORM).where(AuditLogORM.resource_id == str(detection_id)))
+            )
+            assert len(audits) == 2
+            assert all(
+                audit.action == "update_detection"
+                and audit.user_id == actor.user_id
+                and audit.details == {"note_added": True}
+                for audit in audits
+            )
+    finally:
+        async with sessions.begin() as session:
+            await session.execute(delete(AuditLogORM).where(AuditLogORM.resource_id == str(detection_id)))
+            await session.execute(delete(DetectionORM).where(DetectionORM.detection_id == detection_id))
+        await engine.dispose()

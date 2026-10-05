@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Puzzle } from 'lucide-react'
 import { listDetections } from '@/api/detections'
 import RiskBadge from '@/components/badges/RiskBadge'
@@ -29,7 +29,7 @@ export default function Extensions() {
         <span className="text-sm text-slate-400">{data?.total ?? 0} extension{(data?.total ?? 0) !== 1 ? 's' : ''}</span>
       </div>
 
-      <p className="text-xs text-slate-400">Showing up to 100 extensions. <a href="/discoveries?entity_type=browser_extension" className="text-accent">Open the complete paginated list</a>. Installation does not establish active use.</p>{isLoading && <TableSkeleton rows={8} columns={6} />}
+      <p className="text-xs text-slate-400">Showing up to 100 extensions. <Link to="/discoveries?entity_type=browser_extension" className="text-accent">Open the complete paginated list</Link>. Installation does not establish active use.</p>{isLoading && <TableSkeleton rows={8} columns={6} />}
       {isError && <ErrorAlert onRetry={refetch} />}
 
       {!isLoading && !isError && items.length === 0 && (

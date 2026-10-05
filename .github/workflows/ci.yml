@@ -1,12 +1,13 @@
 name: CI
 on:
   push:
+    branches: [main]
   pull_request:
 permissions:
   contents: read
 jobs:
   python:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     strategy:
       matrix:
         python-version: ["3.12", "3.13"]
@@ -20,7 +21,7 @@ jobs:
       - run: python -m pytest -q
       - run: python scripts/verify-deployment.py
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,6 +53,8 @@ jobs:
           }
           if ($errors.Count) { $errors | Format-List; exit 1 }
           ./scripts/bootstrap.ps1 -Directory "$env:RUNNER_TEMP/osa-bootstrap" -DryRun
+          # A hosted checkout may inherit broad D:\a ACLs; use trusted profile ancestors.
+          ./scripts/test-bootstrap-security.ps1 -TemporaryDirectory "$env:USERPROFILE/osa-bootstrap-tests"
           ./scripts/Export-ActiveDirectory.ps1 -SearchBase 'OU=Pilot,DC=example,DC=com' -OutputDirectory "$env:RUNNER_TEMP/osa-ad" -WhatIf
   compose-integration:
     runs-on: ubuntu-latest

@@ -97,7 +97,7 @@ def send_batch(url: str, batch: dict, headers: dict, verify) -> int | None:
     attempts = 3
     for attempt in range(attempts):
         try:
-            resp = requests.post(url, json=batch, headers=headers, timeout=30, verify=verify)
+            resp = requests.post(url, json=batch, headers=headers, timeout=30, verify=verify, allow_redirects=False)
         except requests.RequestException as e:
             logger.warning(f"Send attempt {attempt + 1} failed: {type(e).__name__}")
         else:
@@ -107,6 +107,8 @@ def send_batch(url: str, batch: dict, headers: dict, verify) -> int | None:
                 except (ValueError, AttributeError, TypeError):
                     return 0
             logger.warning(f"Server returned HTTP {resp.status_code}")
+            if 300 <= resp.status_code < 400:
+                return None  # Never forward telemetry or credentials to a redirect target.
             if 400 <= resp.status_code < 500 and resp.status_code not in (408, 429):
                 return None
         if attempt + 1 < attempts:
