@@ -4,14 +4,14 @@ This records the disposition of findings A01–A17 from the 27 September audit o
 `043a537`. The remediation work starts from `9b66def`, which already contains six
 of the corrections. The remaining eleven findings are addressed by this change
 set. Implementation status and validation evidence are distinguished below;
-CI for the final revision is pending.
+the current aggregate CI result is reported in the [PR checks](https://github.com/alebgl77/open-shadow-ai/pull/3/checks).
 
 ## Findings and regression evidence
 
 | Finding | Disposition | Correction and source | Evidence and limits |
 |---|---|---|---|
 | A01 — transaction success before commit | Already implemented upstream | Database dependencies use `scope="function"` so commit failures precede HTTP success. See [database](../src/shadai/database.py) and [API routes](../src/shadai/api/). | [Security tests](../tests/test_security.py) check dependency scopes and a failed deactivation commit; the new [note tests](../tests/test_detection_remediation.py) also verify durable rollback and HTTP failure. |
-| A02 — unsafe existing Windows paths | Residual bootstrap correction in this change set | [Windows protection helper](../scripts/Protect-BootstrapWindows.ps1) validates owners, ACLs, ancestors and reparse points before [Python bootstrap](../scripts/bootstrap.py) writes secrets. New secret directories have a protected ACL. The hardened [agent installer](../scripts/Install-AgentWindows.ps1) is retained. | [Windows harness](../scripts/test-bootstrap-security.ps1) `-BoundaryOnly` passed locally on PowerShell 7 and Windows PowerShell 5.1. The [Windows CI log](https://github.com/alebgl77/open-shadow-ai/actions/runs/37369049657/job/111961274473) also records successful complete generation, repeat-run preservation and adverse-path refusal. Its final job status failed because the expected negative case left native exit code 1; the harness status fix awaits a complete green rerun. |
+| A02 — unsafe existing Windows paths | Residual bootstrap correction in this change set | [Windows protection helper](../scripts/Protect-BootstrapWindows.ps1) validates owners, ACLs, ancestors and reparse points before [Python bootstrap](../scripts/bootstrap.py) writes secrets. New secret directories have a protected ACL. The hardened [agent installer](../scripts/Install-AgentWindows.ps1) is retained. | [Windows harness](../scripts/test-bootstrap-security.ps1) `-BoundaryOnly` passed locally on PowerShell 7 and Windows PowerShell 5.1. The [Windows CI log](https://github.com/alebgl77/open-shadow-ai/actions/runs/37369049657/job/111961274473) also records successful complete generation, repeat-run preservation and adverse-path refusal. Its final job status failed because the expected negative case left native exit code 1; subsequent results after the harness status fix are recorded below. |
 | A03 — FortiGate timezone loss | Already implemented upstream | [FortiGate parser](../src/shadai/parsers/proxy/fortigate.py) respects device offsets/epoch values and configured source zones. | [Parser tests](../tests/test_parsers.py) cover epoch precision, `+0100`, contemporary `+0200`, seasonal Paris offsets and ingestion acceptance. |
 | A04 — oversized agent snapshot | Already implemented upstream | [Agent batching](../agent/shadai_agent/main.py) bounds each request and normalizes individual records before submission. | [Agent tests](../tests/test_agent.py) validate mixed snapshots containing 1,800 processes and 700 extensions against the API schema, preserving records across batches, plus empty/duplicate/error cases. |
 | A05 — arbitrary catalogue attribution | Corrected in this change set | [Matcher](../src/shadai/engine/matcher.py) explicitly reports unresolved ties. [Ingestion](../src/shadai/api/ingestion.py) and [worker](../src/shadai/workers/ingest.py) preserve the ambiguity decision after sensitive transient signals are removed. Ambiguous events remain stored without creating an attributed detection. | [Evidence regressions](../tests/test_evidence_remediation.py) and [catalogue tests](../tests/test_catalog_dashboard.py) cover order independence, discriminating evidence and no weaker fallback. Already removed URL/user-agent values cannot be recovered by a later catalogue update. |
@@ -44,7 +44,7 @@ The following local results were recorded while preparing this change set:
 | Changed Python files | Targeted Ruff checks and formatting checks passed for the completed API/evidence/proxy lots. |
 | Final complete regression run | `python -m pytest -q`: 323 passed, 3 integrations skipped, 2 warnings, 17.73 seconds. These totals include the subsets above. |
 | Final combined lint and review | Ruff passed for `src`, `tests`, `agent/shadai_agent` and `scripts/bootstrap.py`. Independent code review approved after the ancestor-permission and concurrent-note fixes; no remaining code blocker was reported. |
-| Final aggregate CI | Pending after the harness exit-status fix. Partial remote evidence is recorded below. |
+| Final aggregate CI | The [PR checks](https://github.com/alebgl77/open-shadow-ai/pull/3/checks) report the live aggregate result for the current PR revision. Earlier source results below remain historical evidence. |
 
 The [first CI run](https://github.com/alebgl77/open-shadow-ai/actions/runs/37367556770)
 exposed Windows subprocess module-path compatibility and collection-time reads of
@@ -61,11 +61,23 @@ These results precede the harness exit-status correction:
 |---|---|
 | [Compose integration](https://github.com/alebgl77/open-shadow-ai/actions/runs/37369049657/job/111961274681) | Job succeeded: 3 real-store integration tests passed, 323 tests deselected; test collection, deployment and HTTP identity checks completed successfully. The integrations include concurrent PostgreSQL note writes. |
 | [Windows PowerShell](https://github.com/alebgl77/open-shadow-ai/actions/runs/37369049657/job/111961274473) | Logs report successful Core module-path isolation with six private secrets and unchanged parent environments, complete bootstrap dry run, preservation of all six secrets on rerun, and expected refusal before generation for an unsafe ACL. AD `WhatIf` completed. The job nevertheless exited 1 because that expected negative subprocess status remained visible to the GitHub wrapper. |
-| Complete run after the harness fix | Pending. No all-green aggregate result is claimed for run 37369049657. |
+| Recorded aggregate result | No all-green aggregate result is claimed for run 37369049657. |
 
 The harness now resets the global native exit status only after its final
 `try/finally` completes successfully. Assertion and cleanup failures still stop
 execution before that reset; the local wrapper regressions verify both cases.
+
+On source `3c0c27c98ee9a4fc7facde99523d7a55c19ea4be`, the complete Windows
+bootstrap gate and Compose integration job subsequently passed in
+[run 37370737930](https://github.com/alebgl77/open-shadow-ai/actions/runs/37370737930).
+Its Python 3.12, Python 3.13 and frontend jobs were cancelled before any steps
+ran: "The job was not acquired by Runner of type hosted even after multiple
+attempts". A rerun was requested as attempt 2. The workflow now restricts `push`
+to `main` while retaining `pull_request`, preventing duplicate branch-push and
+PR suites with all five validations preserved. The workflow revision's aggregate
+result is reported in the [PR checks](https://github.com/alebgl77/open-shadow-ai/pull/3/checks);
+the earlier head's Windows/Compose results and the local 323 Python/59 frontend
+results do not substitute for that result.
 
 On the Windows workstation, Python tests used unique `--basetemp` directories
 under `tmp/`. Frontend commands used the installed Node executable and npm CLI;
