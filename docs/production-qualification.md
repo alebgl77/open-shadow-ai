@@ -40,6 +40,8 @@ Redis pression est **distinct**, 32 MiB, `noeviction`, AOF, sans port publié. L
 
 `report.json` contient les scénarios required/executed/status, les hashes du profil/code, l'environnement, les mesures et les preuves manquantes. Codes : **0** critères satisfaits ; **1** mesure/critère échoué ; **2** prérequis ou preuve absent. Des objectifs facultatifs explicites (`max_http_p95_seconds`, `max_end_to_end_p95_seconds`, `max_recovery_seconds`, `max_restore_seconds`, `minimum_precision`, `minimum_recall`) ne passent jamais sans mesure. Gardez les archives, fixtures, inventaires et secrets privés ; les artifacts CI publiés ne contiennent que rapport, hashes source et JUnit.
 
+Un échec après la préparation et avant le premier scénario figure dans `evidence.failure` : phase, étape fixe, type d'erreur autorisé, code fixe et code de sortie borné si disponible. Le diagnostic distingue Compose, découverte des ressources, initialisation, readiness et enrollment. Si Compose et la découverte échouent tous deux, Compose reste la cause principale et la découverte apparaît dans `secondary`. Aucun argument, URL, secret, message d'exception, stdout ou stderr n'entre dans ce diagnostic ; les erreurs Docker portent les codes `docker_nonzero`, `docker_timeout`, `docker_process_error` ou `docker_output_budget`. Un diagnostic ne remplace aucune preuve manquante et ne rend pas l'exécution réussie.
+
 ## Sondes par processus
 
 Chaque worker publie au maximum 4 KiB sous `/tmp/shadai-probe`, répertoire `0700`, fichier `0600`, par remplacement atomique. Aucun événement, compte, DSN ou erreur fournisseur n'y figure. PID, ticks de démarrage et boot ID empêchent la réutilisation d'une identité. Le heartbeat provient de la même boucle asyncio toutes les 5 s.

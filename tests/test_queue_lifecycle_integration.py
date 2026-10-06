@@ -8,7 +8,7 @@ import pytest
 import redis.asyncio as aioredis
 from queue_integration_fixtures import queue_redis as _queue_redis  # noqa: F401
 
-from shadai.config import RedisQueueSettings
+from shadai.config import RedisQueueSettings, get_config
 from shadai.utils.queue_admission import SCHEMA_KEY, QueueAdmissionError, admit_records
 from shadai.utils.queueing import PermanentMessageError
 from shadai.workers.redis_lifecycle import (
@@ -89,19 +89,20 @@ async def test_matches_capacity_keeps_actual_postgres_receipt_uncommitted_and_so
     from sqlalchemy import delete
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    from shadai.config import load_config
     from shadai.models.event import CanonicalEvent
     from shadai.models.receipts import IngestReceiptORM
     from shadai.utils.queueing import queue_fields
     from shadai.workers.ingest import EventProcessor
 
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, capture_output=True)
-    engine = create_async_engine(load_config().database.postgres_url, pool_pre_ping=True)
+    config = get_config()
+    engine = create_async_engine(config.database.postgres_url, pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    event = CanonicalEvent(domain="synthetic.example.test", tenant_id="test-org")
+    event = CanonicalEvent(domain="synthetic.example.test", tenant_id=config.tenant_id)
     match = SimpleNamespace(catalog_item_id="synthetic", matched_field="domain", match_confidence=0.6)
     matcher = SimpleNamespace(upstream_match=lambda value: None, match_event=lambda value: match)
-    processor = EventProcessor(queue_redis, SimpleNamespace(execute=Mock()), sessions, matcher,
+    clickhouse = SimpleNamespace(execute=Mock())
+    processor = EventProcessor(queue_redis, clickhouse, sessions, matcher,
                                settings=RedisQueueSettings(stream_max_entries=1))
     now = [1000.0]
     consumer = StreamConsumer(queue_redis, GROUP, "owner", [STREAM], clock=lambda: now[0])
@@ -114,6 +115,9 @@ async def test_matches_capacity_keeps_actual_postgres_receipt_uncommitted_and_so
         assert returned == ident
         await queue_redis.xadd("matches", {"event": "synthetic existing"})
         assert not await consumer.process(STREAM, ident, fields, processor)
+        assert clickhouse.execute.call_count == 1
+        assert await queue_redis.hget(f"retries:{GROUP}:{STREAM}:{ident}", "poison_attempts") == "0"
+        assert consumer.counters["retryable_failures"] == 1
         async with sessions() as session:
             assert await session.get(IngestReceiptORM, event.event_id) is None
         assert (await queue_redis.xpending(STREAM, GROUP))["pending"] == 1
@@ -121,10 +125,14 @@ async def test_matches_capacity_keeps_actual_postgres_receipt_uncommitted_and_so
         await queue_redis.delete("matches")
         now[0] += 1000
         assert await consumer.process(STREAM, ident, fields, processor)
+        assert clickhouse.execute.call_count == 2
         async with sessions() as session:
             assert await session.get(IngestReceiptORM, event.event_id) is not None
         assert (await queue_redis.xpending(STREAM, GROUP))["pending"] == 0
         assert await queue_redis.xlen(STREAM) == 0 and await queue_redis.xlen("matches") == 1
+        assert not await queue_redis.exists(f"retries:{GROUP}:{STREAM}:{ident}")
+        [(_, matched)] = await queue_redis.xrange("matches")
+        assert CanonicalEvent.model_validate_json(matched["event"]).event_id == event.event_id
     finally:
         async with sessions.begin() as session:
             await session.execute(delete(IngestReceiptORM).where(IngestReceiptORM.event_id == event.event_id))

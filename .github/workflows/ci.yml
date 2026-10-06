@@ -317,6 +317,7 @@ jobs:
           context: ${{ steps.tools.outputs.context }}
           file: ${{ steps.tools.outputs.file }}
           platforms: ${{ steps.tools.outputs.platform }}
+          tags: ghcr.io/${{ github.repository }}/${{ matrix.image }}:${{ github.sha }}
           outputs: type=oci,dest=artifacts/runtime.oci.tar
           provenance: mode=max
           sbom: generator=${{ steps.tools.outputs.sbom }}

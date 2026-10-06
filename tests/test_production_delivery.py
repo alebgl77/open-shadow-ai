@@ -578,6 +578,27 @@ def test_pressure_configuration_is_required_only_when_selected():
     assert "config_set" not in (ROOT / "tests/test_sso_admission_integration.py").read_text(encoding="utf-8")
 
 
+def test_image_export_names_one_commit_component_without_registry_publication():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    job = workflow["jobs"]["image-security"]
+    build, = [step for step in job["steps"] if step.get("uses", "").startswith("docker/build-push-action@")]
+    options = build["with"]
+    assert options["outputs"] == "type=oci,dest=artifacts/runtime.oci.tar"
+    assert options["provenance"] == "mode=max"
+    assert options["sbom"] == "generator=${{ steps.tools.outputs.sbom }}"
+    assert options["platforms"] == "${{ steps.tools.outputs.platform }}"
+    assert options.get("push", False) is False and options.get("load", False) is False
+    tag, = options["tags"].splitlines()
+    names = set()
+    for image in job["strategy"]["matrix"]["image"]:
+        for commit in ("a" * 40, "b" * 40):
+            name = tag.replace("${{ github.repository }}", "owner/repository").replace(
+                "${{ matrix.image }}", image).replace("${{ github.sha }}", commit)
+            assert name == f"ghcr.io/owner/repository/{image}:{commit}"
+            names.add(name)
+    assert len(names) == 2 * len(job["strategy"]["matrix"]["image"])
+
+
 def test_signing_permissions_and_exact_archive_contract():
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]

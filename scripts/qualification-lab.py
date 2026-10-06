@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shadai.qualification.lab import Laboratory  # noqa: E402
+from shadai.qualification.lab import Laboratory, safe_exception_type  # noqa: E402
 from shadai.qualification.schemas import QualificationError, canonical_bytes, load_profile  # noqa: E402
 
 
@@ -63,7 +63,7 @@ def main(argv=None):
             return 0
         return lab.execute(resume=args.action == "resume")
     except Exception as exc:
-        print(json.dumps({"schema": 1, "status": "not_evaluated", "reason": type(exc).__name__, "exit_code": 2}))
+        print(json.dumps({"schema": 1, "status": "not_evaluated", "reason": safe_exception_type(exc), "exit_code": 2}))
         return 2
 
 

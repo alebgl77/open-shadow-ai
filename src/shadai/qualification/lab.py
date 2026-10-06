@@ -31,6 +31,47 @@ SERVICES = {
 TOOLS = {"node-exporter", "probe-ingest-peer"}
 WRITERS = {"api", "ingest-worker", "correlation-worker", "purge-worker"}
 STORES = {"postgres", "clickhouse", "redis"}
+FAILURE_STAGES = {
+    "starting_compose", "starting_discover", "initialize_stop", "initialize_inspector", "initialize_start",
+    "readiness", "enroll", "scenario",
+}
+DOCKER_FAILURE_CODES = {"docker_nonzero", "docker_timeout", "docker_process_error", "docker_output_budget"}
+
+
+class DockerOperationError(QualificationError):
+    """Only fixed failure codes and bounded exit status may enter public proof."""
+
+    def __init__(self, code, returncode=None):
+        super().__init__("Docker operation failed; upstream output is excluded from proof")
+        self.code = code if type(code) is str and code in DOCKER_FAILURE_CODES else "docker_process_error"
+        self.returncode = returncode if type(returncode) is int and -255 <= returncode <= 255 else None
+
+
+def safe_exception_type(exc):
+    for kind in (
+        DockerOperationError, QualificationError, AssertionError, ValueError, TypeError, KeyError,
+        json.JSONDecodeError, PermissionError, FileNotFoundError, OSError, RuntimeError,
+        KeyboardInterrupt, SystemExit,
+    ):
+        if type(exc) is kind:
+            return kind.__name__
+    return "UnexpectedError"
+
+
+def failure_evidence(exc, phase, stage):
+    value = {
+        "phase": phase if type(phase) is str and phase in SCENARIOS | {"created", "starting", "initialized"}
+        else "unknown",
+        "stage": stage if type(stage) is str and stage in FAILURE_STAGES else "unknown",
+        "error_type": safe_exception_type(exc),
+        "code": "qualification_error" if type(exc) is QualificationError else "exception",
+    }
+    if type(exc) is DockerOperationError:
+        value["code"] = (exc.code if type(exc.code) is str and exc.code in DOCKER_FAILURE_CODES
+                         else "docker_process_error")
+        if type(exc.returncode) is int and -255 <= exc.returncode <= 255:
+            value["returncode"] = exc.returncode
+    return value
 
 
 class Docker:
@@ -46,21 +87,26 @@ class Docker:
             if remaining <= 0:
                 raise QualificationError("Laboratory wall budget exhausted")
             timeout = min(timeout, remaining)
-        result = self.runner(
-            ["docker", "--context", self.context, *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=environment,
-        )
+        try:
+            result = self.runner(
+                ["docker", "--context", self.context, *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=environment,
+            )
+        except subprocess.TimeoutExpired:
+            raise DockerOperationError("docker_timeout") from None
+        except OSError:
+            raise DockerOperationError("docker_process_error") from None
         if result.returncode:
             import re
 
             if absent and re.search(r"\bno such (?:container|network|volume|object)\b", result.stderr, re.I):
                 return None
-            raise QualificationError("Docker operation failed; upstream output retained by Docker only")
+            raise DockerOperationError("docker_nonzero", result.returncode)
         if len(result.stdout) > 4 * 1048576:
-            raise QualificationError("Docker output exceeds proof budget")
+            raise DockerOperationError("docker_output_budget", result.returncode)
         return result.stdout.strip()
 
     def inspect(self, kind, identifier, *, absent=False):
@@ -80,6 +126,8 @@ class Laboratory:
         self.sender = None
         self.scenarios = []
         self.deadline = None
+        self.failure = None
+        self.stage = "scenario"
 
     def remaining(self):
         if self.deadline is None:
@@ -374,6 +422,7 @@ class Laboratory:
                 "source": json.loads((self.directory / "source.json").read_text()),
                 "laboratory_only": True,
                 "production_rpo_rto": "not_evaluated",
+                **({"failure": self.failure} if self.failure is not None else {}),
             },
             missing=missing,
         )
@@ -385,21 +434,40 @@ class Laboratory:
         self.docker.deadline = self.deadline
         self.prepare(resume)
         (self.directory / "empty.env").touch(mode=0o600, exist_ok=True)
+        self.failure = None
         try:
             if not resume:
                 self.journal.phase("starting")
+                self.stage = "starting_compose"
                 try:
                     self.compose("up", "-d", "--build", *sorted(SERVICES), timeout=600)
-                finally:
+                except BaseException as exc:
+                    self.failure = failure_evidence(exc, "starting", self.stage)
+                    self.stage = "starting_discover"
+                    try:
+                        self.discover()
+                    except BaseException as secondary:
+                        self.failure["secondary"] = [failure_evidence(secondary, "starting", self.stage)]
+                        if isinstance(secondary, (KeyboardInterrupt, SystemExit)):
+                            raise
+                    raise
+                else:
+                    self.stage = "starting_discover"
                     self.discover()
             if "initialized" not in self.journal.value["completed"]:
+                self.stage = "initialize_stop"
                 self.change("stop", WRITERS)
+                self.stage = "initialize_inspector"
                 self.inspector("initialize")
                 self.journal.phase("initialized", completed=True)
+                self.stage = "initialize_start"
                 self.change("start", WRITERS)
+            self.stage = "readiness"
             url = self.wait_ready()
             if not (self.directory / "collector-key").exists():
+                self.stage = "enroll"
                 self.inspector("enroll")
+            self.stage = "scenario"
             completed = set(self.journal.value["completed"])
             if "baseline" in self.profile["scenarios"] and "baseline" not in completed:
                 self.journal.phase("baseline")
@@ -460,6 +528,8 @@ class Laboratory:
                 self.sender.stop()
             self.journal.value["cancelled"] = isinstance(exc, (KeyboardInterrupt, SystemExit))
             phase = self.journal.value["phase"]
+            if self.failure is None:
+                self.failure = failure_evidence(exc, phase, self.stage)
             if phase in SCENARIOS:
                 self.scenarios = [item for item in self.scenarios if item["scenario"] != phase]
                 self.scenarios.append(
@@ -468,7 +538,7 @@ class Laboratory:
                         "required": True,
                         "executed": True,
                         "status": "failed" if isinstance(exc, AssertionError) else "not_evaluated",
-                        "reason": type(exc).__name__,
+                        "reason": safe_exception_type(exc),
                     }
                 )
             self.journal.phase("cancelled" if self.journal.value["cancelled"] else "interrupted")

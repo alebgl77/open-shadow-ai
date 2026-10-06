@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-import redis.asyncio as aioredis
+from queue_integration_fixtures import queue_redis as _queue_redis  # noqa: F401
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -34,7 +34,7 @@ pytestmark = [
 ]
 
 
-async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_keeps_unknowns(monkeypatch):
+async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_keeps_unknowns(monkeypatch, queue_redis):
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, capture_output=True, text=True)
     unique = uuid4().hex
     tenant, foreign_tenant = "network-test-" + unique, "foreign-test-" + unique
@@ -43,9 +43,7 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
     config = load_config()
     engine = create_async_engine(config.database.postgres_url, pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    redis = aioredis.from_url(config.database.redis_url, decode_responses=True)
     ch = init_clickhouse(config.database)
-    stream = "network-test-matches:" + unique
     # Apply the existing schema only; the network source introduces no database columns.
     for path in ("docker/clickhouse-init/001_create_database.sql", "migrations/clickhouse/002_event_metadata.sql"):
         for statement in Path(path).read_text().split(";"):
@@ -93,12 +91,7 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
         source_type="network", protocol="DNS", domain=domain, collector_id="foreign-sensor", tenant_id=foreign_tenant,
     )
 
-    async def isolated_xadd(_name, data):
-        return await redis.xadd(stream, data)
-
-    processor = EventProcessor(
-        SimpleNamespace(xadd=isolated_xadd), ch, sessions, CatalogMatcher(build_catalog_index([item]))
-    )
+    processor = EventProcessor(queue_redis, ch, sessions, CatalogMatcher(build_catalog_index([item])))
     try:
         for event in events + [stale, future]:
             await processor({"data": prepare_event(event).model_dump_json()})
@@ -133,10 +126,13 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
         )
         assert tls.total == 1 and tls.items[0].event_id == events[1].event_id
         assert tls.items[0].catalog_match_id == item_id
-        assert await redis.xlen(stream) == 4  # DNS, TLS and both out-of-window DNS fixtures.
+        assert await queue_redis.xlen("matches") == 4  # DNS, TLS and both out-of-window DNS fixtures.
+        queued = await queue_redis.xrange("matches")
+        assert {CanonicalEvent.model_validate_json(fields["event"]).event_id for _, fields in queued} == {
+            event.event_id for event in [events[0], events[1], stale, future]
+        }
     finally:
-        # Own UUID tenant/receipt/stream fixtures only; never touch an operator's observations.
-        await redis.delete(stream)
+        # Own UUID tenant/receipt fixtures only; queue_redis owns disposable DB 14.
         async with sessions.begin() as session:
             await session.execute(
                 delete(IngestReceiptORM).where(
@@ -149,6 +145,5 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
             {"tenants": (tenant, foreign_tenant)},
         )
         ch.disconnect()
-        await redis.aclose()
         await engine.dispose()
         get_config.cache_clear()
