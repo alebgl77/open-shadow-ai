@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { build, createServer, normalizePath } from 'vite'
 import type { Plugin, ViteDevServer } from 'vite'
@@ -200,12 +200,17 @@ describe('literal watch policy with real filesystem watchers', () => {
             const changed = event(actual.watcher, 'change', literal)
             await writeFile(literal, 'updated-literal-value')
             await changed
+            for (const alternative of alternatives) expect(watchedFiles(actual.watcher, external)).not.toContain(alternative)
           } else {
-            const added = alternatives.map(name => event(actual.watcher, 'add', join(external, name)))
+            // Globbing matches exact literal strings as well as brace-expanded names.
+            const expectedNames = [basename(literal), ...alternatives]
+            const added = expectedNames.map(name => event(actual.watcher, 'add', join(external, name)))
             actual.watcher.add(literal)
             await Promise.all(added)
-            expect(watchedFiles(actual.watcher, external)).toEqual(expect.arrayContaining(alternatives))
-            expect(watchedFiles(actual.watcher, external)).not.toContain('probe{one,two}.js')
+            expect(watchedFiles(actual.watcher, external)).toEqual(expect.arrayContaining(expectedNames))
+            const changed = event(actual.watcher, 'change', join(external, alternatives[0]))
+            await writeFile(join(external, alternatives[0]), 'updated-glob-control-value')
+            await changed
           }
         } finally {
           await bounded(actual.close(), `${engine} public watcher close`)
