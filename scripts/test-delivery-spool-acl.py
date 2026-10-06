@@ -1,7 +1,10 @@
-"""Native Windows spool/ancestor ACL and SQLite restart smoke, without guard patches.
+"""Native Windows spool/ancestor ACL and SQLite recovery smoke, without ACL result mocks.
 
 All mutations stay in a fresh user-profile fixture outside the checkout. A host
 with unsafe profile ancestors fails rather than weakening the production guard.
+Security positives/negatives use unchanged checks. One scoped timing hook rolls
+back a real SQLite transaction before the actual native journal probe; its result
+is returned unchanged, and no privacy result or filesystem outcome is fabricated.
 """
 
 from __future__ import annotations
@@ -72,8 +75,10 @@ switch ($env:SHADAI_SPOOL_ACL_ACTION) {
                 $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band 852032) })
         if ($replacement.Count) { exit 23 }
     }
-    'inherit-only' {
-        & $icacls $path /grant '*S-1-5-32-545:(OI)(CI)(IO)M' /Q | Out-Null
+    { $_ -in @('inherit-only', 'inherit-only-no-propagate') } {
+        $grant = '*S-1-5-32-545:(OI)(CI)(IO)'
+        if ($env:SHADAI_SPOOL_ACL_ACTION -eq 'inherit-only-no-propagate') { $grant += '(NP)' }
+        & $icacls $path /grant ($grant + 'M') /Q | Out-Null
         if ($LASTEXITCODE -ne 0) { exit 24 }
         $acl = Get-Acl -LiteralPath $path
         $templates = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
@@ -85,6 +90,10 @@ switch ($env:SHADAI_SPOOL_ACL_ACTION) {
                 $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band 852032) -and
                 -not ($_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) })
         if (-not $templates.Count -or $effective.Count) { exit 25 }
+        if ($env:SHADAI_SPOOL_ACL_ACTION -eq 'inherit-only-no-propagate' -and
+            -not @($templates | Where-Object {
+                $_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::NoPropagateInherit
+            }).Count) { exit 27 }
     }
     'verify-effective-inherited' {
         $acl = Get-Acl -LiteralPath $path
@@ -206,6 +215,58 @@ def ancestor_diagnostic(parent: Path) -> None:
     print("NATIVE ANCESTOR DIAGNOSTIC: " + json.dumps(report, sort_keys=True))
 
 
+def verify_vanished_journal(root: Path) -> None:
+    """Time real rollback at the probe boundary; never replace an ACL result."""
+    payload = b"synthetic-concurrent-rollback\x00\xff"
+    with DurableSpool(root / "vanished-journal") as first:
+        batch_id = first.enqueue(payload)
+        first.db.execute("BEGIN IMMEDIATE")
+        first.db.execute("UPDATE counters SET value=value+1 WHERE name='enqueued'")
+        journal = first.directory / "delivery.sqlite3-journal"
+        journal.lstat()
+        native_run = subprocess.run
+        reports = []
+
+        def timed_native_run(*args, **kwargs):
+            private = kwargs.get("env", {}).get("SHADAI_SPOOL_PRIVATE_PATH")
+            if private != str(journal) or reports:
+                return native_run(*args, **kwargs)
+            journal.lstat()  # Actual file still exists after the guard's lstat.
+            first.db.execute("ROLLBACK")
+            result = native_run(*args, **dict(kwargs, stdout=subprocess.PIPE, stderr=subprocess.PIPE))
+            output = ((result.stdout or b"") + (result.stderr or b"")).decode(errors="replace")
+            try:
+                journal.lstat()
+            except FileNotFoundError:
+                absent = True
+            else:
+                absent = False
+            reports.append({"native_returncode": result.returncode, "post_probe_lstat_absent": absent,
+                            "path_not_found": "PathNotFound" in output,
+                            "object_not_found": "ObjectNotFound" in output,
+                            "access_denied": "UnauthorizedAccessException" in output})
+            return result
+
+        subprocess.run = timed_native_run
+        try:
+            with DurableSpool(first.directory) as second:
+                [batch] = second.claim(limit=1)
+                if (batch.batch_id, batch.payload) != (batch_id, payload) or not second.ack(batch):
+                    raise RuntimeError("native_vanished_journal_recovery_failed")
+                if second.stats().get("enqueued") != 1:
+                    raise RuntimeError("native_vanished_journal_rollback_failed")
+        finally:
+            subprocess.run = native_run
+            if first.db.in_transaction:
+                first.db.execute("ROLLBACK")
+        if (len(reports) != 1 or reports[0]["native_returncode"] == 0 or
+                not reports[0]["post_probe_lstat_absent"] or not reports[0]["path_not_found"] or
+                not reports[0]["object_not_found"] or reports[0]["access_denied"]):
+            raise RuntimeError("native_vanished_journal_causal_proof_failed")
+        print("NATIVE JOURNAL DIAGNOSTIC: " + json.dumps(reports[0], sort_keys=True))
+    print("PASS: timed real rollback, failed native probe and definitive absent journal preserve exact bytes/ID")
+
+
 def verify(root: Path) -> None:
     ancestor_diagnostic(root.parent)
     with DurableSpool(root):
@@ -241,23 +302,53 @@ def verify(root: Path) -> None:
         if not spool.ack(batches[0]):
             raise RuntimeError("native_restart_ack_failed")
     print("PASS: real process restart preserves exact bytes/ID; database and journal DACLs private")
+    verify_vanished_journal(root)
 
-    parent = root / "inherit-only-template"
-    directory = parent / "protected-child"
-    with DurableSpool(parent):
-        pass
+    for suffix in ("-journal", "-wal", "-shm"):
+        directory = root / ("unsafe-existing" + suffix)
+        with DurableSpool(directory):
+            pass
+        sidecar = directory / ("delivery.sqlite3" + suffix)
+        sidecar.write_bytes(b"synthetic-public-sidecar")
+        fixture_action("explicit", sidecar, root)
+        rejected(directory, "spool_private_acl_required")
+    print("PASS: all three existing public SQLite sidecars remain rejected")
+
+    directory = root / "unsafe-existing-sidecar-owner"
     with DurableSpool(directory):
         pass
-    fixture_action("inherit-only", parent, root)
-    _check_path(directory, directory=True)
-    with DurableSpool(directory) as spool:
-        payload = b"synthetic-inherit-only-safe"
-        batch_id = spool.enqueue(payload)
-        [batch] = spool.claim(limit=1)
-        if (batch.batch_id, batch.payload) != (batch_id, payload) or not spool.ack(batch):
-            raise RuntimeError("native_inherit_only_safe_delivery_failed")
-    print("PASS: real InheritOnly Modify template permits a protected private descendant")
+    sidecar = directory / "delivery.sqlite3-journal"
+    sidecar.write_bytes(b"synthetic-foreign-owner-sidecar")
+    fixture_action("owner", sidecar, root)
+    rejected(directory, "spool_private_acl_required")
+    print("PASS: existing SQLite sidecar with an untrusted owner remains rejected")
 
+    try:
+        _check_path(root / "missing-required-database.sqlite3", directory=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise RuntimeError("native_missing_required_database_accepted")
+    print("PASS: required database path check remains strict on absence")
+
+    for action in ("inherit-only", "inherit-only-no-propagate"):
+        parent = root / action
+        directory = parent / "protected-child"
+        with DurableSpool(parent):
+            pass
+        with DurableSpool(directory):
+            pass
+        fixture_action(action, parent, root)
+        _check_path(directory, directory=True)
+        with DurableSpool(directory) as spool:
+            payload = b"synthetic-inherit-only-safe"
+            batch_id = spool.enqueue(payload)
+            [batch] = spool.claim(limit=1)
+            if (batch.batch_id, batch.payload) != (batch_id, payload) or not spool.ack(batch):
+                raise RuntimeError("native_inherit_only_safe_delivery_failed")
+        print("PASS: real " + action + " Modify template permits a protected private descendant")
+
+    parent = root / "inherit-only"
     inherited = parent / "effective-inherited-child"
     inherited.mkdir()
     fixture_action("verify-effective-inherited", inherited, root)
@@ -338,6 +429,29 @@ def verify(root: Path) -> None:
     print("PASS: unsafe ancestor owner remains rejected even when its public Modify ACE is InheritOnly")
 
     import _winapi
+
+    directory = root / "unsafe-hardlinked-sidecar"
+    with DurableSpool(directory):
+        pass
+    target_file = directory / "synthetic-hardlink-target"
+    target_file.write_bytes(b"synthetic-hardlink")
+    os.link(target_file, directory / "delivery.sqlite3-journal")
+    rejected(directory, "spool_unsafe_hardlink")
+    print("PASS: real hardlinked SQLite sidecar remains rejected")
+
+    directory = root / "unsafe-reparse-sidecar"
+    with DurableSpool(directory):
+        pass
+    target = root / "sidecar-reparse-target"
+    with DurableSpool(target):
+        pass
+    link = directory / "delivery.sqlite3-journal"
+    _winapi.CreateJunction(str(target), str(link))
+    try:
+        rejected(directory, "spool_unsafe_path")
+    finally:
+        link.rmdir()
+    print("PASS: real reparse SQLite sidecar remains rejected")
 
     target = root / "reparse-target"
     with DurableSpool(target):

@@ -115,6 +115,27 @@ def _check_path(path: Path, *, directory: bool) -> None:
         raise SpoolError("spool_unsafe_hardlink")
 
 
+def _check_sqlite_sidecars(database: Path) -> None:
+    """Validate fixed optional SQLite files without mistaking removal for privacy."""
+    for suffix in ("-journal", "-wal", "-shm"):
+        path = Path(str(database) + suffix)
+        try:
+            _check_path(path, directory=False)
+        except FileNotFoundError:
+            continue
+        except SpoolError as error:
+            if os.name != "nt" or str(error) != "spool_private_acl_required":
+                raise
+            # Another SQLite connection may remove its journal after lstat but
+            # before native Get-Item/Get-Acl. Only definitive absence is optional;
+            # a present file or unknown/read failure still fails closed.
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+            raise
+
+
 def _private_ancestors(path: Path) -> None:
     """Reject directories that another user can replace while SQLite opens files."""
     if os.name != "nt":
@@ -198,10 +219,8 @@ class DurableSpool:
             pass
         else:
             os.close(descriptor)
-        for candidate in (database, Path(str(database) + "-journal"), Path(str(database) + "-wal"),
-                          Path(str(database) + "-shm")):
-            if candidate.exists() or candidate.is_symlink():
-                _check_path(candidate, directory=False)
+        _check_path(database, directory=False)
+        _check_sqlite_sidecars(database)
         self.db = sqlite3.connect(database, timeout=5, isolation_level=None, check_same_thread=False)
         try:
             self.db.execute("PRAGMA journal_mode=DELETE")

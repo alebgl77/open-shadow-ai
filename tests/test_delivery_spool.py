@@ -1,6 +1,9 @@
 """Durable client recovery and metadata privacy; ancestor safety is checked separately."""
 
 import json
+import os
+import runpy
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +36,100 @@ def spool(tmp_path, monkeypatch):
 def test_standalone_vendor_is_exact_stdlib_copy():
     assert Path(vendored.__file__).read_bytes() == Path(delivery_spool.__file__).read_bytes()
     assert "shadai." not in Path(vendored.__file__).read_text()
+
+
+def test_actual_rollback_journal_disappearance_preserves_payload(spool):
+    if os.name == "nt":
+        # Same mandatory CI case; only fixture timing changes. Actual native ACL
+        # outcomes and definitive lstat remain real. Ancestry boundary is above.
+        native = runpy.run_path(str(Path(__file__).parents[1] / "scripts/test-delivery-spool-acl.py"))
+        native["verify_vanished_journal"](spool.directory)
+    else:
+        payload = b"synthetic-rollback"
+        batch_id = spool.enqueue(payload)
+        spool.db.execute("BEGIN IMMEDIATE")
+        spool.db.execute("UPDATE counters SET value=value+1 WHERE name='enqueued'")
+        journal = spool.directory / "delivery.sqlite3-journal"
+        journal.lstat()
+        spool.db.execute("ROLLBACK")
+        with pytest.raises(FileNotFoundError):
+            journal.lstat()
+        delivery_spool._check_sqlite_sidecars(spool.directory / "delivery.sqlite3")
+        [batch] = spool.claim(limit=1)
+        assert (batch.batch_id, batch.payload) == (batch_id, payload)
+
+
+def _public_sidecar(path):
+    path.write_bytes(b"synthetic-unsafe-sidecar")
+    if os.name == "nt":
+        exe = Path(os.environ["SystemRoot"]) / "System32/icacls.exe"
+        result = subprocess.run([str(exe), str(path), "/grant", "*S-1-5-32-545:R", "/Q"],
+                                capture_output=True, timeout=15, check=False)
+        assert result.returncode == 0
+    else:
+        path.chmod(0o644)
+
+
+@pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
+def test_existing_unsafe_optional_sidecars_are_never_omitted(spool, suffix):
+    database = spool.directory / "delivery.sqlite3"
+    sidecar = Path(str(database) + suffix)
+    _public_sidecar(sidecar)
+    with pytest.raises(SpoolError, match="spool_private_(acl|permissions)_required"):
+        delivery_spool._check_sqlite_sidecars(database)
+    assert sidecar.lstat()
+    sidecar.unlink()
+
+
+def test_unknown_post_probe_stat_error_is_not_absence(spool, monkeypatch):
+    database = spool.directory / "delivery.sqlite3"
+    sidecar = Path(str(database) + "-journal")
+    _public_sidecar(sidecar)
+    real_stat = Path.lstat
+    observations = []
+
+    def read_metadata(path, *args, **kwargs):
+        if path == sidecar:
+            observations.append(path)
+            if len(observations) == 2:
+                raise PermissionError("synthetic metadata read failure")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", read_metadata)
+    expected = PermissionError if os.name == "nt" else SpoolError
+    with pytest.raises(expected):
+        delivery_spool._check_sqlite_sidecars(database)
+    assert len(observations) == (2 if os.name == "nt" else 1)
+    sidecar.unlink()
+
+
+def test_required_database_disappearing_before_check_is_not_optional(spool, monkeypatch):
+    directory = spool.directory / "required-db-disappearance"
+    database = directory / "delivery.sqlite3"
+    real_stat = Path.lstat
+
+    def remove_at_metadata_check(path, *args, **kwargs):
+        if path == database:
+            database.unlink()
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", remove_at_metadata_check)
+    with pytest.raises(FileNotFoundError):
+        DurableSpool(directory)
+    assert not database.exists()
+
+
+def test_hardlinked_optional_sidecar_is_never_omitted(spool):
+    target = spool.directory / "synthetic-hardlink-target"
+    target.write_bytes(b"synthetic-hardlink")
+    target.chmod(0o600)
+    sidecar = spool.directory / "delivery.sqlite3-journal"
+    os.link(target, sidecar)
+    try:
+        with pytest.raises(SpoolError, match="spool_unsafe_hardlink"):
+            delivery_spool._check_sqlite_sidecars(spool.directory / "delivery.sqlite3")
+    finally:
+        sidecar.unlink()
 
 
 def test_spool_binding_survives_restart_and_rejects_reassigned_credentials(spool):
