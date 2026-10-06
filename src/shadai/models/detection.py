@@ -76,6 +76,17 @@ class DetectionORM(Base, TimestampMixin):
         return "active"
 
     @property
+    def risk_calculated_at(self) -> datetime | None:
+        value = (self.evidence_bundle or {}).get("_risk_calculated_at")
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+            return parsed.astimezone(UTC) if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+        except (ValueError, OverflowError):
+            return None
+
+    @property
     def risk_score_stale(self) -> bool:
         bundle = self.evidence_bundle or {}
         policy = bundle.get("_governance") or {}
@@ -124,6 +135,7 @@ class DetectionRead(BaseModel):
     risk_score: int
     risk_level: str
     risk_score_stale: bool = False
+    risk_calculated_at: datetime | None = None
     governance_status: str = "none"
     first_seen_at: datetime
     last_seen_at: datetime

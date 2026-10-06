@@ -192,7 +192,10 @@ async def test_user_count_sort_is_accepted_and_stable():
         sort_by="impacted_users_count", sort_order="desc", page=1, page_size=100, _user=None, session=session
     )
     sql = str(session.execute.call_args.args[0])
-    assert "ORDER BY detections.impacted_users_count DESC, detections.detection_id" in sql
+    assert "ORDER BY (SELECT count(*)" in sql
+    assert "detection_identity_members.detection_id = detections.detection_id" in sql
+    assert "detection_identity_members.kind" in sql and "detection_identity_members.last_seen_at >=" in sql
+    assert ") DESC, detections.detection_id" in sql
     frontend = Path("frontend/src/api/detections.ts")
     if frontend.exists():
         declared = frontend.read_text().split("DETECTION_SORT_COLUMNS = [", 1)[1].split("]", 1)[0]

@@ -187,10 +187,12 @@ class CanonicalEvent(BaseModel):
     catalog_match_id: str = ""
     match_field: str = ""
     match_confidence: float = Field(default=0.0, ge=0, le=1)
+    # Queue-only server proof. External ingestion never trusts a submitted proof.
+    privacy_stamp: str = Field(default="", max_length=64, pattern=r"^(?:[a-f0-9]{64})?$")
 
     def to_clickhouse_dict(self) -> dict:
         """Serialize to dict for clickhouse-driver batch insert."""
-        d = self.model_dump()
+        d = self.model_dump(exclude={"privacy_stamp"})
         d["event_id"] = str(d["event_id"])
         d["timestamp"] = d["timestamp"]
         d["normalized_at"] = d["normalized_at"]

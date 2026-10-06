@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shadai.api.detections import filter_detections, order_detections
 from shadai.database import get_postgres_session
-from shadai.models.detection import DetectionORM, DetectionRead
+from shadai.models.detection import DetectionORM
 from shadai.models.user import UserORM
 from shadai.security.audit import log_audit
 from shadai.security.rbac import require_role
@@ -43,6 +43,7 @@ async def export_detections(
     current_user: UserORM = Depends(require_role("analyst")),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
+    now = datetime.now(UTC)
     filters = {
         "classification": classification,
         "risk_level": risk_level,
@@ -51,9 +52,14 @@ async def export_detections(
         "analyst_status": analyst_status,
         "search": search,
     }
-    query = order_detections(filter_detections(select(DetectionORM), **filters), sort_by, sort_order)
+    query = order_detections(filter_detections(select(DetectionORM), **filters), sort_by, sort_order, now=now)
     result = await session.execute(query)
-    detections = [DetectionRead.model_validate(d) for d in result.scalars().all()]
+    rows = list(result.scalars().all())
+    from shadai.utils.privacy import refresh_identity_counts, sanitize_evidence
+
+    detections = await refresh_identity_counts(session, rows, now=now)
+    for detection in detections:
+        detection.evidence_bundle = sanitize_evidence(detection.evidence_bundle, now=now)
 
     await log_audit(
         session,
@@ -90,6 +96,7 @@ async def export_detections(
                 "analyst_status",
                 "sources",
                 "reasoning",
+                "risk_calculated_at",
             ]
         )
         for d in detections:
@@ -111,6 +118,7 @@ async def export_detections(
                     d.analyst_status,
                     ";".join(d.source_types),
                     d.reasoning_summary or "",
+                    d.risk_calculated_at.astimezone(UTC).isoformat() if d.risk_calculated_at else "",
                 ]
             )
         output.seek(0)

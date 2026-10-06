@@ -53,7 +53,9 @@ def test_normalized_protocol_hosts_and_addresses_use_existing_columns(protocol):
     assert "network" in SOURCE_TYPES and "events:network" in STREAMS
     assert _derive_entity_type("network", "ai_platform") == "api_service"
     assert _derive_entity_type("network", "llm_chat") == "saas_app"
-    assert set(event.to_clickhouse_dict()) == set(CanonicalEvent.model_fields)
+    assert set(event.to_clickhouse_dict()) == set(CanonicalEvent.model_fields) - {"privacy_stamp"}
+    event.privacy_stamp = "a" * 64
+    assert "privacy_stamp" not in event.to_clickhouse_dict()
 
 
 @pytest.mark.parametrize("host", [
@@ -201,12 +203,13 @@ def test_network_evidence_drops_unknown_legacy_context():
 
 
 @pytest.mark.parametrize("fields", [
-    {"tenant_id": "other-org"}, {"timestamp": datetime.now(UTC) + timedelta(minutes=10)},
-    {"timestamp": datetime.now(UTC) - timedelta(days=366)},
+    lambda: {"tenant_id": "other-org"},
+    lambda: {"timestamp": datetime.now(UTC) + timedelta(minutes=10)},
+    lambda: {"timestamp": datetime.now(UTC) - timedelta(days=366)},
 ])
 def test_network_common_boundary_enforces_tenant_and_dates(fields):
     with pytest.raises(ValueError):
-        prepare_event(observation(**fields))
+        prepare_event(observation(**fields()))
 
 
 def test_naive_network_timestamp_is_rejected():

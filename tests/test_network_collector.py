@@ -60,7 +60,7 @@ def test_retries_same_uuid_timestamp_and_exact_bytes(first):
     assert sent["event_id"] == str(event().event_id) and "normalized_at" not in sent
 
 
-@pytest.mark.parametrize("status", [301, 302, 307, 308, 400, 401, 403, 413, 422])
+@pytest.mark.parametrize("status", [301, 302, 307, 308, 400, 403, 413, 422])
 def test_redirects_and_client_errors_terminal(status):
     requests = []
     def handle(request):
@@ -325,8 +325,11 @@ def test_cli_dry_run_csv_replay_and_no_sensitive_output(tmp_path, capsys):
     source = tmp_path / "metadata.jsonl"
     source.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
     csv_file = tmp_path / "metadata.csv"
-    args = ["--format", "zeek-http", "--input", str(source), "--sensor-id", "test-sensor", "--dry-run"]
+    spool_path = tmp_path / "must-not-create-spool"
+    args = ["--format", "zeek-http", "--input", str(source), "--sensor-id", "test-sensor", "--dry-run",
+            "--spool-dir", str(spool_path)]
     assert network.main(args + ["--csv-output", str(csv_file)]) == 0
+    assert not spool_path.exists()
     output = capsys.readouterr()
     first = json.loads(output.out)
     assert first["domain"] == "api.openai.com" and first["protocol"] == "HTTP"
@@ -339,6 +342,10 @@ def test_cli_dry_run_csv_replay_and_no_sensitive_output(tmp_path, capsys):
 
 
 def test_cli_invalid_lines_and_delivery_failure_nonzero(tmp_path, capsys, monkeypatch):
+    from shadai.utils import delivery_spool
+
+    # SQLite semantics fixture only: the sandbox workspace ancestors are unsafe.
+    monkeypatch.setattr(delivery_spool, "_private_ancestors", lambda path: None)
     source = tmp_path / "bad.jsonl"
     source.write_bytes(b'{"secret":"never-show-this"\n' + b"x" * (network.MAX_LINE_BYTES + 2) + b"\n")
     args = ["--format", "zeek-tls", "--input", str(source), "--sensor-id", "test-sensor"]
@@ -355,7 +362,7 @@ def test_cli_invalid_lines_and_delivery_failure_nonzero(tmp_path, capsys, monkey
         def close(self):
             pass
     monkeypatch.setattr(network, "EventTransport", Failing)
-    assert network.main(args) == 1
+    assert network.main(args + ["--spool-dir", str(tmp_path / "private-spool")]) == 1
     assert "delivery_http_401" in capsys.readouterr().err
 
 

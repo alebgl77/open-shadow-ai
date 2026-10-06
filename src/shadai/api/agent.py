@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from shadai.api.collectors import CollectorPrincipal, authenticate_collector, validate_legacy_key
 from shadai.config import get_config
 from shadai.database import get_redis
 from shadai.models.event import CanonicalEvent
@@ -55,21 +56,22 @@ class TelemetryBatch(BaseModel):
 
 
 def _validate_api_key(x_api_key: str | None = Header(None)) -> str:
-    """Validate agent API key from header using constant-time comparison."""
-    import hmac
-
-    expected = get_config().security.agent_api_key
-    if not x_api_key or len(expected.encode()) < 32 or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return x_api_key
+    """Compatibility helper for callers explicitly checking the shared legacy key."""
+    return validate_legacy_key(x_api_key)
 
 
 @router.post("/telemetry")
 async def receive_telemetry(
     batch: TelemetryBatch,
-    _key: str = Depends(_validate_api_key),
+    principal: CollectorPrincipal = Depends(authenticate_collector, scope="function"),
 ):
     """Receive endpoint agent telemetry and push to pipeline."""
+    endpoint_records = any((batch.processes, batch.containers, batch.local_ai_hits, batch.model_files))
+    sources = {"endpoint"} if endpoint_records else set()
+    if batch.extensions:
+        sources.add("browser")
+    principal.require_sources(sources or {"endpoint"})
+    received_at = datetime.now(UTC)
     redis = await get_redis()
     events: list[CanonicalEvent] = []
     from shadai.api.ingestion import prepare_event
@@ -129,33 +131,80 @@ async def receive_telemetry(
         event.timestamp = batch.timestamp
         event.normalized_at = batch.timestamp
         event.tenant_id = get_config().tenant_id
-        event.collector_id = "agent:" + batch.hostname
+        event.collector_id = principal.collector_id
         event.evidence_type = "inventory" if event.source_type == "browser" else "observation"
+        # Observation identity is derived before mode/key-specific privacy aliases.
+        # A mode change during an uncertain-delivery retry must not duplicate work.
+        content = json.dumps(event.model_dump(mode="json", exclude={"event_id", "privacy_stamp"}), sort_keys=True)
+        event.event_id = uuid.uuid5(uuid.NAMESPACE_URL, sha256(content.encode()).hexdigest())
         try:
             event = prepare_event(event, trusted_collector=True)
         except ValueError:
             raise HTTPException(status_code=422, detail="Invalid telemetry event") from None
-        content = json.dumps(event.model_dump(mode="json", exclude={"event_id"}), sort_keys=True)
-        event.event_id = uuid.uuid5(uuid.NAMESPACE_URL, sha256(content.encode()).hexdigest())
         events[index] = event
 
     # Push to Redis
     pipe = redis.pipeline()
+    from shadai.utils.queueing import queue_event
+
     for event in events:
-        stream_key = f"events:{event.source_type}"
-        pipe.xadd(stream_key, {"data": event.model_dump_json()})
+        queue_event(pipe, event, accepted_at=received_at)
     await pipe.execute()
+    principal.contact(batch.timestamp if events else None)
 
     return {"received": len(events), "hostname": batch.hostname}
 
 
 @router.get("/config")
-async def get_agent_config(_key: str = Depends(_validate_api_key)):
+async def get_agent_config(principal: CollectorPrincipal = Depends(authenticate_collector, scope="function")):
     """Return agent configuration."""
     return {
+        "collector_id": None if principal.legacy else principal.collector_id,
+        "legacy": principal.legacy,
+        "allowed_source_types": sorted(principal.allowed_source_types),
+        "ingestion_max_age_days": get_config().retention.ingestion_max_age_days,
         "poll_interval_seconds": 300,
         "collect_processes": True,
         "collect_containers": True,
         "collect_extensions": True,
         "collect_local_ai": True,
     }
+
+
+class CollectorHeartbeat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    collector_id: str = Field(min_length=1, max_length=255)
+    client_version: str = Field(min_length=1, max_length=100)
+    queue_events: int = Field(default=0, ge=0, le=10**12, strict=True)
+    queued_bytes: int = Field(default=0, ge=0, le=10**15, strict=True)
+    dropped_events: int = Field(default=0, ge=0, le=10**15, strict=True)
+    expired_events: int = Field(default=0, ge=0, le=10**15, strict=True)
+    rejected_events: int = Field(default=0, ge=0, le=10**15, strict=True)
+    last_success_at: datetime | None = None
+
+    @field_validator("last_success_at")
+    @classmethod
+    def aware_success(cls, value):
+        if value is not None:
+            if value.tzinfo is None:
+                raise ValueError("Timestamp requires timezone")
+            if value > datetime.now(UTC):
+                raise ValueError("Client success cannot be in the future")
+            return value.astimezone(UTC)
+        return value
+
+
+@router.post("/heartbeat")
+async def collector_heartbeat(
+    body: CollectorHeartbeat,
+    principal: CollectorPrincipal = Depends(authenticate_collector, scope="function"),
+):
+    """Server-received liveness; client timestamps and counters remain advisory."""
+    if principal.legacy:
+        raise HTTPException(status_code=403, detail="Enrolled collector credential required")
+    principal.bind(body.collector_id)
+    principal.contact(heartbeat=True)
+    principal.collector.client_version = body.client_version
+    principal.collector.client_last_success_at = body.last_success_at
+    principal.collector.client_counters = body.model_dump(exclude={"collector_id", "client_version", "last_success_at"})
+    return {"collector_id": principal.collector_id, "received_at": principal.collector.last_heartbeat_at}

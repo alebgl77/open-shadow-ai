@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import inspect
 from starlette.requests import Request
 
 from shadai.api.governance import create_governance, update_governance
@@ -78,7 +79,11 @@ def sample_detection():
     event = CanonicalEvent(
         source_type="oauth", evidence_type="inventory", oauth_scopes=["Mail.Read"], bytes_out=12_000_000, timestamp=now
     )
-    return Correlator(None)._create_detection(event, item, "oauth_app_id", 0.95, now, now, None)
+    detection = Correlator(None)._create_detection(event, item, "oauth_app_id", 0.95, now, now, None)
+    # Tests below mock SQL and represent loaded database rows, including nullable columns.
+    for name in inspect(detection).unloaded:
+        setattr(detection, name, None)
+    return detection
 
 
 def test_policy_rescore_preserves_all_observations_and_unrelated_factors():
@@ -137,6 +142,28 @@ def test_expiry_between_events_is_visible_as_stale_until_resolved():
     assert detection.classification == "unknown" and not detection.risk_score_stale
 
 
+def test_apply_policy_records_only_successful_actual_risk_recalculation(monkeypatch):
+    detection = sample_detection()
+    before = detection.risk_calculated_at
+    now = datetime.now(UTC) + timedelta(hours=1)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr("shadai.engine.governance.datetime", Clock)
+    policy = GovernanceORM(governance_id=uuid4(), org_classification="sanctioned")
+    apply_policy(detection, policy)
+    assert detection.risk_calculated_at == now and detection.risk_calculated_at > before
+    assert not detection.risk_score_stale
+    detection.evidence_bundle = {"_risk_calculated_at": before.isoformat(), "risk_factors": []}
+    score = detection.risk_score
+    apply_policy(detection, policy)
+    assert detection.risk_score == score and detection.risk_score_stale
+    assert detection.risk_calculated_at == before
+
+
 @pytest.mark.parametrize("expired", [False, True])
 async def test_new_detection_respects_active_and_expired_approval(expired):
     now = datetime.now(UTC)
@@ -152,6 +179,9 @@ async def test_new_detection_respects_active_and_expired_approval(expired):
         None,
         SimpleNamespace(scalar_one_or_none=lambda: None),
         SimpleNamespace(scalar_one_or_none=lambda: policy),
+        None,  # Locked expired-membership deletion.
+        None,  # Initial key-basis membership reset.
+        [],  # Current retained-window membership counts.
     ]
     added = []
     session.add = Mock(side_effect=added.append)
@@ -182,7 +212,7 @@ async def test_detection_classification_patch_rescores_without_new_event(monkeyp
     before_score = detection.risk_score
     before_seen = detection.last_seen_at
     session = AsyncMock()
-    session.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: detection)
+    session.execute.side_effect = [SimpleNamespace(scalar_one_or_none=lambda: detection), []]
     monkeypatch.setattr("shadai.api.detections.log_audit", AsyncMock())
     actor = SimpleNamespace(user_id=uuid4(), username="analyst")
     request = Request({"type": "http", "headers": [], "client": ("127.0.0.1", 1)})
@@ -199,7 +229,8 @@ def test_legacy_governance_link_without_snapshot_is_explicitly_stale():
     assert detection.risk_score_stale
 
 
-async def test_csv_export_carries_score_freshness(monkeypatch):
+@pytest.mark.parametrize("known_timestamp", [False, True])
+async def test_csv_export_carries_score_freshness(monkeypatch, known_timestamp):
     import csv
 
     from shadai.api.exports import export_detections
@@ -209,8 +240,13 @@ async def test_csv_export_carries_score_freshness(monkeypatch):
     detection.analyst_status = "new"
     detection.created_at = detection.updated_at = datetime.now(UTC)
     detection.governance_id = uuid4()
+    calculated_at = detection.risk_calculated_at
+    if not known_timestamp:
+        detection.evidence_bundle = {
+            key: value for key, value in detection.evidence_bundle.items() if key != "_risk_calculated_at"
+        }
     session = AsyncMock()
-    session.execute.return_value = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [detection]))
+    session.execute.side_effect = [SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [detection])), []]
     monkeypatch.setattr("shadai.api.exports.log_audit", AsyncMock())
     actor = SimpleNamespace(user_id=uuid4(), username="analyst")
     request = Request({"type": "http", "headers": [], "client": ("127.0.0.1", 1)})
@@ -220,6 +256,8 @@ async def test_csv_export_carries_score_freshness(monkeypatch):
     assert "risk_score_stale" in rows[0] and "governance_status" in rows[0]
     assert len(rows[0]) == len(rows[1])
     assert rows[1][rows[0].index("risk_score_stale")] == "True"
+    assert rows[0][-1] == "risk_calculated_at"
+    assert rows[1][-1] == (calculated_at.astimezone(UTC).isoformat() if known_timestamp else "")
 
 
 async def test_date_only_update_reloads_concurrent_classification_under_lock(monkeypatch):

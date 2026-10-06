@@ -1,6 +1,6 @@
 """Policy application without inventing evidence or altering confidence."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 
 from shadai.engine.scorer import generate_reasoning_summary
 
@@ -12,7 +12,7 @@ CLASSIFICATION_ADJUSTMENTS = {
 }
 
 
-def rescore_classification(detection):
+def rescore_classification(detection, *, now: datetime | None = None):
     """Rebuild only policy factors; preserve the original, unclamped evidence sum.
 
     Legacy rows without a complete persisted factor list cannot be reconstructed
@@ -46,6 +46,7 @@ def rescore_classification(detection):
     detection.risk_score = max(0, min(100, sum(factor["value"] for factor in updated)))
     bundle["risk_factors"] = updated
     bundle["_risk_score_stale"] = False
+    bundle["_risk_calculated_at"] = (now or datetime.now(UTC)).isoformat()
     detection.evidence_bundle = bundle
     detection.reasoning_summary = generate_reasoning_summary(
         detection.confidence_score,

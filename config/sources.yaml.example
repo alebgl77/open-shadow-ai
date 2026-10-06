@@ -11,4 +11,9 @@ sources:
       # IANA zone for device-local timestamps without an offset, e.g. Europe/Paris.
       # FortiGate eventtime/tz fields take precedence when present.
       timezone: UTC
+      # Private persistent payload spool; the Compose syslog profile mounts this parent.
+      spool_dir: /var/lib/shadai/syslog/dns-pilot
+      spool_max_bytes: 67108864
+      spool_max_batches: 2048
+      spool_ttl_seconds: 604800
 # Entra runs separately; declaring an API source here does not poll it.

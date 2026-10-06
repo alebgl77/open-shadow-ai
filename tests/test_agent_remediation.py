@@ -85,7 +85,11 @@ def test_permanent_client_errors_stop_immediately(send_through_adapter, status):
 @pytest.mark.parametrize("failure", [408, 429, 503, requests.Timeout("timeout"), requests.ConnectionError("reset")])
 def test_transient_failure_retries_identical_batch_with_bounded_backoff(send_through_adapter, failure):
     adapter, sleeps = send_through_adapter([failure, failure, 200])
-    batch = {"hostname": "host"}
+    batch = {"hostname": "host", "processes": [
+        {"name": "synthetic-process-a", "username": "synthetic-user"},
+        {"name": "synthetic-process-b", "username": "synthetic-user"},
+        {"name": "synthetic-process-c", "username": "synthetic-user"},
+    ]}
     assert agent.send_batch("https://first.example.test/telemetry", batch, {"X-API-Key": "key"}, True) == 3
     assert len(adapter.requests) == 3
     assert all(json.loads(request.body) == batch for request in adapter.requests)

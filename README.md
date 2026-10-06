@@ -10,7 +10,7 @@
 
 Understand which AI services and tools appear in your environment, where each signal came from, and what it can actually prove. Bring together network metadata, endpoint inventory and Microsoft directory signals in an interface built for investigation.
 
-[Get started](#get-started) · [Deployment](docs/deployment.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Français](README.fr.md)
+[Get started](#get-started) · [Deployment](docs/deployment.md) · [Collector operations](docs/collector-operations.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Français](README.fr.md)
 
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
 
@@ -63,6 +63,8 @@ docker compose --profile entra up -d
 
 AD exports and endpoint installs are operator-run workflows, documented in the [Microsoft guide](docs/microsoft.md). Installing the server does not automatically scan the fleet.
 
+Administrators can enroll scoped collectors in **Sources & coverage**, provision their one-time keys privately and rotate or revoke them. Endpoint, network and syslog collectors have bounded persistent delivery queues; pipeline status separates pending work, retained entries and unknown capture loss. Follow the [operations guide](docs/collector-operations.md) for enrollment, restart recovery, authenticated monitoring and identity retention.
+
 Optional [OIDC sign-in and SCIM provisioning](docs/sso-scim.md) manage access to the console, including Microsoft Entra ID. They are disabled in the base deployment and use separate credentials from the inventory collector. Local administrator sign-in remains available for recovery.
 
 ## What is delivered
@@ -76,6 +78,7 @@ Optional [OIDC sign-in and SCIM provisioning](docs/sso-scim.md) manage access to
 | Microsoft Entra collector | Implemented service-principal inventory and optional grants; AI matching requires reviewed application-ID mappings; live tenant validation pending |
 | On-prem Active Directory | OU-scoped read-only PowerShell exporter; RSAT/live AD validation pending |
 | Generic event ingestion | Authenticated, bounded batches; custom adapters remain your integration work |
+| Collector enrollment and recovery | Scoped one-time credentials, rotation/revocation, bounded local spools and explicit dead-letter replay; native/store CI results must be checked for the deployed commit |
 | Model/token/cost evidence | Accepts instrumented metadata where supplied; network logs cannot produce these values |
 | Other directories (LDAP, Okta, Google Workspace) | Custom ingestion contract available; native connectors planned |
 | Docker Compose | Deployment package and CI service smoke provided; validate the first run |
@@ -95,6 +98,8 @@ The Python package and environment variable prefix remain `shadai` for compatibi
 ## Evidence, privacy and limits
 
 The default configuration never stores URL paths, query strings or user agents. At ingestion, paths (without their query string) and user agents are compared in memory with catalog patterns scoped to each product's hosts; only the matched catalog entry is kept. Set `privacy.match_transient_signals: false` to skip that comparison. Treat usernames, device identifiers and directory exports as personal or organizational data. Set retention and access according to your deployment.
+
+Per-observation identity membership expires independently (default at most 30 days); displayed counts are distinct observed identifiers, not staff headcount. Optional server pseudonymization affects new processing and does not scrub history or plaintext local spools. Risk scores retain their last calculated snapshot and expose a nullable calculation time and stale marker. Historical cleanup is an explicit bounded maintenance operation; see [identity retention and pseudonymization](docs/collector-operations.md#retain-and-pseudonymize-identities).
 
 DNS resolution indicates contact with a domain, not a completed AI interaction. An installed extension or directory application indicates presence or permission, not usage. Model identifiers are declared evidence; token totals and costs require instrumentation. Cost calculations remain estimates unless reconciled against provider billing.
 

@@ -15,6 +15,7 @@ from shadai.config import get_config
 from shadai.database import get_clickhouse, get_postgres_session
 from shadai.engine.governance import rescore_classification
 from shadai.models.detection import DetectionListResponse, DetectionORM, DetectionRead, DetectionUpdate
+from shadai.models.evidence_identity import EvidenceIdentityORM
 from shadai.models.user import UserORM
 from shadai.security.audit import log_audit
 from shadai.security.auth import get_current_user
@@ -114,17 +115,38 @@ def filter_detections(
     return query
 
 
-def order_detections(query, sort_by: str, sort_order: str):
+def order_detections(query, sort_by: str, sort_order: str, *, now: datetime | None = None):
     if sort_by not in SORT_COLUMNS or sort_order not in {"asc", "desc"}:
         raise HTTPException(status_code=422, detail="Invalid sort")
-    column = getattr(DetectionORM, sort_by)
+    if sort_by in {"impacted_users_count", "impacted_devices_count"}:
+        from shadai.utils.privacy import identity_cutoff
+
+        kind = "user" if sort_by == "impacted_users_count" else "device"
+        column = (
+            select(func.count())
+            .where(
+                EvidenceIdentityORM.detection_id == DetectionORM.detection_id,
+                EvidenceIdentityORM.kind == kind,
+                EvidenceIdentityORM.last_seen_at >= identity_cutoff(now),
+            )
+            .correlate(DetectionORM)
+            .scalar_subquery()
+        )
+    else:
+        column = getattr(DetectionORM, sort_by)
     # The ID tie-breaker keeps pages stable when many rows share a value (user counts).
     return query.order_by(column.asc() if sort_order == "asc" else column.desc(), DetectionORM.detection_id)
 
 
-def detection_for_role(detection: DetectionORM, user: UserORM) -> DetectionRead:
+def detection_for_role(
+    detection: DetectionORM | DetectionRead, user: UserORM, *, now: datetime | None = None
+) -> DetectionRead:
     """Raw network observations require the same role as the network event API."""
     result = DetectionRead.model_validate(detection)
+    from shadai.utils.privacy import sanitize_evidence
+
+    result.evidence_bundle = sanitize_evidence(result.evidence_bundle, now=now)
+    result.risk_score_stale = result.risk_score_stale or result.risk_calculated_at is None
     if getattr(user, "role", None) in {"analyst", "admin"}:
         return result
     # Pydantic may retain references to nested JSON values from the ORM. Redact a
@@ -157,6 +179,7 @@ async def list_detections(
     _user: UserORM = Depends(get_current_user),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
+    now = datetime.now(UTC)
     query = filter_detections(
         select(DetectionORM),
         classification=classification,
@@ -166,7 +189,7 @@ async def list_detections(
         analyst_status=analyst_status,
         search=search,
     )
-    query = order_detections(query, sort_by, sort_order)
+    query = order_detections(query, sort_by, sort_order, now=now)
 
     # Total count
     count_q = select(func.count()).select_from(query.order_by(None).subquery())
@@ -178,9 +201,12 @@ async def list_detections(
 
     result = await session.execute(query)
     detections = result.scalars().all()
+    from shadai.utils.privacy import refresh_identity_counts
+
+    detections = await refresh_identity_counts(session, detections, now=now)
 
     return DetectionListResponse(
-        items=[detection_for_role(d, _user) for d in detections],
+        items=[detection_for_role(d, _user, now=now) for d in detections],
         total=total,
         page=page,
         page_size=page_size,
@@ -193,11 +219,15 @@ async def get_detection(
     _user: UserORM = Depends(get_current_user),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
+    now = datetime.now(UTC)
     result = await session.execute(select(DetectionORM).where(DetectionORM.detection_id == detection_id))
     detection = result.scalar_one_or_none()
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found")
-    return detection_for_role(detection, _user)
+    from shadai.utils.privacy import refresh_identity_counts
+
+    projected = await refresh_identity_counts(session, [detection], now=now)
+    return detection_for_role(projected[0], _user, now=now)
 
 
 @router.patch("/{detection_id}", response_model=DetectionRead)
@@ -208,6 +238,7 @@ async def update_detection(
     current_user: UserORM = Depends(require_role("analyst")),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
+    now = datetime.now(UTC)
     result = await session.execute(
         select(DetectionORM).where(DetectionORM.detection_id == detection_id).with_for_update()
     )
@@ -224,7 +255,7 @@ async def update_detection(
         bundle = dict(detection.evidence_bundle or {})
         bundle.pop("_governance", None)
         detection.evidence_bundle = bundle
-        rescore_classification(detection)
+        rescore_classification(detection, now=now)
         changes["classification"] = body.classification
     if body.analyst_status is not None:
         detection.analyst_status = body.analyst_status
@@ -258,7 +289,10 @@ async def update_detection(
         ip_address=request.client.host if request.client else None,
     )
 
-    return DetectionRead.model_validate(detection)
+    from shadai.utils.privacy import refresh_identity_counts
+
+    projected = await refresh_identity_counts(session, [detection], now=now)
+    return detection_for_role(projected[0], current_user, now=now)
 
 
 @router.post("/{detection_id}/notes")

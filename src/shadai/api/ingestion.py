@@ -1,12 +1,14 @@
 """Validated canonical ingestion for custom collectors, directory inventories and instrumentation."""
 
+import json
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from shadai.api.agent import _validate_api_key
+from shadai.api.collectors import SOURCE_TYPES as SOURCE_TYPES
+from shadai.api.collectors import CollectorPrincipal, authenticate_collector
 from shadai.config import get_config
 from shadai.database import get_redis, postgres_session_factory
 from shadai.engine.catalog_cache import CatalogCache
@@ -14,7 +16,6 @@ from shadai.engine.catalog_loader import load_database_catalog
 from shadai.engine.matcher import AMBIGUOUS_MATCH_FIELD, CatalogMatcher
 from shadai.models.event import CanonicalEvent
 
-SOURCE_TYPES = ("dns", "proxy", "endpoint", "browser", "oauth", "directory", "instrumented", "casb", "network")
 router = APIRouter(prefix="/api/v1/ingest", tags=["ingestion"])
 
 
@@ -35,16 +36,23 @@ def has_transient_signals(event: CanonicalEvent) -> bool:
 
 
 def prepare_event(
-    event: CanonicalEvent, *, trusted_collector: bool = False, matcher: CatalogMatcher | None = None
+    event: CanonicalEvent, *, trusted_collector: bool = False, matcher: CatalogMatcher | None = None,
+    accepted_at: datetime | None = None,
 ) -> CanonicalEvent:
     config = get_config()
     if event.tenant_id and event.tenant_id != config.tenant_id:
         if not (trusted_collector and event.tenant_id == "default"):
             raise ValueError("Event belongs to another organization")
     event.tenant_id = config.tenant_id
-    if event.timestamp > datetime.now(UTC).replace(microsecond=0) + timedelta(minutes=5):
+    now = datetime.now(UTC)
+    if accepted_at is not None and (
+        accepted_at.tzinfo is None or accepted_at > now + timedelta(minutes=5)
+    ):
+        raise ValueError("Invalid internal acceptance timestamp")
+    acceptance = accepted_at.astimezone(UTC) if accepted_at is not None else now
+    if event.timestamp > acceptance.replace(microsecond=0) + timedelta(minutes=5):
         raise ValueError("Event timestamp is too far in the future")
-    if event.timestamp < datetime.now(UTC) - timedelta(days=config.retention.ingestion_max_age_days):
+    if event.timestamp < acceptance - timedelta(days=config.retention.ingestion_max_age_days):
         raise ValueError("Event timestamp is outside the accepted retention window")
     for field in ("domain", "url_host", "sni"):
         host = getattr(event, field)
@@ -73,6 +81,9 @@ def prepare_event(
     event.process_path = ""
     event.raw_ref = ""
     event.user_agent = ""
+    from shadai.utils.privacy import prepare_identity
+
+    event = prepare_identity(event, trusted_internal=trusted_collector)
     return CanonicalEvent.model_validate(event.model_dump())
 
 
@@ -85,7 +96,20 @@ async def load_boundary_catalog():
 
 
 @router.post("/events", status_code=202)
-async def ingest_events(batch: EventBatch, _key: str = Depends(_validate_api_key)):
+async def ingest_events(
+    batch: EventBatch, principal: CollectorPrincipal = Depends(authenticate_collector, scope="function"),
+):
+    received_at = datetime.now(UTC)
+    principal.require_sources(event.source_type for event in batch.events)
+    for event in batch.events:
+        event.collector_id = principal.bind(event.collector_id)
+        if not principal.legacy:
+            # A client UUID is scoped to its immutable enrolled collector, so it
+            # cannot preempt another collector's global ingestion receipts.
+            identity = json.dumps(
+                [get_config().tenant_id, principal.collector_id, str(event.event_id)], separators=(",", ":")
+            )
+            event.event_id = uuid5(NAMESPACE_URL, identity)
     matcher = None
     if any(has_transient_signals(event) for event in batch.events):
         matcher = await boundary_catalog.get(load_boundary_catalog)
@@ -95,7 +119,10 @@ async def ingest_events(batch: EventBatch, _key: str = Depends(_validate_api_key
         raise HTTPException(status_code=422, detail=str(exc)) from None
     redis = await get_redis()
     pipe = redis.pipeline(transaction=True)
+    from shadai.utils.queueing import queue_event
+
     for event in events:
-        pipe.xadd(f"events:{event.source_type}", {"data": event.model_dump_json()})
+        queue_event(pipe, event, accepted_at=received_at)
     await pipe.execute()
+    principal.contact(max(event.timestamp for event in events))
     return {"received": len(events), "tenant_id": get_config().tenant_id}

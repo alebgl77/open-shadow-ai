@@ -2,6 +2,31 @@
 
 The [CI workflow](../.github/workflows/ci.yml) defines Python 3.12/3.13 lint and regression checks, frontend tests and build, PowerShell validation and Docker-backed integration.
 
+## Verified collector hardening CI run
+
+Scoped credentials/rotation, persistent collector queues and bounded replay, operational health, and per-observation retention/pseudonymization with honest risk timestamps passed all six jobs in [CI run 37435294695](https://github.com/alebgl77/open-shadow-ai/actions/runs/37435294695) for source commit [f2c5fd8015f5d22aa919b0a1a75d17fd8d58b973](https://github.com/alebgl77/open-shadow-ai/commit/f2c5fd8015f5d22aa919b0a1a75d17fd8d58b973), on 6 October 2026. Every mandatory workflow gate executed successfully; no job or step was skipped.
+
+| Area | Result and scope |
+|---|---|
+| Python 3.12 and 3.13 | Each regression suite passed 789 tests and skipped 9: eight service tests ran separately in Compose, and one Windows-only unit test requires Windows; Ruff and deployment validation passed |
+| Frontend | 96 tests passed in 10 files and production build succeeded |
+| Network sensor | Real offline TShark smoke passed with six observations, covering DNS, IPv6, HTTP, TLS and QUIC metadata |
+| Windows 3.13 | PowerShell syntax, complete bootstrap/private-secret checks and real key-file DACL checks passed; the full native spool guard and SQLite process restart recovered exact bytes/ID under trusted user-profile ancestors outside the checkout |
+| Real-store integration | 8 tests passed, 790 deselected, zero skipped, against disposable Redis, PostgreSQL and ClickHouse; scoped credential lifecycle, retention/privacy, identity provisioning and stream delivery recovery executed |
+| Linux syslog volume | Two distinct containers sharing `syslog_spool` passed actual UID10001, `0700` parent and `0600` database checks, exact retained bytes/ID recovery and acknowledgement |
+| Deployment and HTTP | Fresh image builds, base and optional identity startup, protected ingestion/readiness/queue/storage/detection smoke, and frontend-proxied SCIM lifecycle passed |
+| Private monitoring | Two `0600` copies of one independent token owned by API UID10001 and Prometheus UID65534 passed correct-reader success and other-UID read refusal; authenticated metrics, missing/wrong/agent-key 401 refusals and metrics-token collector-administration 401 refusal passed; the actual internal Prometheus target was `up` before and after container replacement, and the exact private marker survived on `prometheus_data` |
+
+The native Windows spool checks used real permissions, owners, path/link checks and SQLite. Positive checks covered private creation and protected descendants below both InheritOnly and InheritOnly/NoPropagate Modify templates. Negative checks covered explicit/inherited public file reads, effective inherited Modify, unsafe leaf templates, writable ancestors and untrusted owners, all three existing public SQLite sidecars, an untrusted sidecar owner, hardlinks and reparse paths. Required database absence remained a strict failure.
+
+The deterministic disappearing-journal case uses a harness timing hook to cause a real SQLite rollback between the path check and native probe. The runner recorded a failed native probe with object/path-not-found, no access-denied result, and definitive absence from a real post-probe `lstat`; exact bytes/ID survived restart. The production guard was not replaced or weakened, and the other native safety checks ran independently. This causal test is instrumented for timing; it is not an uninstrumented race reproduction.
+
+The final independent read-only review of authentication, migrations, privacy, delivery, health and the last source deltas approved `f2c5fd8` with no remaining actionable P1/P2 findings. Independent checks passed 164 Python tests and 19 Sources frontend tests, then eight real spool/vendor checks and the original concurrent delivery regression. The author passed 56 delivery tests (49 existing and seven new), zero skipped, in 482.94 seconds on the same frozen source. These results retain the local fixture ancestry qualifications below and complement the native CI proof.
+
+Authoring-host evidence remains separate: independent local SQLite restart tests passed 13 cases, of which eight semantic crash/lease/quota/expiry cases explicitly assumed safe ancestors through the fixture boundary because this Windows sandbox's ancestry is unsuitable; private leaf database checks remained real. Five directory/file/ancestor/link negative cases used actual permissions/path checks. An earlier unpatched native smoke on this host refused private directory creation under local USERPROFILE with `spool_private_acl_required`, cleaned its fixture and exited nonzero. Neither that qualified local suite nor that refusal substitutes for the full native Windows runner proof above.
+
+Docker and kubectl are unavailable on the authoring workstation; the Linux volume/service checks above ran in CI. The syslog and Prometheus checks establish persistence across disposable container replacement, not packet-loss freedom, power-loss durability or backup/restore objectives. Historical scrub on live stores, sustained load, HA, live AD/Entra/providers and fleet rollout remain separate acceptance work. Results apply to the linked source commit and workflow; later changes require their own validation. See [operations](collector-operations.md) and [capacity](capacity.md).
+
 ## Verified 0.2.0 CI run
 
 All five jobs passed in [CI run 36280261065](https://github.com/alebgl77/open-shadow-ai/actions/runs/36280261065) for source commit [00e98d6539ac37c7f98d12f3c53d77be8a1f365d](https://github.com/alebgl77/open-shadow-ai/commit/00e98d6539ac37c7f98d12f3c53d77be8a1f365d), on 27 September 2026 in Europe/Paris (26 September UTC).
@@ -50,7 +75,7 @@ An independent read-only security/correctness review approved the implementation
 
 ```bash
 python scripts/verify-deployment.py
-python -m ruff check src tests agent/shadai_agent migrations scripts/identity-smoke.py
+python -m ruff check src tests agent/shadai_agent migrations scripts
 python -m pytest -q
 python -m pip check
 cd frontend
@@ -66,6 +91,8 @@ On Windows, also parse the PowerShell scripts and run the non-mutating entry poi
 ```powershell
 ./scripts/bootstrap.ps1 -DryRun
 ./scripts/Export-ActiveDirectory.ps1 -SearchBase 'OU=Pilot,DC=example,DC=com' -OutputDirectory './ad-export-dryrun' -WhatIf
+python scripts/test-network-key-acl.py
+python scripts/test-delivery-spool-acl.py --temporary-parent "$env:USERPROFILE"
 ```
 
 The following service checks require a disposable Compose project after bootstrap. Never run them against production:
@@ -77,7 +104,7 @@ docker compose up -d --build --wait --wait-timeout 180 api ingest-worker correla
 python scripts/integration-smoke.py
 ```
 
-The integration container exercises real database migrations, catalog persistence, stream reclaim, receipt deduplication, concurrent correlation and identity provisioning. The base smoke exercises authenticated HTTP ingestion through running workers into ClickHouse and PostgreSQL. Reset only the disposable stores between these suites, as CI does.
+The integration container exercises real database migrations, catalog persistence, stream reclaim, receipt deduplication, concurrent correlation, scoped collector credential lifecycle, retention/privacy and identity provisioning. The base smoke exercises authenticated HTTP ingestion through running workers into ClickHouse and PostgreSQL. Reset only the disposable stores between these suites, as CI does. Reproduce the two-container syslog volume check from the current workflow after building its collector image; use the same disposable project and leave its named volume intact between those two invocations.
 
 To reproduce the optional identity smoke, use the synthetic secret-file generation and identity environment values from the [verified workflow](https://github.com/alebgl77/open-shadow-ai/blob/00e98d6539ac37c7f98d12f3c53d77be8a1f365d/.github/workflows/ci.yml). The script expects that fixture's label, role mapping and files; it is not a live-tenant acceptance tool. Keep the same disposable Compose project and stores after the base smoke, then run:
 

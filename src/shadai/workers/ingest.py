@@ -7,19 +7,21 @@ rows. Analytics deduplicate event_id; correlation has a separate atomic ledger.
 import asyncio
 import os
 import time
+from contextlib import suppress
+from datetime import datetime
 
 import redis.asyncio as aioredis
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from shadai.api.ingestion import SOURCE_TYPES, prepare_event
+from shadai.api.ingestion import SOURCE_TYPES
 from shadai.config import load_config, validate_security
 from shadai.database import init_clickhouse
 from shadai.engine.catalog_loader import load_database_catalog
 from shadai.engine.matcher import AMBIGUOUS_MATCH_FIELD, CatalogMatcher
-from shadai.models.event import CanonicalEvent
 from shadai.models.receipts import IngestReceiptORM
+from shadai.utils.queueing import prepare_queued_event, queue_fields
 from shadai.workers.streams import StreamConsumer
 
 logger = structlog.get_logger()
@@ -42,7 +44,7 @@ class EventProcessor:
     async def __call__(self, data):
         # Streams carry only events prepared at an ingestion boundary, where untrusted match
         # fields were cleared and paths or user agents were evaluated before being discarded.
-        event = prepare_event(CanonicalEvent.model_validate_json(data["data"]), trusted_collector=True)
+        event = prepare_queued_event(data)
         async with self.session_factory() as session:
             async with session.begin():
                 await session.execute(
@@ -72,7 +74,9 @@ class EventProcessor:
                     await self.redis.xadd(
                         "matches",
                         {
-                            "event": event.model_dump_json(),
+                            **queue_fields(event.model_dump_json(), payload_field="event",
+                                           accepted_at=event.timestamp if "accepted_at" not in data else
+                                           datetime.fromisoformat(data["accepted_at"])),
                             "catalog_item_id": match.catalog_item_id,
                             "match_field": match.matched_field,
                             "match_confidence": str(match.match_confidence),
@@ -88,9 +92,11 @@ async def run_ingest_worker(worker_id=None):
     engine = create_async_engine(config.database.postgres_url, pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     ch = init_clickhouse(config.database)
-    consumer = StreamConsumer(redis, GROUP_NAME, worker_id or f"ingest-{os.getpid()}", STREAMS)
+    consumer = StreamConsumer(redis, GROUP_NAME, worker_id or f"ingest-{os.getpid()}", STREAMS, operational=True)
+    heartbeat = None
     try:
         await consumer.initialize()
+        heartbeat = asyncio.create_task(consumer.operations.heartbeat())
         async with sessions() as session:
             matcher = await load_ready_matcher(session)
         processor = EventProcessor(redis, ch, sessions, matcher)
@@ -108,6 +114,10 @@ async def run_ingest_worker(worker_id=None):
                 logger.error("ingest_loop_failed", error_type=type(exc).__name__)
                 await asyncio.sleep(2)
     finally:
+        if heartbeat:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
         ch.disconnect()
         await redis.aclose()
         await engine.dispose()

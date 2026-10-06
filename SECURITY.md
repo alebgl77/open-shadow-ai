@@ -10,9 +10,15 @@ Include the affected commit, a minimal synthetic reproduction, impact and any su
 
 ## Deployment responsibilities
 
-Use TLS for remote collectors, restrict access to stores and the Docker host, generate strong secrets and keep them out of Git. The collector API key is shared within an installation; per-device enrollment and automatic key rotation are future work. Limit distribution and rotate after suspected disclosure.
+Use TLS for remote collectors, restrict access to stores and the Docker host, generate strong secrets and keep them out of Git. Administrators enroll immutable collector identities with source scopes and receive a credential once after commit; only its secret digest is stored. Rotate credentials within the same collector with bounded overlap, or permanently revoke the collector and all its keys. Provision private key files through an approved management channel. The shared key remains enabled for compatibility; disable `ALLOW_LEGACY_AGENT_KEY` after scoped enrollment and verification. Legacy traffic is `legacy:unattributed` and cannot claim an enrolled heartbeat. See [collector operations](docs/collector-operations.md).
 
 Treat directory exports and telemetry as sensitive. Minimize retained fields, document collection and review access. Test restore procedures with the matching encryption key. Review dependency and image updates before deployment; no signed release or certification is implied.
+
+Endpoint/network/syslog queues contain plaintext metadata on client disks and backups. Their private file/ancestor ownership and permission checks reject unsafe paths, symlinks, reparse points and hardlinks. Keep persistent storage private under the actual service identity; do not broaden permissions to work around a refusal. Queue limits, transport losses, expiry and storage failures bound recovery; no UDP or universal capture-loss guarantee is made.
+
+Identity membership expires per observation. Optional `PSEUDONYMIZE_IDENTITIES` uses field-separated HMAC pseudonyms from the existing encryption key and clears personal source IP/free-form identity-provider text while retaining operational metadata. Pseudonyms are linkable data. Enabling it does not erase history, backups or client spools; the explicit historical scrub requires quiescence, bounded synchronous mutations and verified completion. Console accounts, notes and audit actors are excluded. Master-key changes require matching backup keys and an identity reconstruction plan.
+
+`/metrics` requires an administrator console identity or a separate optional `METRICS_API_KEY[_FILE]` read-only bearer token of at least 32 characters. Agent keys are not accepted. Restrict scraper routes and keep tokens out of logs; use a private `bearer_token_file`, not public scraping.
 
 ## Console identity
 
