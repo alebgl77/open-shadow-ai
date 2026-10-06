@@ -9,9 +9,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from shadai.qualification.journal import RunJournal, atomic_json
-from shadai.qualification.lab import Docker, DockerOperationError, Laboratory, failure_evidence
-from shadai.qualification.schemas import load_profile
+from shadai.qualification.journal import LABEL, RunJournal, atomic_json, resource_identity
+from shadai.qualification.lab import WRITERS, Docker, DockerOperationError, Laboratory, failure_evidence
+from shadai.qualification.schemas import QualificationError, load_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 SECRET = "https://user:private-token@secret.example.test/provider?key=private-token"
@@ -20,6 +20,8 @@ SECRET = "https://user:private-token@secret.example.test/provider?key=private-to
 def prepared_lab(tmp_path, monkeypatch):
     profile = load_profile(ROOT / "deploy/qualification/profiles/lab-smoke.json")
     lab = Laboratory(ROOT, tmp_path / "run", profile, "exact-context")
+    monkeypatch.setattr("shadai.qualification.lab.os.getuid", lambda: 1001, raising=False)
+    monkeypatch.setattr("shadai.qualification.lab.os.getgid", lambda: 1001, raising=False)
 
     def prepare(resume):
         lab.journal = RunJournal.create(lab.directory, profile, lab.config_hash, lab.context)
@@ -179,3 +181,134 @@ def test_cli_exception_class_name_is_not_public_output(tmp_path, monkeypatch, ca
     assert json.loads(capsys.readouterr().out) == {
         "schema": 1, "status": "not_evaluated", "reason": "UnexpectedError", "exit_code": 2,
     }
+
+
+class OneOffDocker:
+    """Docker lookup semantics; Compose build progress is not a container identity."""
+
+    def __init__(self, lab, output, corrupt=None):
+        self.lab, self.output, self.corrupt = lab, output, corrupt
+        self.containers, self.calls = {}, []
+        self.helper_id = "a" * 64
+        for index, service in enumerate(sorted(WRITERS)):
+            container = self.inspection(f"{index + 1:064x}", service)
+            self.containers[container["Id"]] = container
+            lab.journal.add_resources([resource_identity(
+                "container", container, lab.journal.value["run_id"], "source", lab.journal.value["projects"]["source"]
+            )])
+
+    def inspection(self, identifier, service):
+        return {
+            "Id": identifier, "Created": "2026-10-06T00:00:00Z", "Image": "sha256:" + "b" * 64,
+            "Config": {"Labels": {
+                LABEL + "run": self.lab.journal.value["run_id"], LABEL + "role": "source",
+                "com.docker.compose.project": self.lab.journal.value["projects"]["source"],
+                "com.docker.compose.service": service,
+            }}, "State": {"Running": service != "inspector"},
+        }
+
+    def runner(self, command, **kwargs):
+        args = command[3:]
+        self.calls.append(tuple(args))
+        if args[0] == "compose":
+            assert args[7:10] == ["run", "--no-deps", "-d"]
+            assert "--rm" not in args
+            assert all(not container["State"]["Running"] for container in self.containers.values())
+            name = args[args.index("--name") + 1]
+            self.helper_name = name
+            self.helper = self.inspection(self.helper_id, "inspector")
+            self.helper["Name"] = "/" + name
+            if self.corrupt in {"Id", "Created", "Image", "Name"}:
+                self.helper[self.corrupt] = None if self.corrupt == "Created" else "invalid"
+            elif self.corrupt == "preexisting":
+                self.helper["Config"]["Labels"][LABEL + "role"] = "foreign"
+            elif self.corrupt:
+                self.helper["Config"]["Labels"][self.corrupt] = "foreign"
+            self.containers[self.helper_id] = self.helper
+            if self.corrupt == "preexisting":
+                return SimpleNamespace(returncode=1, stdout="", stderr="Conflict. Container name is in use: " + SECRET)
+            if self.corrupt == "absent":
+                self.containers.pop(self.helper_id)
+            stdout = self.output.replace("<ID>", self.helper_id)
+        elif args[:2] == ["container", "inspect"]:
+            lookup = self.helper_id if getattr(self, "helper_name", None) == args[2] else args[2]
+            if lookup not in self.containers:
+                return SimpleNamespace(returncode=1, stdout="", stderr="No such container: " + SECRET)
+            stdout = json.dumps([self.containers[lookup]])
+        elif args[0] == "container":
+            operation, identifier = args[1:3]
+            assert identifier in self.containers
+            if operation in {"stop", "start"}:
+                self.containers[identifier]["State"]["Running"] = operation == "start"
+                stdout = identifier
+            else:
+                assert identifier == self.helper_id
+                if operation == "wait":
+                    if getattr(self, "wait_error", None) is not None:
+                        raise self.wait_error
+                    stdout = "0"
+                elif operation == "logs":
+                    stdout = '{"initialized":true,"retention":{"schema":1}}'
+                else:
+                    assert operation == "rm"
+                    self.containers.pop(identifier)
+                    stdout = identifier
+        else:
+            pytest.fail("Unexpected Docker operation")
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+
+@pytest.mark.parametrize("output", ["<ID>", "#1 building\n" + SECRET + "\n<ID>", "<ID>\n#2 done", "f" * 64])
+def test_one_off_identity_survives_build_progress_with_writers_stopped(tmp_path, monkeypatch, output):
+    lab = prepared_lab(tmp_path, monkeypatch)
+    lab.prepare(False)
+    cli = OneOffDocker(lab, output)
+    lab.docker = Docker("exact-context", runner=cli.runner)
+    lab.compose = Laboratory.compose.__get__(lab)
+    lab.change = Laboratory.change.__get__(lab)
+    lab.change("stop", WRITERS)
+    assert Laboratory.inspector(lab, "initialize") == {"initialized": True, "retention": {"schema": 1}}
+    assert all(not container["State"]["Running"] for container in cli.containers.values())
+    assert len(lab.journal.value["resources"]) == len(WRITERS)
+    helper_commands = [args for args in cli.calls if args[:2] in {
+        ("container", "wait"), ("container", "logs"), ("container", "rm"),
+    }]
+    assert [args[1] for args in helper_commands] == ["wait", "logs", "rm"]
+    assert all(args[2] == cli.helper_id for args in helper_commands)
+
+
+@pytest.mark.parametrize("label", [LABEL + "run", LABEL + "role", "com.docker.compose.project",
+                                    "com.docker.compose.service", "Id", "Created", "Image", "Name", "preexisting",
+                                    "absent"])
+def test_one_off_named_lookup_never_accepts_or_removes_foreign_container(tmp_path, monkeypatch, label):
+    lab = prepared_lab(tmp_path, monkeypatch)
+    lab.prepare(False)
+    cli = OneOffDocker(lab, "<ID>", label)
+    lab.docker = Docker("exact-context", runner=cli.runner)
+    lab.compose = Laboratory.compose.__get__(lab)
+    lab.change = Laboratory.change.__get__(lab)
+    lab.change("stop", WRITERS)
+    with pytest.raises(QualificationError):
+        Laboratory.inspector(lab, "initialize")
+    assert (cli.helper_id in cli.containers) is (label != "absent")
+    assert len(lab.journal.value["resources"]) == len(WRITERS)
+    assert not any(args[:2] in {("container", "wait"), ("container", "logs"), ("container", "rm")}
+                   for args in cli.calls)
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt(SECRET), SystemExit(SECRET),
+                                   DockerOperationError("docker_nonzero", 7)])
+def test_one_off_wait_failure_keeps_writers_stopped_and_removes_owned_helper(tmp_path, monkeypatch, error):
+    lab = prepared_lab(tmp_path, monkeypatch)
+    lab.prepare(False)
+    cli = OneOffDocker(lab, "#1 building\n<ID>")
+    cli.wait_error = error
+    lab.docker = Docker("exact-context", runner=cli.runner)
+    lab.compose = Laboratory.compose.__get__(lab)
+    lab.change = Laboratory.change.__get__(lab)
+    lab.change("stop", WRITERS)
+    with pytest.raises(type(error)):
+        Laboratory.inspector(lab, "initialize")
+    assert cli.helper_id not in cli.containers
+    assert len(lab.journal.value["resources"]) == len(WRITERS)
+    assert all(not container["State"]["Running"] for container in cli.containers.values())

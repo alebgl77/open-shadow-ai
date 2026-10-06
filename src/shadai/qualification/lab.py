@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import secrets
 import stat
 import subprocess
@@ -100,8 +101,6 @@ class Docker:
         except OSError:
             raise DockerOperationError("docker_process_error") from None
         if result.returncode:
-            import re
-
             if absent and re.search(r"\bno such (?:container|network|volume|object)\b", result.stderr, re.I):
                 return None
             raise DockerOperationError("docker_nonzero", result.returncode)
@@ -320,7 +319,7 @@ class Laboratory:
 
     def inspector(self, action, *, case="baseline", role="source"):
         name = self.journal.value["projects"][role] + "-inspector-" + uuid4().hex[:12]
-        identifier = self.compose(
+        self.compose(
             "run",
             "--no-deps",
             "-d",
@@ -338,10 +337,18 @@ class Laboratory:
             case,
             role=role,
         )
-        inspected = self.docker.inspect("container", identifier)
+        # Compose can build this one-off image and mix progress with its ID on
+        # stdout. Resolve our generated name, then use only the verified ID.
+        inspected = self.docker.inspect("container", name)
         record = resource_identity(
             "container", inspected, self.journal.value["run_id"], role, self.journal.value["projects"][role]
         )
+        image = inspected.get("Image")
+        if (record["service"] != "inspector" or inspected.get("Name") != "/" + name or
+                type(record["id"]) is not str or not re.fullmatch(r"[0-9a-f]{64}", record["id"]) or
+                type(image) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", image)):
+            raise QualificationError("Inspector identity proof is invalid")
+        identifier = record["id"]
         self.journal.add_resources([record])
         try:
             code = self.docker.call("container", "wait", identifier, timeout=180)
