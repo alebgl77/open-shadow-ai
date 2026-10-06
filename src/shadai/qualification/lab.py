@@ -10,6 +10,7 @@ import secrets
 import stat
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -44,15 +45,56 @@ FAILURE_STAGES = {
     "readiness", "enroll", "scenario",
 }
 DOCKER_FAILURE_CODES = {"docker_nonzero", "docker_timeout", "docker_process_error", "docker_output_budget"}
+PRESSURE_STEPS = {
+    "seed": {"name_inspect", "launch", "capture", "wait", "reinspect", "cleanup_inspect", "remove_inspect",
+             "remove", "junit"},
+    "stop": {"inspect", "stop", "reinspect"},
+    "export": {"source_inspect", "stopped_inspect", "worker_inspect", "volume_inspect", "create", "capture",
+               "inspect", "start", "wait", "logs", "copy_inspect", "copy", "remove_inspect", "remove", "validate"},
+    "import": {"validate", "volume_absence", "volume_create", "volume_capture", "worker_inspect", "volume_inspect",
+               "create", "capture", "inspect", "start", "wait", "logs", "remove_inspect", "remove"},
+    "restore": {"up", "discover_list", "discover_inspect"},
+    "assert": {"name_inspect", "launch", "capture", "wait", "reinspect", "cleanup_inspect", "remove_inspect",
+               "remove", "junit"},
+}
+PRESSURE_CHECKPOINTS = {"pressure_" + section + "_" + step
+                        for section, steps in PRESSURE_STEPS.items() for step in steps}
+FAILURE_STAGES |= PRESSURE_CHECKPOINTS
+DOCKER_OPERATIONS = {
+    (kind, command): kind + "_" + command
+    for kind, commands in {
+        "container": {"inspect", "create", "start", "stop", "wait", "logs", "cp", "rm"},
+        "volume": {"inspect", "create", "ls", "rm"}, "network": {"inspect", "ls", "rm"},
+        "compose": {"run", "up"},
+    }.items() for command in commands
+}
+DOCKER_OPERATION_NAMES = set(DOCKER_OPERATIONS.values()) | {"container_list", "unknown"}
+
+
+def docker_operation(args):
+    if not args or type(args[0]) is not str:
+        return "unknown"
+    if args[0] == "ps":
+        return "container_list"
+    command = args[1] if len(args) > 1 else None
+    if args[0] == "compose" and len(args) > 7 and type(args[1]) is str and args[1] == "--project-name":
+        if type(args[3]) is not str or type(args[5]) is not str or args[3] != "--file" or args[5] != "--env-file":
+            return "unknown"
+        command = args[7]
+    return DOCKER_OPERATIONS.get((args[0], command), "unknown") if type(command) is str else "unknown"
 
 
 class DockerOperationError(QualificationError):
     """Only fixed failure codes and bounded exit status may enter public proof."""
 
-    def __init__(self, code, returncode=None):
+    def __init__(self, code, returncode=None, *, operation="unknown", checkpoint=None, last_completed=None):
         super().__init__("Docker operation failed; upstream output is excluded from proof")
         self.code = code if type(code) is str and code in DOCKER_FAILURE_CODES else "docker_process_error"
         self.returncode = returncode if type(returncode) is int and -255 <= returncode <= 255 else None
+        self.operation = operation if type(operation) is str and operation in DOCKER_OPERATION_NAMES else "unknown"
+        self.checkpoint = checkpoint if type(checkpoint) is str and checkpoint in PRESSURE_CHECKPOINTS else None
+        self.last_completed = (last_completed if type(last_completed) is str and
+                               last_completed in PRESSURE_CHECKPOINTS else None)
 
 
 def safe_exception_type(exc):
@@ -79,6 +121,14 @@ def failure_evidence(exc, phase, stage):
                          else "docker_process_error")
         if type(exc.returncode) is int and -255 <= exc.returncode <= 255:
             value["returncode"] = exc.returncode
+        checkpoint = exc.checkpoint if type(exc.checkpoint) is str and exc.checkpoint in PRESSURE_CHECKPOINTS else None
+        if checkpoint is not None:
+            # Freeze the failed call's context before a finally-block performs cleanup.
+            value["stage"] = value["checkpoint"] = checkpoint
+            value["operation"] = (exc.operation if type(exc.operation) is str and
+                                  exc.operation in DOCKER_OPERATION_NAMES else "unknown")
+            if type(exc.last_completed) is str and exc.last_completed in PRESSURE_CHECKPOINTS:
+                value["last_completed"] = exc.last_completed
     return value
 
 
@@ -88,8 +138,13 @@ class Docker:
             raise QualificationError("An explicit Docker context is required")
         self.context, self.runner = context, runner
         self.deadline = None
+        self.checkpoint = self.last_completed = None
 
     def call(self, *args, environment=None, timeout=120, absent=False):
+        def failure(code, returncode=None):
+            return DockerOperationError(code, returncode, operation=docker_operation(args),
+                                        checkpoint=self.checkpoint, last_completed=self.last_completed)
+
         if self.deadline is not None:
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
@@ -104,15 +159,17 @@ class Docker:
                 env=environment,
             )
         except subprocess.TimeoutExpired:
-            raise DockerOperationError("docker_timeout") from None
+            raise failure("docker_timeout") from None
         except OSError:
-            raise DockerOperationError("docker_process_error") from None
+            raise failure("docker_process_error") from None
         if result.returncode:
             if absent and re.search(r"\bno such (?:container|network|volume|object)\b", result.stderr, re.I):
+                self.last_completed = self.checkpoint
                 return None
-            raise DockerOperationError("docker_nonzero", result.returncode)
+            raise failure("docker_nonzero", result.returncode)
         if len(result.stdout) > 4 * 1048576:
-            raise DockerOperationError("docker_output_budget", result.returncode)
+            raise failure("docker_output_budget", result.returncode)
+        self.last_completed = self.checkpoint
         return result.stdout.strip()
 
     def inspect(self, kind, identifier, *, absent=False):
@@ -134,6 +191,31 @@ class Laboratory:
         self.deadline = None
         self.failure = None
         self.stage = "scenario"
+        self.pressure_section = None
+
+    def pressure_checkpoint(self, step):
+        section = self.pressure_section
+        if type(section) is str and section in PRESSURE_STEPS and type(step) is str and step in PRESSURE_STEPS[section]:
+            self.stage = "pressure_" + section + "_" + step
+            self.docker.checkpoint = self.stage
+
+    @contextmanager
+    def pressure_diagnostics(self, section):
+        previous = self.pressure_section, self.stage, getattr(self.docker, "checkpoint", None)
+        self.pressure_section = section if type(section) is str and section in PRESSURE_STEPS else None
+        try:
+            yield
+        except BaseException as exc:
+            if self.failure is None:
+                self.failure = failure_evidence(exc, "redis_pressure", self.stage)
+            raise
+        finally:
+            self.pressure_section, self.stage, self.docker.checkpoint = previous
+
+    def pressure_secondary(self, primary, secondary):
+        if self.failure is None:
+            self.failure = failure_evidence(primary, "redis_pressure", self.stage)
+        self.failure["secondary"] = [failure_evidence(secondary, "redis_pressure", self.stage)]
 
     def remaining(self):
         if self.deadline is None:
@@ -285,8 +367,10 @@ class Laboratory:
         records = []
         for kind, command in (("container", "ps"), ("network", "network"), ("volume", "volume")):
             args = [command, "-aq"] if kind == "container" else [command, "ls", "-q"]
+            self.pressure_checkpoint("discover_list")
             identifiers = self.docker.call(*args, "--filter", "label=com.docker.compose.project=" + project)
             for identifier in identifiers.splitlines():
+                self.pressure_checkpoint("discover_inspect")
                 inspected = self.docker.inspect(kind, identifier)
                 labels = inspected.get("Config", {}).get("Labels", {}) if kind == "container" else inspected["Labels"]
                 actual_role = labels.get(LABEL + "role")
@@ -317,9 +401,12 @@ class Laboratory:
 
     def change(self, operation, services, role="source"):
         for record in self.containers(services, role):
+            self.pressure_checkpoint("inspect")
             inspected = self.docker.inspect("container", record["id"])
             verify_resource(record, inspected)
+            self.pressure_checkpoint("stop")
             self.docker.call("container", operation, record["id"])
+            self.pressure_checkpoint("reinspect")
             state = self.docker.inspect("container", record["id"])["State"]
             if operation == "stop" and state["Running"]:
                 raise QualificationError("Container did not stop")
@@ -370,9 +457,11 @@ class Laboratory:
         validate_helper_record(record)
         if record["kind"] == "volume" and not volumes:
             return
+        self.pressure_checkpoint("remove_inspect")
         inspected = self.docker.inspect(record["kind"], record["id"], absent=True)
         if inspected is not None:
             verify_resource(record, inspected)
+            self.pressure_checkpoint("remove")
             self.docker.call(record["kind"], "rm", record["id"])
         self.journal.value["resources"] = [item for item in self.journal.value["resources"] if item != record]
         self.journal.save()
@@ -596,6 +685,7 @@ class Laboratory:
     def run_owned(self, command, *, role="source", volumes=(), root=False, caps=(), archive=None):
         project = self.journal.value["projects"][role]
         worker = self.containers({"ingest-worker"})[0]
+        self.pressure_checkpoint("worker_inspect")
         inspected = self.docker.inspect("container", worker["id"])
         verify_resource(worker, inspected)
         args = [
@@ -624,6 +714,7 @@ class Laboratory:
                 raise QualificationError("Unapproved archive helper capability")
             args.extend(["--cap-add", capability])
         for volume, destination, readonly in volumes:
+            self.pressure_checkpoint("volume_inspect")
             current = self.docker.inspect("volume", volume["id"])
             verify_resource(volume, current)
             args.extend(
@@ -638,7 +729,9 @@ class Laboratory:
                 raise QualificationError("Archive must be a regular owned-run file")
             args.extend(["--mount", "type=bind,src=" + str(path) + ",dst=/archive.tar,readonly"])
         args.extend([inspected["Image"], *command])
+        self.pressure_checkpoint("create")
         identifier = self.docker.call(*args)
+        self.pressure_checkpoint("capture")
         record = resource_identity(
             "container", self.docker.inspect("container", identifier), self.journal.value["run_id"], role, project
         )
@@ -646,21 +739,27 @@ class Laboratory:
         return record
 
     def helper_result(self, record, *, copy_archive=None):
+        self.pressure_checkpoint("inspect")
         inspected = self.docker.inspect("container", record["id"])
         verify_resource(record, inspected)
+        self.pressure_checkpoint("start")
         self.docker.call("container", "start", record["id"])
+        self.pressure_checkpoint("wait")
         code = int(self.docker.call("container", "wait", record["id"], timeout=180))
+        self.pressure_checkpoint("logs")
         output = self.docker.call("container", "logs", record["id"])
         if code != 0:
             raise QualificationError("Archive helper failed")
         result = json.loads(output.splitlines()[-1])
         if copy_archive:
+            self.pressure_checkpoint("copy_inspect")
             verify_resource(record, self.docker.inspect("container", record["id"]))
             destination = self.directory / copy_archive
             if destination.exists():
                 raise QualificationError("Archive destination already exists")
             if type(result.get("bytes")) is not int or not 0 < result["bytes"] <= self.artifact_remaining():
                 raise QualificationError("Cold archive exceeds cumulative remaining artifact budget")
+            self.pressure_checkpoint("copy")
             self.docker.call("container", "cp", record["id"] + ":/tmp/archive.tar", str(destination))
             destination.chmod(0o600)
             if destination.is_symlink() or destination.stat().st_size != result["bytes"]:
@@ -671,6 +770,7 @@ class Laboratory:
 
     def volume(self, service, role="source"):
         container = self.containers({service}, role)[0]
+        self.pressure_checkpoint("source_inspect")
         inspected = self.docker.inspect("container", container["id"])
         verify_resource(container, inspected)
         mounts = [item for item in inspected["Mounts"] if item["Type"] == "volume"]
@@ -688,6 +788,7 @@ class Laboratory:
         available = min(self.artifact_remaining(reserve=10485760), 1073741824 - 10485760)
         volume = self.volume(service)
         container = self.containers({service})[0]
+        self.pressure_checkpoint("stopped_inspect")
         if self.docker.inspect("container", container["id"])["State"]["Running"]:
             raise QualificationError("A cold snapshot requires verified stopped stores")
         name = service + "-cold.tar"
@@ -707,11 +808,13 @@ class Laboratory:
             caps=["DAC_READ_SEARCH"],
         )
         result = self.helper_result(record, copy_archive=name)
+        self.pressure_checkpoint("validate")
         if digest_file(self.directory / name) != result["sha256"]:
             raise QualificationError("Copied cold archive does not match the helper manifest")
         return {**result, "archive": name, "source_volume": volume}
 
     def fresh_restore_volume(self, source, *, service):
+        self.pressure_checkpoint("validate")
         archive = self.directory / source["archive"]
         if (
             archive.parent != self.directory
@@ -729,9 +832,11 @@ class Laboratory:
         }[service]
         project = self.journal.value["projects"]["restore"]
         name = project + "_" + suffix
+        self.pressure_checkpoint("volume_absence")
         if self.docker.inspect("volume", name, absent=True) is not None:
             raise QualificationError("Restore volume name already exists; fresh empty volume required")
         role = "pressure" if service == "labredis-pressure" else "restore"
+        self.pressure_checkpoint("volume_create")
         self.docker.call(
             "volume",
             "create",
@@ -745,6 +850,7 @@ class Laboratory:
             "com.docker.compose.volume=" + suffix,
             name,
         )
+        self.pressure_checkpoint("volume_capture")
         record = resource_identity(
             "volume", self.docker.inspect("volume", name), self.journal.value["run_id"], role, project
         )
@@ -839,91 +945,125 @@ class Laboratory:
         (self.directory / "pressure-reports").mkdir(mode=0o700, exist_ok=True)
         (self.directory / "pressure-artifacts").mkdir(mode=0o700, exist_ok=True)
         for mode in ("seed", "assert"):
-            role = "source" if mode == "seed" else "restore"
-            if mode == "assert":
-                self.change("stop", {"labredis-pressure"})
-                archive = self.archive_store("labredis-pressure")
-                self.fresh_restore_volume(archive, service="labredis-pressure")
-                try:
-                    self.compose("up", "-d", "--wait", "--wait-timeout", "60", "labredis-pressure", role="restore")
-                finally:
-                    self.discover("restore")
-            name = self.journal.value["projects"][role] + "-pressure-" + mode
-            service = "pressure-test" if mode == "seed" else "pressure-assert"
-            output = "/qualification/pressure-seed.xml" if mode == "seed" else "/reports/pressure-assert.xml"
-            if self.docker.inspect("container", name, absent=True) is not None:
-                raise QualificationError("Pressure helper name already exists")
-            self.compose(
-                "run",
-                "--build",
-                "--no-deps",
-                "-d",
-                "--name",
-                name,
-                "-e",
-                "SHADAI_REDIS_PRESSURE_MODE=" + mode,
-                service,
-                "python",
-                "-m",
-                "pytest",
-                "-q",
-                "-m",
-                "redis_pressure",
-                "-p",
-                "no:cacheprovider",
-                "--junitxml=" + output,
-                role=role,
-            )
-            # Build progress is not an identity; resolve the exact generated name.
-            inspected = self.docker.inspect("container", name)
-            record = resource_identity(
-                "container", inspected, self.journal.value["run_id"], "pressure", self.journal.value["projects"][role]
-            )
-            image = inspected.get("Image")
-            if (record["service"] != service or inspected.get("Name") != "/" + name or
-                    type(record["id"]) is not str or not re.fullmatch(r"[0-9a-f]{64}", record["id"]) or
-                    type(image) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", image)):
-                raise QualificationError("Pressure helper identity proof is invalid")
-            identifier = record["id"]
-            self.journal.add_resources([record])
+            with self.pressure_diagnostics(mode):
+                role = "source" if mode == "seed" else "restore"
+                if mode == "assert":
+                    with self.pressure_diagnostics("stop"):
+                        self.change("stop", {"labredis-pressure"})
+                    with self.pressure_diagnostics("export"):
+                        archive = self.archive_store("labredis-pressure")
+                    with self.pressure_diagnostics("import"):
+                        self.fresh_restore_volume(archive, service="labredis-pressure")
+                    with self.pressure_diagnostics("restore"):
+                        self.pressure_checkpoint("up")
+                        primary = None
+                        try:
+                            self.compose("up", "-d", "--wait", "--wait-timeout", "60", "labredis-pressure",
+                                         role="restore")
+                        except BaseException as exc:
+                            primary = exc
+                            if self.failure is None:
+                                self.failure = failure_evidence(exc, "redis_pressure", self.stage)
+                            raise
+                        finally:
+                            try:
+                                self.pressure_checkpoint("discover_list")
+                                self.discover("restore")
+                            except BaseException as secondary:
+                                if primary is None:
+                                    raise
+                                self.pressure_secondary(primary, secondary)
+                                if isinstance(secondary, (KeyboardInterrupt, SystemExit)):
+                                    raise
+                                primary.add_note("pressure_restore_discover_failed")
+                name = self.journal.value["projects"][role] + "-pressure-" + mode
+                service = "pressure-test" if mode == "seed" else "pressure-assert"
+                output = "/qualification/pressure-seed.xml" if mode == "seed" else "/reports/pressure-assert.xml"
+                self.pressure_checkpoint("name_inspect")
+                if self.docker.inspect("container", name, absent=True) is not None:
+                    raise QualificationError("Pressure helper name already exists")
+                self.pressure_checkpoint("launch")
+                self.compose(
+                    "run",
+                    "--build",
+                    "--no-deps",
+                    "-d",
+                    "--name",
+                    name,
+                    "-e",
+                    "SHADAI_REDIS_PRESSURE_MODE=" + mode,
+                    service,
+                    "python",
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "-m",
+                    "redis_pressure",
+                    "-p",
+                    "no:cacheprovider",
+                    "--junitxml=" + output,
+                    role=role,
+                )
+                # Build progress is not an identity; resolve the exact generated name.
+                self.pressure_checkpoint("capture")
+                inspected = self.docker.inspect("container", name)
+                record = resource_identity(
+                    "container", inspected, self.journal.value["run_id"], "pressure",
+                    self.journal.value["projects"][role],
+                )
+                image = inspected.get("Image")
+                if (record["service"] != service or inspected.get("Name") != "/" + name or
+                        type(record["id"]) is not str or not re.fullmatch(r"[0-9a-f]{64}", record["id"]) or
+                        type(image) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", image)):
+                    raise QualificationError("Pressure helper identity proof is invalid")
+                identifier = record["id"]
+                self.journal.add_resources([record])
 
-            def cleanup_pressure():
-                current = self.docker.inspect("container", identifier, absent=True)
-                if current is not None:
+                def cleanup_pressure():
+                    self.pressure_checkpoint("cleanup_inspect")
+                    current = self.docker.inspect("container", identifier, absent=True)
+                    if current is not None:
+                        verify_resource(record, current)
+                        if current.get("Name") != "/" + name or current.get("Image") != image:
+                            raise QualificationError("Pressure helper name or image changed")
+                    self.remove(record)
+
+                primary = None
+                try:
+                    self.pressure_checkpoint("wait")
+                    code = int(self.docker.call("container", "wait", identifier, timeout=180))
+                    self.pressure_checkpoint("reinspect")
+                    current = self.docker.inspect("container", identifier)
                     verify_resource(record, current)
                     if current.get("Name") != "/" + name or current.get("Image") != image:
                         raise QualificationError("Pressure helper name or image changed")
-                self.remove(record)
-
-            primary = None
-            try:
-                code = int(self.docker.call("container", "wait", identifier, timeout=180))
-                current = self.docker.inspect("container", identifier)
-                verify_resource(record, current)
-                if current.get("Name") != "/" + name or current.get("Image") != image:
-                    raise QualificationError("Pressure helper name or image changed")
-            except BaseException as exc:
-                primary = exc
-                raise
-            finally:
-                try:
-                    cleanup_pressure()
-                except BaseException:
-                    if primary is None:
-                        raise
-                    primary.add_note("Pressure helper cleanup refused; owned journal record retained")
-            result = ET.parse(
-                self.directory
-                / ("pressure-artifacts/pressure-seed.xml" if mode == "seed" else "pressure-reports/pressure-assert.xml")
-            )
-            tests = list(result.iter("testcase"))
-            assert code == 0 and tests and not list(result.iter("skipped")) and not list(result.iter("failure"))
-            assert not list(result.iter("error"))
-            assert {
-                "test_required_pressure_and_aof_phase",
-                "test_real_redis_oom_before_allocation_and_owned_release_recovers",
-            } <= {item.get("name") for item in tests}
-            phases.append({"phase": mode, "executed_tests": len(tests), "skipped": 0})
+                except BaseException as exc:
+                    primary = exc
+                    if self.failure is None:
+                        self.failure = failure_evidence(exc, "redis_pressure", self.stage)
+                    raise
+                finally:
+                    try:
+                        cleanup_pressure()
+                    except BaseException as secondary:
+                        if primary is None:
+                            raise
+                        self.pressure_secondary(primary, secondary)
+                        if isinstance(secondary, (KeyboardInterrupt, SystemExit)):
+                            raise
+                        primary.add_note("Pressure helper cleanup refused; owned journal record retained")
+                self.pressure_checkpoint("junit")
+                relative = ("pressure-artifacts/pressure-seed.xml" if mode == "seed"
+                            else "pressure-reports/pressure-assert.xml")
+                result = ET.parse(self.directory / relative)
+                tests = list(result.iter("testcase"))
+                assert code == 0 and tests and not list(result.iter("skipped")) and not list(result.iter("failure"))
+                assert not list(result.iter("error"))
+                assert {
+                    "test_required_pressure_and_aof_phase",
+                    "test_real_redis_oom_before_allocation_and_owned_release_recovers",
+                } <= {item.get("name") for item in tests}
+                phases.append({"phase": mode, "executed_tests": len(tests), "skipped": 0})
         self.record(
             "redis_pressure",
             phases=phases,
