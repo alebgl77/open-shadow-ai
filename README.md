@@ -16,6 +16,14 @@ Understand which AI services and tools appear in your environment, where each si
 
 ![Open Shadow AI investigation dashboard with synthetic demo data](docs/assets/dashboard-desktop.webp)
 
+## Discovery in motion
+
+Three silent French diagrams explain the AI footprint, evidence levels and collector recovery. These editorial illustrations use synthetic data; they are separate from the actual interface shown above.
+
+![Illustrative network, endpoint and AD/Entra signals converging into LLM, code, media and API categories; synthetic data](docs/assets/motion/footprint.gif)
+
+[Explore all three diagrams](docs/motion.md) · [Open/download the MP4](docs/assets/motion/footprint.mp4) · [View the static poster](docs/assets/motion/footprint.webp)
+
 ## Why this project
 
 - **Evidence you can inspect.** Distinguish network observations, installed assets, directory inventory and instrumented usage.

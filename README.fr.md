@@ -10,6 +10,14 @@ Open Shadow AI rassemble des métadonnées réseau, des inventaires de postes et
 
 Logiciel en phase de développement : les packages Docker/Kubernetes et les scripts sont fournis pour évaluation. Un déploiement réel Docker, Kubernetes, AD ou Entra nécessite une validation opérationnelle. Aucune certification ou couverture exhaustive n'est revendiquée.
 
+## La découverte en mouvement
+
+Trois schémas muets en français illustrent l'empreinte IA, les niveaux de preuve et la reprise des collecteurs. Ces illustrations éditoriales utilisent des données synthétiques ; elles ne sont pas des captures de l'interface.
+
+![Illustration des signaux réseau, postes et AD/Entra convergeant vers les catégories LLM, code, médias et API ; données synthétiques](docs/assets/motion/footprint.gif)
+
+[Voir les trois schémas](docs/motion.md) · [Ouvrir/télécharger le MP4](docs/assets/motion/footprint.mp4) · [Voir l'affiche statique](docs/assets/motion/footprint.webp)
+
 ## Essayer l'interface
 
 Prérequis : **Node.js 22.22.2+ (22.x)**. Lancez la démonstration isolée :
