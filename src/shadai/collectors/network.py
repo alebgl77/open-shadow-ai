@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import csv
+import hashlib
 import json
 import os
 import queue
@@ -29,6 +30,7 @@ import httpx
 from shadai.parsers.network import FORMATS, network_parser
 from shadai.parsers.network.common import MAX_LINE_BYTES, RecordRejected, event_metadata, normalize_host
 from shadai.parsers.network.tshark import ECH_FIELD, TSHARK_FIELDS
+from shadai.utils.delivery_spool import DurableSpool, SpoolError, default_spool_dir
 
 MAX_BATCH_EVENTS = 500
 MAX_BATCH_BYTES = 900 * 1024
@@ -40,8 +42,10 @@ _OVERSIZE = object()
 
 
 class DeliveryError(RuntimeError):
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, retryable: bool | None = None):
         super().__init__(reason)
+        self.retryable = (reason in {"delivery_retries_exhausted", "delivery_http_401", "delivery_transport_error"}
+                          if retryable is None else retryable)
 
 
 def ingest_endpoint(value: str, allow_http_loopback: bool = False) -> str:
@@ -120,18 +124,92 @@ class EventTransport:
     """No redirects, verified TLS, bounded retries, identical request bytes."""
 
     def __init__(self, api_url: str, key: str, *, ca_file: str | None = None,
-                 allow_http_loopback: bool = False, client=None, sleep=time.sleep, retries: int = 3):
+                 allow_http_loopback: bool = False, client=None, sleep=time.sleep, retries: int = 3, key_loader=None):
         self.endpoint = ingest_endpoint(api_url, allow_http_loopback)
         self.key = key
+        self.key_loader = key_loader
+        self.expected_collector_id = None
+        self.scoped = False
+        self.verified_key = None
+        self.ingestion_max_age_days = None
+        self.delivery_spool = None
         self.sleep = sleep
         self.retries = retries
         context = ssl.create_default_context(cafile=ca_file)
         self.client = client or httpx.Client(verify=context, follow_redirects=False, timeout=15, trust_env=False)
         self.owns_client = client is None
 
+    @property
+    def agent_origin(self):
+        return self.endpoint.removesuffix("/api/v1/ingest/events") + "/api/v1/agent"
+
+    def discover_binding(self, collector_id: str) -> bool:
+        self.expected_collector_id = collector_id
+        try:
+            response = self.client.get(self.agent_origin + "/config", headers={"X-API-Key": self.key},
+                                       follow_redirects=False)
+        except httpx.TransportError:
+            return False
+        if response.status_code != 200:
+            return False
+        try:
+            binding = response.json()
+            age = binding.get("ingestion_max_age_days")
+            if age is not None and (type(age) is not int or not 1 <= age <= 365):
+                raise ValueError()
+            self.ingestion_max_age_days = age
+            if binding.get("legacy", True):
+                if self.scoped or (self.delivery_spool and self.delivery_spool.has_binding("collector")):
+                    raise DeliveryError("collector_binding_mismatch", retryable=True)
+                self.scoped = False
+                self.verified_key = self.key
+                self._persist_verified_binding()
+                return False
+            if binding["collector_id"] != collector_id or "network" not in binding["allowed_source_types"]:
+                raise DeliveryError("collector_binding_mismatch", retryable=True)
+            self.scoped = True
+            self.verified_key = self.key
+            self._persist_verified_binding()
+            return True
+        except (ValueError, TypeError, KeyError):
+            raise DeliveryError("invalid_collector_binding", retryable=True) from None
+
+    def _persist_verified_binding(self):
+        if self.delivery_spool is None:
+            return
+        if (self.ingestion_max_age_days is not None and
+                self.delivery_spool.ttl_seconds > self.ingestion_max_age_days * 86400):
+            raise DeliveryError('spool_ttl_exceeds_server_age', retryable=True)
+        if self.scoped:
+            try:
+                self.delivery_spool.bind('collector', self.expected_collector_id)
+            except SpoolError:
+                raise DeliveryError('collector_binding_mismatch', retryable=True) from None
+        elif self.delivery_spool.has_binding('collector'):
+            raise DeliveryError('collector_binding_mismatch', retryable=True)
+
+    def _prepare_delivery(self, collector_id: str | None = None) -> None:
+        """Verify the current credential and durable identity before either POST."""
+        if collector_id is not None:
+            if self.expected_collector_id is not None and self.expected_collector_id != collector_id:
+                raise DeliveryError("collector_binding_mismatch", retryable=True)
+            self.expected_collector_id = collector_id
+        if self.key_loader is not None:
+            self.key = self.key_loader()
+        if self.expected_collector_id:
+            if self.key != self.verified_key:
+                self.discover_binding(self.expected_collector_id)
+                if self.key != self.verified_key:
+                    raise DeliveryError("binding_discovery_unavailable", retryable=True)
+            # Discovery may first succeed during replay after an offline startup.
+            # Persist binding and enforce the verified age before every POST,
+            # including sends whose response is subsequently lost.
+            self._persist_verified_binding()
+
     def send(self, body: bytes) -> None:
         if len(body) > MAX_BATCH_BYTES:
             raise DeliveryError("batch_size_exceeded")
+        self._prepare_delivery()
         for attempt in range(self.retries + 1):
             try:
                 with self.client.stream(
@@ -142,6 +220,9 @@ class EventTransport:
                     status = response.status_code
                 if status == 202:
                     return
+                if status == 401:
+                    self.verified_key = None
+                    raise DeliveryError('delivery_http_401', retryable=True)
                 if status not in {408, 429} and not 500 <= status <= 599:
                     raise DeliveryError("delivery_http_" + str(status))
             except httpx.TransportError:
@@ -153,6 +234,72 @@ class EventTransport:
     def close(self):
         if self.owns_client:
             self.client.close()
+
+    def heartbeat(self, collector_id: str, stats: dict) -> None:
+        try:
+            self._prepare_delivery(collector_id)
+        except DeliveryError as exc:
+            if str(exc) != "binding_discovery_unavailable":
+                raise
+            print("heartbeat_unavailable", file=sys.stderr)
+            return
+        if not self.scoped:
+            return
+        body = {"collector_id": collector_id, "client_version": "0.2.0",
+                "queue_events": stats["queued_events"], "queued_bytes": stats["queued_bytes"],
+                "dropped_events": stats.get("overflow_events", 0) + stats.get("storage_failed_events", 0),
+                "expired_events": stats.get("expired_events", 0),
+                "rejected_events": stats.get("quarantined_events", 0)}
+        try:
+            response = self.client.post(self.agent_origin + "/heartbeat", json=body,
+                                        headers={"X-API-Key": self.key}, follow_redirects=False)
+            if response.status_code == 401:
+                self.verified_key = None
+            if response.status_code != 200:
+                print("heartbeat_unavailable", file=sys.stderr)
+        except httpx.TransportError:
+            print("heartbeat_unavailable", file=sys.stderr)
+
+
+class DurableEventTransport:
+    """Store before sending; offline batches survive a CLI exit or process kill."""
+
+    def __init__(self, transport, spool: DurableSpool):
+        self.transport, self.spool = transport, spool
+        self.last_error = None
+        if hasattr(transport, '_persist_verified_binding'):
+            spool.bind('target', transport.endpoint)
+            transport.delivery_spool = spool
+
+    def send(self, body: bytes) -> None:
+        self.spool.enqueue(body, event_count=len(json.loads(body)["events"]))
+        self.drain()
+
+    def drain(self, *, limit: int = 50) -> None:
+        for _ in range(limit):
+            batches = self.spool.claim(limit=1)
+            if not batches:
+                break
+            [batch] = batches
+            try:
+                self.transport.send(batch.payload)
+            except DeliveryError as exc:
+                self.last_error = str(exc)
+                if exc.retryable:
+                    self.spool.retry(batch)
+                else:
+                    self.spool.quarantine(batch, str(exc))
+                if str(exc) in {"collector_binding_mismatch", "invalid_collector_binding",
+                                "spool_ttl_exceeds_server_age"}:
+                    raise
+            else:
+                self.spool.ack(batch)
+
+    def close(self):
+        try:
+            self.transport.close()
+        finally:
+            self.spool.close()
 
 
 class EventBatcher:
@@ -308,6 +455,11 @@ def argument_parser():
     parser.add_argument("--api-key-file", help="Private key file; alternatively AGENT_API_KEY[_FILE]")
     parser.add_argument("--ca-file", help="PEM CA bundle; certificate/hostname checks always remain enabled")
     parser.add_argument("--allow-http-loopback", action="store_true")
+    parser.add_argument("--spool-dir", help="Private persistent metadata queue (default: user state directory)")
+    parser.add_argument("--spool-max-bytes", type=int, default=64 * 1024 * 1024)
+    parser.add_argument("--spool-max-batches", type=int, default=2048)
+    parser.add_argument("--spool-ttl-seconds", type=int, default=7 * 86400,
+                        help="Queued metadata lifetime, default 7 days; maximum 365 days and server accepted event age")
     parser.add_argument("--print-filter", action="store_true",
                         help="Print a display filter from configured YAML catalog")
     parser.add_argument("--catalog-builtin", default="catalog/builtin")
@@ -339,8 +491,35 @@ def main(argv=None) -> int:
             raise ValueError("Duration must be 1-3600 seconds")
         parser = network_parser(args.format or "tshark", args.sensor_id, args.tenant_id, args.site_id)
         if not args.dry_run:
-            transport = EventTransport(args.api_url, read_api_key(args.api_key_file), ca_file=args.ca_file,
-                                       allow_http_loopback=args.allow_http_loopback)
+            component = "network-" + hashlib.sha256(args.sensor_id.encode()).hexdigest()[:24]
+            spool = DurableSpool(args.spool_dir or default_spool_dir(component),
+                                 max_bytes=args.spool_max_bytes, max_batches=args.spool_max_batches,
+                                 ttl_seconds=args.spool_ttl_seconds)
+            try:
+                wire = None
+                wire = EventTransport(args.api_url, read_api_key(args.api_key_file), ca_file=args.ca_file,
+                                      allow_http_loopback=args.allow_http_loopback, retries=0,
+                                      key_loader=lambda: read_api_key(args.api_key_file))
+                if hasattr(wire, '_persist_verified_binding'):
+                    wire.delivery_spool = spool
+                if hasattr(wire, "discover_binding"):
+                    spool.bind("target", wire.endpoint)
+                    if wire.discover_binding(args.sensor_id):
+                        spool.bind("collector", args.sensor_id)
+                    elif wire.verified_key is not None and spool.has_binding("collector"):
+                        raise DeliveryError("collector_binding_mismatch", retryable=True)
+                    if (wire.ingestion_max_age_days is not None
+                            and args.spool_ttl_seconds > int(wire.ingestion_max_age_days) * 86400):
+                        raise ValueError("Spool TTL exceeds server accepted event age")
+            except Exception:
+                try:
+                    if wire is not None:
+                        wire.close()
+                finally:
+                    spool.close()
+                raise
+            transport = DurableEventTransport(wire, spool)
+            transport.drain()
         batch = EventBatcher(transport) if transport else None
         if args.csv_output:
             source_path = args.input if args.input != "-" else None
@@ -365,15 +544,25 @@ def main(argv=None) -> int:
         records = queue.Queue(maxsize=8)
         reader = threading.Thread(target=_read_lines, args=(stream, records, stop), daemon=True)
         reader.start()
+        last_drain = time.monotonic()
+        last_heartbeat = last_drain
         for name in (signal.SIGINT, signal.SIGTERM):
             previous_signals[name] = signal.getsignal(name)
             signal.signal(name, lambda *_: stop.set())
         while not stop.is_set():
+            # Liveness is independent of stdout lines or matching AI events.
+            if (transport and hasattr(transport.transport, 'heartbeat') and
+                    time.monotonic() - last_heartbeat >= 60):
+                transport.transport.heartbeat(args.sensor_id, transport.spool.stats())
+                last_heartbeat = time.monotonic()
             try:
                 raw = records.get(timeout=0.1)
             except queue.Empty:
                 if batch:
                     batch.flush_due()
+                if transport and time.monotonic() - last_drain >= 2:
+                    transport.drain(limit=1)
+                    last_drain = time.monotonic()
                 continue
             if raw is None:
                 break
@@ -402,8 +591,19 @@ def main(argv=None) -> int:
         if process and not stop.is_set() and process.wait(timeout=5):
             raise ValueError("TShark metadata extraction failed")
         exit_code = 2 if parser.stats.rejected else 0
+        if transport:
+            stats = transport.spool.stats()
+            if hasattr(transport.transport, "heartbeat"):
+                transport.transport.heartbeat(args.sensor_id, stats)
+            print(json.dumps({"delivery_stats": stats}, separators=(",", ":")), file=sys.stderr)
+            if stats["batches"]:
+                print((transport.last_error or "delivery_pending") + "; retained in private spool", file=sys.stderr)
+                exit_code = 1
     except DeliveryError as exc:
         print(str(exc) + "; replay persisted metadata with the same sensor ID", file=sys.stderr)
+        exit_code = 1
+    except SpoolError as exc:
+        print(str(exc) + "; metadata retention failed", file=sys.stderr)
         exit_code = 1
     except (ValueError, OSError, subprocess.SubprocessError):
         print("network_collector_failed: check input, configuration, or TShark availability", file=sys.stderr)

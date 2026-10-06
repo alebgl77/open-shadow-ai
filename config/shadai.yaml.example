@@ -14,8 +14,17 @@ database:
   # clickhouse_port: 9440
   # clickhouse_secure: true
   # clickhouse_ca_certs: /run/secrets/clickhouse-ca.pem
+security:
+  # Disable only after enrolling and verifying all HTTP collectors.
+  allow_legacy_agent_key: true
+  # Affects new server processing; history/local spools require separate maintenance.
+  pseudonymize_identities: false
+  # Optional independent monitoring credential: prefer METRICS_API_KEY_FILE; omit when unused.
+  # metrics_api_key: null
 retention:
   events_days: 90
+  # Must be <= events_days; counts are observed identifiers, not employee headcount.
+  identity_days: 30
   detections_days: 365
   audit_logs_days: 365
   purge_enabled: true

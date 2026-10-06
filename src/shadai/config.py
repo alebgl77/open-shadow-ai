@@ -10,7 +10,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class ServerSettings(BaseModel):
@@ -77,15 +77,28 @@ class DatabaseSettings(BaseModel):
 
 
 class SecuritySettings(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
     jwt_secret: str = "CHANGE_ME_IMMEDIATELY"
     jwt_algorithm: str = "HS256"
     jwt_expiration_hours: int = Field(default=24, ge=1, le=168)
     encryption_key: str = "CHANGE_ME_IMMEDIATELY"
     agent_api_key: str = ""
+    metrics_api_key: SecretStr | None = None
+    allow_legacy_agent_key: bool = True
+    pseudonymize_identities: bool = False
+
+    @field_validator('metrics_api_key')
+    @classmethod
+    def valid_metrics_key(cls, value):
+        if value is not None and (len(value.get_secret_value()) < 32 or
+                                  any(char.isspace() for char in value.get_secret_value())):
+            raise ValueError('Metrics scrape key requires at least 32 characters without whitespace')
+        return value
 
 
 class RetentionSettings(BaseModel):
     events_days: int = Field(default=90, ge=1, le=365)
+    identity_days: int = Field(default=30, ge=1, le=365)
     ingestion_max_age_days: int = Field(default=90, ge=1, le=365)
     receipt_days: int = Field(default=181, ge=1, le=1096)
     detections_days: int = Field(default=365, ge=1, le=3650)
@@ -93,8 +106,17 @@ class RetentionSettings(BaseModel):
     purge_enabled: bool = True
     purge_schedule: str = "0 3 * * *"
 
+    @model_validator(mode="before")
+    @classmethod
+    def compatible_identity_horizon(cls, values):
+        if isinstance(values, dict) and "identity_days" not in values:
+            values = {**values, "identity_days": min(30, int(values.get("events_days", 90)))}
+        return values
+
     @model_validator(mode="after")
     def receipt_horizon(self):
+        if self.identity_days > self.events_days:
+            raise ValueError("identity_days must not exceed events_days")
         if self.receipt_days < self.ingestion_max_age_days + self.events_days + 1:
             raise ValueError("receipt_days must exceed ingestion_max_age_days + events_days")
         return self
@@ -155,6 +177,7 @@ class SCIMSettings(BaseModel):
 
 
 class ShadAIConfig(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
     tenant_id: str = Field(default="default", min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
     server: ServerSettings = ServerSettings()
     database: DatabaseSettings = DatabaseSettings()
@@ -191,6 +214,10 @@ def _apply_env_overrides(config: ShadAIConfig) -> ShadAIConfig:
         config.security.agent_api_key = _read_secret_file(path)
     elif key := os.environ.get("AGENT_API_KEY"):
         config.security.agent_api_key = key
+    if path := os.environ.get('METRICS_API_KEY_FILE'):
+        config.security.metrics_api_key = SecuritySettings(metrics_api_key=_read_secret_file(path)).metrics_api_key
+    elif key := os.environ.get('METRICS_API_KEY'):
+        config.security.metrics_api_key = SecuritySettings(metrics_api_key=key).metrics_api_key
     if user := os.environ.get("CLICKHOUSE_USER"):
         config.database.clickhouse_user = user
     if path := os.environ.get("CLICKHOUSE_PASSWORD_FILE"):
@@ -219,6 +246,9 @@ def _apply_env_overrides(config: ShadAIConfig) -> ShadAIConfig:
         "OIDC_IDENTITY_CLAIM": ("oidc", "identity_claim"),
         "OIDC_ALLOW_INSECURE_LOCALHOST": ("oidc", "allow_insecure_localhost"),
         "SCIM_ENABLED": ("scim", "enabled"),
+        "ALLOW_LEGACY_AGENT_KEY": ("security", "allow_legacy_agent_key"),
+        "PSEUDONYMIZE_IDENTITIES": ("security", "pseudonymize_identities"),
+        "IDENTITY_RETENTION_DAYS": ("retention", "identity_days"),
     }
     for name in ("SECURE", "CA_CERTS", "CERTFILE", "KEYFILE", "SERVER_HOSTNAME"):
         env_fields["CLICKHOUSE_" + name] = ("database", "clickhouse_" + name.lower())
@@ -245,12 +275,19 @@ def validate_security(config: ShadAIConfig) -> None:
     """Fail closed in every runtime, including debug; tests inject valid configuration."""
     from cryptography.fernet import Fernet
 
-    for name in ("jwt_secret", "agent_api_key"):
+    required_secrets = ("jwt_secret", "agent_api_key") if config.security.allow_legacy_agent_key else ("jwt_secret",)
+    for name in required_secrets:
         value = getattr(config.security, name)
         if len(value.encode()) < 32 or len(set(value)) < 12 or "change_me" in value.lower():
             raise ValueError(f"{name} must be a randomly generated secret of at least 32 bytes")
     if config.security.jwt_algorithm != "HS256":
         raise ValueError("Only HS256 is supported")
+    metrics_key = config.security.metrics_api_key
+    if metrics_key and metrics_key.get_secret_value() in {
+        config.security.jwt_secret, config.security.agent_api_key, config.security.encryption_key,
+        config.oidc.client_secret, config.scim.bearer_token,
+    }:
+        raise ValueError('Metrics scrape key must be distinct from other credentials')
     Fernet(config.security.encryption_key.encode())
     validate_identity_settings(config)
 

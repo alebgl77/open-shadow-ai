@@ -1,0 +1,45 @@
+# Optional Linux/rootful Docker monitoring; provision the two private copies first.
+# Local Compose file secrets preserve host ownership/mode, not uid/gid overrides.
+services:
+  api:
+    environment:
+      METRICS_API_KEY_FILE: /run/secrets/metrics_api_key
+    secrets:
+      - pg_password
+      - redis_password
+      - ch_password
+      - jwt_secret
+      - encryption_key
+      - agent_api_key
+      - metrics_api_key
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    user: "65534:65534"
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [backend]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./deploy/monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    secrets:
+      - source: metrics_prometheus_token
+        target: shadai_metrics_token
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+volumes:
+  prometheus_data:
+secrets:
+  metrics_api_key: {file: ./secrets/metrics_api_key.api.txt}
+  metrics_prometheus_token: {file: ./secrets/metrics_api_key.prometheus.txt}

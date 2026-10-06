@@ -122,6 +122,10 @@ export default function DetectionDetail() {
   const bundle = (detection.evidence_bundle || {}) as Record<string, unknown>
   const confFactors = (bundle?.confidence_factors as Array<{ factor: string; value: number; description: string }>) ?? []
   const riskFactors = (bundle?.risk_factors as Array<{ factor: string; value: number; description: string }>) ?? []
+  const window = bundle._identity_window && typeof bundle._identity_window === 'object' && !Array.isArray(bundle._identity_window) ? bundle._identity_window as Record<string, unknown> : null
+  const windowDays = typeof window?.days === 'number' && Number.isInteger(window.days) && window.days > 0 ? window.days : null
+  const windowAsOf = typeof window?.as_of === 'string' && Number.isFinite(Date.parse(window.as_of)) ? window.as_of : null
+  const riskCalculatedAt = detection.risk_calculated_at && Number.isFinite(Date.parse(detection.risk_calculated_at)) ? detection.risk_calculated_at : null
 
   // Extract evidence sources (exclude internal keys)
   const evidenceSources = Object.entries(bundle).filter(
@@ -138,7 +142,7 @@ export default function DetectionDetail() {
         </div>
       )}
 
-      {detection.risk_score_stale && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"><strong>Risk score needs recalculation.</strong> An approval may have expired, or the retained evidence lacks factors needed to recalculate this score. The breakdown below is the last computed result, not a current assessment. Review the policy and refresh source evidence before relying on it.</div>}
+      {detection.risk_score_stale && <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"><strong>Risk score needs recalculation.</strong> Retained membership may have changed, an approval may have expired, or a calculation timestamp or evidence factor is missing. The breakdown below is the last computed result. Review the policy and refresh source evidence before relying on it.</div>}
       <div>
         <Link to="/discoveries" className="flex items-center gap-1 text-sm text-slate-400 hover:text-accent mb-3 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Back to Discoveries
@@ -180,6 +184,7 @@ export default function DetectionDetail() {
           {/* Scoring breakdown */}
           <div className="stat-card">
             <h3 className="text-sm font-medium text-slate-400 mb-4">Scoring Breakdown</h3>
+            <p className="text-xs text-slate-500 mb-4">Last risk calculation: {riskCalculatedAt ? new Date(riskCalculatedAt).toLocaleString() : 'Unknown'}. Count projection and note updates do not recalculate risk.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <p className="text-xs text-slate-500 mb-3">
@@ -238,6 +243,7 @@ export default function DetectionDetail() {
           )}
 
           {/* Impact stats */}
+          <div aria-label="Identity retention window" className="text-xs text-slate-400">{windowDays && windowAsOf ? <>Observed membership retained for {windowDays} days · counted as of {new Date(windowAsOf).toLocaleString()}. This is the count projection time.</> : 'The retained identity count window is unknown.'}{typeof window?.basis_reset_at === 'string' && <p className="mt-1">Identity membership was reset after a privacy key change; current retained counts use the new basis.</p>}</div>
           <div className="grid grid-cols-2 gap-4">
             <div className="stat-card flex items-center gap-4">
               <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center">

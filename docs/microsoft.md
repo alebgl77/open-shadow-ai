@@ -15,11 +15,11 @@ Run `scripts/Export-ActiveDirectory.ps1` on a management host with RSAT ActiveDi
 
 Each run creates a private subdirectory containing API-compatible `{events:[...]}` batches of at most 500. Fields include observation timestamp, stable GUID/SID identity and optional user/computer names. No passwords, email addresses, group memberships, recovery keys or broad attribute dumps are collected.
 
-For upload, configure an HTTPS origin and provide the collector key via `AGENT_API_KEY_FILE` or `AGENT_API_KEY` in the current process. Prefer a protected file.
+For upload, enroll a stable collector such as `ad-pilot` with the `directory` scope, configure an HTTPS origin and provide its one-time key via `AGENT_API_KEY_FILE` or `AGENT_API_KEY` in the current process. Prefer a protected file. Set the exporter `-CollectorId` to that enrolled ID; it otherwise defaults to `active-directory`.
 
 ```powershell
 $env:AGENT_API_KEY_FILE = 'C:/Protected/OpenShadowAI/collector-key.txt'
-./scripts/Export-ActiveDirectory.ps1 -SearchBase 'OU=Pilot,DC=example,DC=com' -OutputDirectory './ad-export' -Upload -ApiUrl 'https://ai-inventory.example.com' -TenantId 'default'
+./scripts/Export-ActiveDirectory.ps1 -SearchBase 'OU=Pilot,DC=example,DC=com' -OutputDirectory './ad-export' -Upload -ApiUrl 'https://ai-inventory.example.com' -TenantId 'default' -CollectorId 'ad-pilot'
 ```
 
 TLS certificate validation remains enabled and redirects are rejected. Failed uploads retain their batches; retry the original JSON with unchanged event IDs. A new export is a new observation. Restrict export access and retention because identifiers and account names remain sensitive organizational data.
@@ -71,7 +71,7 @@ icacls $wheelhouse /setowner '*S-1-5-32-544' /T
 ```
 
 1. Choose a pilot OU and security group, document collection, and approve endpoint access.
-2. Provision the API key separately using a protected management channel; do not put it in SYSVOL or a broadly readable GPO script.
+2. Enroll a separate stable endpoint collector with `endpoint` scope (and `browser` for extension inventory), and provision its one-time API key using a protected management channel; do not put it in SYSVOL or a broadly readable GPO script.
 3. Review/sign the install script and its generated runner according to your PowerShell policy.
 4. Test the script with `-WhatIf` on one machine, then install with explicit local administrator approval.
 5. Start the registered task, confirm HTTPS ingestion and inventory scope, then stage a GPO startup script using your normal change process.
@@ -82,6 +82,8 @@ icacls $wheelhouse /setowner '*S-1-5-32-544' /T
 ```
 
 Running as SYSTEM may not reveal every user's browser profile. Inventory coverage varies by OS, permissions and collector. Package signing, restart behavior, upgrade/uninstall and rollout through GPO remain fleet acceptance tests.
+
+The endpoint discovers its scoped identity before delivery and retains bounded batches across restarts. Keep its spool inside a persistent private tree trusted by the SYSTEM task, using `spool_dir` or `SHADAI_AGENT_SPOOL_DIR`; validate actual directory/file/ancestor permissions under that identity. Rotation keeps the same collector binding and queue. Restore the correct key after a mismatch rather than changing the enrollment of retained data. Review [operations](collector-operations.md) for retention, expired observations, plaintext queue protection and revocation recovery. Server pseudonymization does not clean local AD exports or endpoint spools.
 
 ## Intune, Configuration Manager and other operating systems
 

@@ -7,6 +7,7 @@ from shadai.engine.catalog_loader import build_catalog_index
 from shadai.engine.matcher import CatalogMatcher
 from shadai.models.catalog import CatalogItemRead
 from shadai.models.event import CanonicalEvent
+from shadai.utils.queueing import PermanentMessageError
 from shadai.workers.ingest import EventProcessor
 from shadai.workers.streams import StreamConsumer
 
@@ -48,39 +49,47 @@ class Session:
 async def test_reclaims_pending_before_reading_new():
     redis = AsyncMock()
     redis.xautoclaim.return_value = ["12-0", [("1-0", {"data": "x"})], []]
+    redis.xreadgroup.return_value = []
     consumer = StreamConsumer(redis, "group", "worker", ["events:dns"])
     assert await consumer.read() == [("events:dns", [("1-0", {"data": "x"})])]
     assert consumer.cursors["events:dns"] == "12-0"
-    redis.xreadgroup.assert_not_called()
+    redis.xreadgroup.assert_awaited_once()  # Pending failures must not starve fresh work.
 
 
 async def test_no_ack_on_failure_then_deadletter_before_ack():
     calls = []
     redis = AsyncMock()
-    redis.incr.side_effect = [1, 2]
-    redis.xadd.side_effect = lambda *a, **k: calls.append("deadletter")
-    redis.xack.side_effect = lambda *a, **k: calls.append("ack")
+    redis.hgetall.return_value = {}
+    attempts = iter([[1, 1], [2, 2]])
+    def evaluate(script, *args):
+        if "poison_attempts" in script:
+            return next(attempts)
+        calls.append("atomic_deadletter_ack")
+        return 1
+    redis.eval.side_effect = evaluate
     consumer = StreamConsumer(redis, "g", "w", ["s"], max_attempts=2)
-    handler = AsyncMock(side_effect=RuntimeError("secret-should-not-be-logged"))
+    handler = AsyncMock(side_effect=PermanentMessageError("secret-should-not-be-logged"))
     assert not await consumer.process("s", "1", {}, handler)
     assert calls == []
     assert await consumer.process("s", "1", {}, handler)
-    assert calls == ["deadletter", "ack"]
-    assert "secret" not in str(redis.xadd.call_args)
+    assert calls == ["atomic_deadletter_ack"]
+    assert "secret" not in str(redis.eval.call_args)
 
 
 async def test_deadletter_failure_keeps_pending():
     redis = AsyncMock()
-    redis.incr.return_value = 5
-    redis.xadd.side_effect = RuntimeError()
+    redis.hgetall.return_value = {}
+    redis.eval.side_effect = [[5, 5], RuntimeError()]
     with pytest.raises(RuntimeError):
-        await StreamConsumer(redis, "g", "w", ["s"]).process("s", "1", {}, AsyncMock(side_effect=ValueError()))
+        await StreamConsumer(redis, "g", "w", ["s"]).process("s", "1", {},
+                                                             AsyncMock(side_effect=PermanentMessageError()))
     redis.xack.assert_not_called()
 
 
 async def test_persist_enqueue_commit_ack_order_and_idempotency():
     calls = []
     redis = AsyncMock()
+    redis.hgetall.return_value = {}
     redis.xadd.side_effect = lambda *a, **k: calls.append("enqueue")
     redis.eval.side_effect = lambda *a, **k: calls.append("ack")
     session = Session()
@@ -100,7 +109,9 @@ async def test_persist_enqueue_commit_ack_order_and_idempotency():
 
 async def test_enqueue_failure_does_not_commit_receipt_or_ack():
     redis = AsyncMock()
+    redis.hgetall.return_value = {}
     redis.incr.return_value = 1
+    redis.eval.return_value = [1, 0]
     redis.xadd.side_effect = RuntimeError()
     session = Session()
     item = CatalogItemRead(catalog_item_id="x", canonical_name="x", category="ai", domains=["ai.test"])
@@ -115,7 +126,9 @@ async def test_enqueue_failure_does_not_commit_receipt_or_ack():
 
 async def test_clickhouse_failure_never_enqueues_or_acks():
     redis = AsyncMock()
+    redis.hgetall.return_value = {}
     redis.incr.return_value = 1
+    redis.eval.return_value = [1, 0]
     session = Session()
 
     def fail(*args):

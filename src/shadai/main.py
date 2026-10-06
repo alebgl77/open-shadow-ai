@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST
 from starlette.responses import JSONResponse, Response
 
 from shadai import __version__
@@ -17,12 +17,15 @@ from shadai.api.audit import router as audit_router
 from shadai.api.auth import router as auth_router
 from shadai.api.auth import users_router as users_admin_router
 from shadai.api.catalog import router as catalog_router
+from shadai.api.collectors import router as collectors_router
 from shadai.api.dashboard import router as dashboard_router
 from shadai.api.detections import router as detections_router
 from shadai.api.exports import router as exports_router
 from shadai.api.governance import router as governance_router
 from shadai.api.ingestion import router as ingestion_router
 from shadai.api.network import router as network_router
+from shadai.api.operations import current_pipeline, metrics_access
+from shadai.api.operations import router as operations_router
 from shadai.api.scim import router as scim_router
 from shadai.api.sso import router as sso_router
 from shadai.config import get_config, validate_security
@@ -30,6 +33,7 @@ from shadai.database import close_all, init_clickhouse, init_postgres, init_redi
 from shadai.security.crypto import init_crypto
 from shadai.security.scim import SCIMError
 from shadai.utils.logging import setup_logging
+from shadai.utils.metrics import operational_metrics
 
 
 @asynccontextmanager
@@ -84,8 +88,10 @@ app.include_router(governance_router)
 app.include_router(exports_router)
 app.include_router(audit_router)
 app.include_router(agent_router)
+app.include_router(collectors_router)
 app.include_router(ingestion_router)
 app.include_router(network_router)
+app.include_router(operations_router)
 app.include_router(scim_router)
 app.include_router(sso_router)
 
@@ -98,9 +104,9 @@ async def health_check():
 
 
 @app.get("/metrics")
-async def metrics():
-    """Prometheus metrics endpoint."""
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+async def metrics(_scope: str = Depends(metrics_access)):
+    """Authenticated installation metrics, read fresh from shared Redis."""
+    return Response(content=operational_metrics(await current_pipeline()), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/ready")

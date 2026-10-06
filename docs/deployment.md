@@ -17,7 +17,9 @@ These are adoption patterns, not certified sizing tiers. Event rate, retention a
 
 Run the README bootstrap and startup commands. The bootstrap copies configuration templates and creates six secrets. It never overwrites files. Unix secrets are read-only under a private `0700` directory, allowing nonroot containers to read Compose bind-mounted secret files. On Windows, both the Python entry point and PowerShell wrapper validate ownership, the complete secrets ACL and reparse points **before** generating any secret. New directories have a protected ACL granting only the current user and SYSTEM; administrator elevation is not required. Existing secrets are preserved only when their tree is private and owned by the current user or a trusted system principal. Unsafe explicit grants, foreign owners, junctions and replaceable ancestors cause an actionable refusal. Review the named path and provision a private destination before retrying; do not automatically reset an untrusted tree. Protect the host account and Docker daemon.
 
-State is kept in named PostgreSQL, ClickHouse and Redis volumes. None exposes a host port. API/UI bind to `127.0.0.1` by default. Redis uses authenticated access, persistence and `noeviction` so memory pressure causes a visible failure instead of silently evicting queued events.
+State is kept in named PostgreSQL, ClickHouse and Redis volumes, plus `syslog_spool` for the optional syslog collector. Stores expose no host port. API/UI bind to `127.0.0.1` by default. Redis uses authenticated access, AOF persistence and `noeviction` so memory pressure causes a visible failure instead of silently evicting queued events. Its fsync policy is not explicitly set; verify the running policy before assigning a power-loss recovery objective.
+
+The syslog image creates `/var/lib/shadai` as private `0700` storage owned by UID/GID 10001, mounted from `syslog_spool` while the rest of the filesystem stays read-only. Configure per-source paths below that parent in `config/sources.yaml`. A new container reuses the named volume; deleting volumes discards backlog. Existing volumes must already satisfy owner/mode/ancestor checks. Endpoint and network services need their own persistent private client paths. See [collector operations](collector-operations.md) for queue limits, first-start offline binding, rotation, expiry and plaintext metadata protection.
 
 ```bash
 docker compose ps --all
@@ -27,6 +29,8 @@ docker compose logs --tail 100 api ingest-worker correlation-worker
 ```
 
 `/health` tests the API process; `/ready` checks its store dependencies. Worker process liveness is not proof of forward progress. Monitor stream backlog, pending work, dead-letter streams and the last event per collector. Do not treat a healthy UI as proof that every collector reports.
+
+**Sources & coverage** separates collector contact/heartbeat/original observation timestamps from client-reported queue counters. Admin-only **Deployment pipeline** distinguishes pending acknowledgements, nullable undelivered lag and retained entries/replay sources. Unknown capture loss remains unknown. `/metrics` now requires an administrator or an independent read-only bearer credential; the [monitoring procedure](collector-operations.md#authenticate-monitoring) supplies a private optional Compose override and Prometheus `authorization.credentials_file`. Base bootstrap remains six secrets; monitoring adds a separately provisioned token and explicit private route.
 
 Use `docker compose run --rm api python -m shadai.cli create-admin` for administration: the image entrypoint resolves mounted database secrets before invoking the CLI. The catalog is synchronized on API startup; `sync-catalog` is also available through the CLI.
 
@@ -53,6 +57,8 @@ The public origin must serve both the frontend and `/api/` over HTTPS. The exist
 Back up data, configuration and encryption keys first. Validate the new commit against a restored copy before production. Review migration SQL and deployment changes.
 
 The 0.2.0 identity migration (`003`) must complete before the new API/workers start. It takes an exclusive lock on the users table and checks stripped, case-folded usernames before schema changes. Empty names or case-insensitive collisions block the migration; resolve them by explicitly renaming the affected local accounts, then rerun it. Accounts are never silently merged. Schedule the migration with application writes stopped and test it against a restored backup first.
+
+Collector hardening adds PostgreSQL migrations `004` (scoped registry/credentials) and `005` (timestamped identity membership). `init-db` applies the chain before API/worker startup. Migration `005` clears unaged historical identity arrays and counts because their observation age cannot be proven. Review that visible count change on a restored copy. Existing shared-key clients remain compatible until you enroll scoped replacements and disable legacy access. Configure positive identity retention at most event retention, and plan explicit history/local-spool handling before enabling pseudonymization or changing the encryption key.
 
 ```bash
 set -e
@@ -83,7 +89,7 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli SAVE'
 ```
 
-Preserve all three named volumes through the platform's volume backup mechanism, plus restricted copies of `config/`, `secrets/` and the deployment commit. In particular, retain the encryption key to recover encrypted credentials. Encrypt backups, restrict access and test recovery. A Redis volume snapshot preserves queue/pending state; PostgreSQL and event exports alone do not.
+Preserve the three store volumes and optional `syslog_spool` through the platform's volume backup mechanism, plus private endpoint/network spool snapshots, restricted copies of `config/`, `secrets/` and the deployment commit. Stop each client before snapshotting SQLite. Retain matching encryption keys for encrypted credentials and the pseudonym basis; local spool snapshots still contain plaintext metadata. Encrypt backups, restrict access and test recovery. A Redis volume snapshot preserves queue/pending state subject to actual AOF/flush settings; PostgreSQL and event exports alone do not. Backups are not automatically scrubbed by privacy activation or historical cleanup.
 
 For a restore drill, create an isolated project with empty stores and the same application version; do not restore over a live installation. Start only its stores, then import the exports (fresh schema initialization has already created ClickHouse tables):
 
@@ -95,10 +101,12 @@ docker compose -p osa-restore-drill exec -T clickhouse sh -c 'clickhouse-client 
 
 Run the drill from a separate checkout with restored private configuration/secrets and an unused `SHADAI_EDGE_SUBNET` plus matching frontend/API addresses; also choose unused host API/UI ports before starting its applications. Keep `-p osa-restore-drill` on **every** restore/start/cleanup command. Confirm that project's stores are empty before importing; project naming does not make repeated imports safe. Restore Redis from its stopped volume backup using your volume platform, or deliberately start a new queue and document the discarded in-flight interval. Do not blindly replay old events into a populated store. Restore keys/config, start the application, check readiness, log in, compare event/detection counts and verify a synthetic event end to end. Logical exports are not a guarantee of exactly-once recovery.
 
+Restore local spools only to their original verified target/collector binding with private owners and permissions. A changed URL, tenant or collector must not reinterpret retained bytes. Reconcile observation ages, quota/expiry counters, receipts and dead-letter pointer capacity before replay. The [replay CLI](collector-operations.md#inspect-and-replay-server-dead-letters) preserves original queue fields and is dry-run by default; old backlog without trusted `accepted_at` does not gain an ingestion-age bypass.
+
 ## Kubernetes
 
 See [deploy/kubernetes/README.md](../deploy/kubernetes/README.md). The manifests use external PostgreSQL, Redis and ClickHouse (native TLS on port 9440 by default) and provide no operator, database HA or public credentials. Resources are deliberately constrained and need load testing. TLS ingress and a NetworkPolicy-enforcing CNI are prerequisites for network publication.
 
 ## Readiness gates
 
-Local accounts, optional OIDC/SCIM console access and a shared collector key are implemented. Validate identity-provider interoperability and deactivation with a pilot account; per-device enrollment keys and automatic key rotation remain future work. One install is one organization. Do not infer tenant isolation from an event's `tenant_id`. Validate backup/restore, ingress authentication, least privilege, encrypted private connectivity to stores, retention, failure recovery and measured capacity before production.
+Local accounts, optional OIDC/SCIM console access and administrator-run scoped collector enrollment, rotation and revocation are implemented. Automatic secret distribution and fleet rollout remain operator work. Verify private key/spool provisioning, correct collector scope, offline restart, same-collector rotation, permanent revocation, quota/expiry visibility and authenticated monitoring in your pilot. One install is one organization. Do not infer tenant isolation from an event's `tenant_id`. Validate identity-provider interoperability, backup/restore, ingress authentication, least privilege, encrypted private connectivity to stores, privacy maintenance, failure recovery and measured capacity before production. Current hardening native/real-store CI evidence must be checked for the exact deployed commit; earlier release runs do not validate these changes.

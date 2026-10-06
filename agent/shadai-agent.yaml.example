@@ -2,7 +2,16 @@
 # Copy to shadai-agent.yaml and edit before running.
 
 server_url: https://your-shadai-server:8443
-api_key: YOUR_AGENT_API_KEY
+# Provision a scoped key via AGENT_API_KEY_FILE; never commit its value here.
+# Scoped identity/tenant are discovered from the server before delivery.
+
+# Persist across process restarts under a private service-owned parent.
+# Linux example; SYSTEM Windows installs should use their protected installation tree.
+# spool_dir: /var/lib/shadai/endpoint
+spool_max_bytes: 67108864
+spool_max_batches: 2048
+# Must not exceed the discovered server ingestion-age ceiling.
+spool_ttl_seconds: 604800
 
 # Collection interval in seconds (default: 300 = 5 minutes)
 poll_interval_seconds: 300

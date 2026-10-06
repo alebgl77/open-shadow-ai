@@ -66,3 +66,11 @@ kubectl -n open-shadow-ai rollout status deployment/api
 ```
 
 API readiness checks database connections. Worker readiness checks Redis reachability; its process probe is not proof of processing progress. Alert on queue backlog, dead-letter entries and stale collectors separately. Check PVC/database recovery, resource pressure, disruption and restore behavior. No live cluster validation has been performed as part of this package.
+
+## Collector storage and monitoring
+
+The base does not deploy syslog or endpoint/network sensors. If you add a syslog workload in your private overlay, build the collector image and preprovision a persistent volume with a private `/var/lib/shadai` parent owned by UID/GID 10001 (`0700`, SQLite files `0600`), then configure each source's `spool_dir` below it. Validate every physical mount ancestor and the storage driver's owner/mode behavior under the actual pod identity. Broad `fsGroup` grants or recursive permissive chmod are not substitutes for the spool guard. Some CSI volumes require administrator-side provisioning before a nonroot collector can use them. Do not weaken the guard or claim a restricted-pod/HA configuration works without cluster proof.
+
+Verify external Redis persistence, durable storage and `noeviction` policy, including its fsync/power-loss and failover boundary. Source stream entries currently remain untrimmed; retained DLQ pointers have an approximate 10,000-entry cap and are not historical rejection totals. Operational APIs separate pending work from retained replay sources. Back up private collector volumes with stores, configuration and matching keys; test same-collector restart and queue expiry.
+
+`/metrics` is authenticated. For monitoring, separately provision an optional `METRICS_API_KEY_FILE` read-only secret mount on the API and the same private token as Prometheus `bearer_token_file`. The base runtime Secret list is unchanged. Use an explicit private scrape route or internal API service; frontend `/api/` forwarding does not expose root `/metrics`. Do not publish a public workaround. Configure privacy/identity retention in the mounted YAML or explicit API/worker environment overrides. See [collector operations](../../docs/collector-operations.md) for enrollment, rotation/revocation, queue limits, recovery and historical maintenance.

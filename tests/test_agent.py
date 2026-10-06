@@ -20,7 +20,9 @@ def test_large_snapshot_is_split_into_batches_the_api_accepts():
         assert len(json.dumps(batch)) <= agent.MAX_BODY_BYTES
         assert {key: batch[key] for key in HEADER} == HEADER
         TelemetryBatch.model_validate(batch)
-    assert [p for batch in batches for p in batch["processes"]] == processes
+    assert [p for batch in batches for p in batch["processes"]] == [
+        {key: p[key] for key in agent.WIRE_FIELDS["processes"] if key in p} for p in processes
+    ]
     assert [e for batch in batches for e in batch["extensions"]] == extensions
 
 
@@ -48,7 +50,7 @@ def test_client_errors_are_not_retried_and_server_errors_are(monkeypatch):
     monkeypatch.setattr(agent.requests, "post", respond(503))
     assert agent.send_batch("https://x", {}, {}, True) is None and calls == [503, 503, 503]
     monkeypatch.setattr(agent.requests, "post", respond(200, {"received": 12}))
-    assert agent.send_batch("https://x", {}, {}, True) == 12
+    assert agent.send_batch("https://x", {"processes": [{"name": "synthetic"}] * 12}, {}, True) == 12
 
 
 def test_one_nonconforming_record_cannot_sink_its_batch():
@@ -61,7 +63,8 @@ def test_one_nonconforming_record_cannot_sink_its_batch():
     extensions = [{"id": "abc", "name": {"unexpected": "object"}, "browser": "chrome"}]
     [batch] = agent.split_batches(HEADER, {"processes": records, "extensions": extensions})
     TelemetryBatch.model_validate(batch)
-    assert [p["pid"] for p in batch["processes"]] == [1, 2, 3, 4]
-    assert batch["processes"][0]["name"] == "" and len(batch["processes"][0]["path"]) == agent.MAX_TEXT_LENGTH
+    assert len(batch["processes"]) == 4
+    assert all("pid" not in p and "path" not in p for p in batch["processes"])
+    assert batch["processes"][0]["name"] == ""
     assert batch["processes"][0]["listening_port"] == 11434 and batch["processes"][1]["parent"] == "42"
     assert all("listening_port" not in p for p in batch["processes"][1:])

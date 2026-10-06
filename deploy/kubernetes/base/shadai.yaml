@@ -11,8 +11,13 @@ database:
   clickhouse_port: 9440
   clickhouse_secure: true
   clickhouse_database: shadai
+security:
+  allow_legacy_agent_key: true
+  pseudonymize_identities: false
+  # Provision a separate private METRICS_API_KEY_FILE mount when monitoring is enabled.
 retention:
   events_days: 90
+  identity_days: 30
   detections_days: 365
   audit_logs_days: 365
   purge_enabled: true

@@ -127,7 +127,11 @@ async def get_top_tools(
 
 @router.get("/source-health")
 async def get_source_health(_user: UserORM = Depends(get_current_user)):
-    """Last retained event and distinct volume in the rolling preceding hour."""
+    """Observed event freshness; authenticated collector contact is in /collectors.
+
+    This event-only view cannot establish liveness for empty snapshots or a quiet
+    collector. The admin registry separates server contact from client event time.
+    """
     rows = await asyncio.to_thread(
         get_clickhouse().execute,
         """

@@ -17,7 +17,7 @@ A source configuration is not a universal connector factory. The delivered YAML 
 
 The [network analysis guide](network-analysis.md) covers Zeek JSONL, Suricata EVE and TShark field imports, local offline PCAP analysis, CSV export and explicitly selected live interfaces. All four protocols use `source_type: "network"` and `evidence_type: "observation"`; `collector_id` records the stable sensor ID. TCP, UDP and IPv4/IPv6 are supported where the selected source observes them. No AD/DHCP or IP-to-employee join is performed.
 
-Network import uses the authenticated event API. The collector sends only canonical metadata; raw payloads and PCAP files are not uploaded. Replay preserves source timestamps and event IDs when sensor, tenant, site and parser inputs remain the same. Old events can fall outside the ingestion acceptance window. Persisted source logs support replay; live capture has no durable buffer across restarts. Imported counts and a sensor's last observation do not establish complete coverage or operational health.
+Network import uses the authenticated event API. The collector sends only canonical metadata; raw payloads and PCAP files are not uploaded. Replay preserves source timestamps and source event IDs when sensor, tenant, site and parser inputs remain the same. Scoped server IDs also bind that UUID to the immutable collector and tenant. Old events can fall outside the ingestion acceptance window. Persisted source logs support replay; endpoint/network/syslog collectors retain prepared batches in bounded private SQLite spools across restarts. Capture before enqueue and transport loss remain outside that guarantee. See [collector operations](collector-operations.md) for limits, binding, recovery and monitoring; a sensor's last observation does not establish complete coverage.
 
 ## Listener configuration
 
@@ -31,13 +31,13 @@ URL paths and user agents never leave the ingestion boundary. Syslog collectors 
 
 Shared signatures need discriminating evidence: a more specific match or additional signal types can identify one product. Equally supported candidates remain unattributed; catalog order and identifiers do not break ties. The event is still ingested. If transient URL or User-Agent evidence is ambiguous, ingestion preserves `match_field: "ambiguous"`, an empty catalog ID and zero match confidence. The worker keeps that state and creates no detection from weaker retained evidence. A later catalog update cannot resolve those events retroactively because their paths and user agents were discarded.
 
-Squid's native user field is mapped to `username`; `-` leaves it empty. The client IP is not treated as a user identity. This collector preserves the supplied name and does not implement pseudonymization. Deployments requiring pseudonyms must transform that field upstream before forwarding logs.
+Squid's native user field is mapped to `username`; `-` leaves it empty. The client IP is not treated as a user identity. Optional server `PSEUDONYMIZE_IDENTITIES` aliases personal identity fields and clears personal source IP; it does not authenticate a supplied name. Protect source logs and local spools independently, since server activation does not scrub their plaintext metadata.
 
-The endpoint agent sends telemetry only to its configured URL and refuses every HTTP redirect, including redirects on the same origin. Configure the final telemetry endpoint directly. Permanent client errors stop the current batch; transient network errors, HTTP 408/429 and server errors keep the bounded three-attempt retry policy.
+The endpoint agent sends telemetry only to its configured URL and refuses every HTTP redirect, including redirects on the same origin. Configure the final telemetry endpoint directly. Discovery verifies the collector binding and server age ceiling before transmission, including after an offline first start. Retryable delivery failures retain queued work; terminal invalid batches are separated from retries. Monitor rejection, expiry, overflow and storage failures, and restore the correct principal rather than reusing its queue for another enrollment.
 
 ## Generic inventory ingestion
 
-`POST /api/v1/ingest/events` takes `X-API-Key` using the deployment's `AGENT_API_KEY`. The body contains one to 500 events. Event timestamps must have a timezone; event IDs are UUIDs and must be reused for retries. Unknown fields are rejected.
+`POST /api/v1/ingest/events` takes `X-API-Key`, preferably an administrator-enrolled credential with the matching source scope. The legacy shared key remains a compatibility option and is always unattributed. The body contains one to 500 events; scoped authorization validates the whole batch atomically. Event timestamps must have a timezone; source event IDs are UUIDs and must be reused for retries. Unknown fields are rejected. [Enrollment and rotation](collector-operations.md#enroll-a-collector) also covers private key files, expiry and revocation.
 
 ```json
 {
@@ -61,7 +61,7 @@ The endpoint agent sends telemetry only to its configured URL and refuses every 
 }
 ```
 
-This is synthetic data. `tenant_id` must match `SHADAI_TENANT_ID`; omitting it uses the configured organization. It is a scope guard, not an isolation boundary.
+This is synthetic data; replace its timestamp with the real observation time for a pilot test. `tenant_id` must match `SHADAI_TENANT_ID`; omitting it uses the configured organization. A scoped credential must bind `ad-pilot` and include `directory`. It is a scope guard, not an isolation boundary.
 
 For full instrumented fields, consult the running [API schema](http://localhost:8443/api/docs). Only provide model/token/cost values supported by the originating telemetry. A model label is not proof of a provider's internal routing. Missing values remain unknown; estimated cost is not an invoice.
 

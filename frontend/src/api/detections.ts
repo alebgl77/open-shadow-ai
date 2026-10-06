@@ -13,6 +13,7 @@ export interface Detection {
   risk_score: number
   risk_level: string
   risk_score_stale?: boolean
+  risk_calculated_at?: string | null
   governance_status?: 'none' | 'active' | 'expired'
   first_seen_at: string
   last_seen_at: string

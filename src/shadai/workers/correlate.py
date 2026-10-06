@@ -2,16 +2,16 @@
 
 import asyncio
 import os
+from contextlib import suppress
 
 import redis.asyncio as aioredis
 import structlog
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from shadai.api.ingestion import prepare_event
 from shadai.config import load_config, validate_security
 from shadai.engine.correlator import Correlator
 from shadai.models.catalog import CatalogItemORM, CatalogItemRead
-from shadai.models.event import CanonicalEvent
+from shadai.utils.queueing import PermanentMessageError, prepare_queued_event
 from shadai.workers.streams import StreamConsumer
 
 logger = structlog.get_logger()
@@ -24,22 +24,35 @@ async def run_correlation_worker(worker_id=None):
     redis = aioredis.from_url(config.database.redis_url, decode_responses=True)
     engine = create_async_engine(config.database.postgres_url, pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    consumer = StreamConsumer(redis, GROUP_NAME, worker_id or f"correlate-{os.getpid()}", ["matches"])
+    consumer = StreamConsumer(redis, GROUP_NAME, worker_id or f"correlate-{os.getpid()}", ["matches"],
+                              operational=True)
+    heartbeat = None
     correlator = Correlator(sessions)
 
     async def process(data):
-        event = prepare_event(CanonicalEvent.model_validate_json(data["event"]), trusted_collector=True)
+        event = prepare_queued_event(data, field="event")
+        try:
+            catalog_item_id = data["catalog_item_id"]
+            if not isinstance(catalog_item_id, str) or not catalog_item_id:
+                raise ValueError()
+        except (ValueError, KeyError, TypeError):
+            raise PermanentMessageError("Invalid catalog reference") from None
         async with sessions() as session:
-            row = await session.get(CatalogItemORM, data["catalog_item_id"])
+            row = await session.get(CatalogItemORM, catalog_item_id)
             if row is None:
-                raise ValueError("Missing catalog item")
+                raise PermanentMessageError("Missing catalog item")
             if row.status != "active":
                 return  # An explicit administrator disable cancels queued detections.
             item = CatalogItemRead.model_validate(row)
-        await correlator.upsert_detection(event, item, data["match_field"], float(data["match_confidence"]))
+        try:
+            field, confidence = data["match_field"], float(data["match_confidence"])
+        except (ValueError, KeyError, TypeError):
+            raise PermanentMessageError("Invalid match metadata") from None
+        await correlator.upsert_detection(event, item, field, confidence)
 
     try:
         await consumer.initialize()
+        heartbeat = asyncio.create_task(consumer.operations.heartbeat())
         while True:
             try:
                 for stream, messages in await consumer.read():
@@ -49,6 +62,10 @@ async def run_correlation_worker(worker_id=None):
                 logger.error("correlation_loop_failed", error_type=type(exc).__name__)
                 await asyncio.sleep(2)
     finally:
+        if heartbeat:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
         await redis.aclose()
         await engine.dispose()
 

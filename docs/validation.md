@@ -2,6 +2,23 @@
 
 The [CI workflow](../.github/workflows/ci.yml) defines Python 3.12/3.13 lint and regression checks, frontend tests and build, PowerShell validation and Docker-backed integration.
 
+## Collector hardening validation pending
+
+Current hardening changes add scoped credentials/rotation, persistent collector queues and bounded replay, operational health, and per-observation retention/pseudonymization with honest risk timestamps. The historical runs below predate these changes. Record a new exact commit/run link and actual counts after the complete CI workflow runs; no current full native or real-store pass is claimed here.
+
+Independent local SQLite restart tests passed 13 cases. Eight semantic crash/lease/quota/expiry cases explicitly assume safe ancestors through the fixture boundary because this Windows sandbox's ancestry is unsuitable; private leaf database checks remain real. Five directory/file/ancestor/link negative cases use actual permissions/path checks. That qualified suite is not proof of the full native guard. The latest unpatched Windows smoke refuses private directory creation under the local USERPROFILE with `spool_private_acl_required`, cleans its fixture and exits nonzero; no production guard was weakened. Full native acceptance still requires the Windows runner.
+
+Mandatory current workflow checks include:
+
+- Python 3.12/3.13 regression tests and Ruff across source, agent, migrations, tests and scripts.
+- Real offline TShark sensor checks, frontend tests/build, and Windows 3.13 bootstrap/key-file/spool native checks. `scripts/test-delivery-spool-acl.py` has no skip or guard monkeypatch and uses a trusted user-profile parent outside the checkout; unsafe file/inherited/ancestor permissions, owners, reparse paths and exact-byte restart recovery must pass on the runner.
+- `docker compose --profile test run --build --rm integration-test`, whose image sets `SHADAI_INTEGRATION=1` and selects `-m integration`, exercising real Redis/PostgreSQL/ClickHouse behavior including scoped credential lifecycle, identity retention/privacy and stream delivery recovery. These tests must execute, not merely collect or skip.
+- Two distinct Linux syslog containers sharing `syslog_spool`, with real private UID10001/`0700` parent and `0600` SQLite checks, exact retained bytes/ID recovery and acknowledgement. This proves the disposable volume survives container replacement, not packet-loss freedom or power-loss durability.
+- Existing deployment config checks, service startup, base protected HTTP pipeline smoke and optional identity smoke.
+- Private monitoring in the same Compose job: two `0600` copies of one independent token owned by the actual API UID10001 and Prometheus UID65534; correct-reader success and other-UID refusal; authenticated metrics, missing/wrong/agent-key 401 refusals, and metrics-token collector-administration refusal. The real internal Prometheus target must become `up`, and a private synthetic marker must survive container replacement on the same `prometheus_data` volume. These checks are pending the current CI run and do not add a mandatory base secret or a host monitoring port.
+
+Docker and kubectl are unavailable on the authoring workstation. New Linux volume/service proof and full Windows native proof remain CI acceptance requirements. Neither mocked ancestry nor the earlier release CI results replace them. Historical scrub on live stores, power-loss/restore objectives, sustained load, HA, live AD/Entra/providers and fleet rollout remain separate acceptance work. See [operations](collector-operations.md) and [capacity](capacity.md).
+
 ## Verified 0.2.0 CI run
 
 All five jobs passed in [CI run 36280261065](https://github.com/alebgl77/open-shadow-ai/actions/runs/36280261065) for source commit [00e98d6539ac37c7f98d12f3c53d77be8a1f365d](https://github.com/alebgl77/open-shadow-ai/commit/00e98d6539ac37c7f98d12f3c53d77be8a1f365d), on 27 September 2026 in Europe/Paris (26 September UTC).
@@ -50,7 +67,7 @@ An independent read-only security/correctness review approved the implementation
 
 ```bash
 python scripts/verify-deployment.py
-python -m ruff check src tests agent/shadai_agent migrations scripts/identity-smoke.py
+python -m ruff check src tests agent/shadai_agent migrations scripts
 python -m pytest -q
 python -m pip check
 cd frontend
@@ -66,6 +83,8 @@ On Windows, also parse the PowerShell scripts and run the non-mutating entry poi
 ```powershell
 ./scripts/bootstrap.ps1 -DryRun
 ./scripts/Export-ActiveDirectory.ps1 -SearchBase 'OU=Pilot,DC=example,DC=com' -OutputDirectory './ad-export-dryrun' -WhatIf
+python scripts/test-network-key-acl.py
+python scripts/test-delivery-spool-acl.py --temporary-parent "$env:USERPROFILE"
 ```
 
 The following service checks require a disposable Compose project after bootstrap. Never run them against production:
@@ -77,7 +96,7 @@ docker compose up -d --build --wait --wait-timeout 180 api ingest-worker correla
 python scripts/integration-smoke.py
 ```
 
-The integration container exercises real database migrations, catalog persistence, stream reclaim, receipt deduplication, concurrent correlation and identity provisioning. The base smoke exercises authenticated HTTP ingestion through running workers into ClickHouse and PostgreSQL. Reset only the disposable stores between these suites, as CI does.
+The integration container exercises real database migrations, catalog persistence, stream reclaim, receipt deduplication, concurrent correlation, scoped collector credential lifecycle, retention/privacy and identity provisioning. The base smoke exercises authenticated HTTP ingestion through running workers into ClickHouse and PostgreSQL. Reset only the disposable stores between these suites, as CI does. Reproduce the two-container syslog volume check from the current workflow after building its collector image; use the same disposable project and leave its named volume intact between those two invocations.
 
 To reproduce the optional identity smoke, use the synthetic secret-file generation and identity environment values from the [verified workflow](https://github.com/alebgl77/open-shadow-ai/blob/00e98d6539ac37c7f98d12f3c53d77be8a1f365d/.github/workflows/ci.yml). The script expects that fixture's label, role mapping and files; it is not a live-tenant acceptance tool. Keep the same disposable Compose project and stores after the base smoke, then run:
 

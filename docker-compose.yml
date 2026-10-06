@@ -157,6 +157,10 @@ services:
     profiles: [syslog]
     build: {context: ., dockerfile: docker/Dockerfile.collector}
     command: [python, -m, shadai.collectors.syslog_receiver]
+    volumes:
+      - ./config:/app/config:ro
+      - ./catalog:/app/catalog:ro
+      - syslog_spool:/var/lib/shadai
     ports: ["${SHADAI_BIND_ADDRESS:-127.0.0.1}:${SHADAI_SYSLOG_PORT:-1514}:1514/tcp"]
     depends_on:
       redis: {condition: service_healthy}
@@ -208,6 +212,7 @@ volumes:
   pg_data:
   ch_data:
   redis_data:
+  syslog_spool:
 secrets:
   pg_password: {file: ./secrets/pg_password.txt}
   redis_password: {file: ./secrets/redis_password.txt}

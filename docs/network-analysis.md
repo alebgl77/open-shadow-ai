@@ -8,7 +8,7 @@ Deploy the sensor where it can observe the intended traffic: a switch SPAN port,
 
 A gateway is one option alongside endpoint inventory, browser telemetry, instrumented applications and proxy logs. Combine evidence according to its provenance. This collector performs no TLS interception, AD/DHCP lookup or automatic IP-to-employee mapping. An address can represent a resolver, NAT gateway, shared host or changing lease.
 
-Prefer persisted Zeek or Suricata metadata logs for replayable collection. Live capture can lose observations during downtime, restart or delivery failure; it has no durable buffer. Monitor the source process and capture coverage separately. A sensor's last observed event is not a heartbeat or proof of health.
+Prefer persisted Zeek or Suricata metadata logs for replayable collection. A private SQLite spool retains prepared metadata batches across restarts within its byte/batch/TTL limits; it does not retain packets or observe traffic while the sensor is down. Capture drops, overflow, expiry and storage failures can still lose observations. Monitor the source process and capture coverage separately. A sensor's last observed event is not a heartbeat or proof of health. See [queue recovery and operational status](collector-operations.md).
 
 ## Import supported metadata
 
@@ -37,15 +37,17 @@ python -m shadai.collectors.network --sensor-id office-mirror --site-id paris --
 
 Valid records preserve original source timestamps; JSON timestamp strings must include a timezone, while Zeek/TShark epoch values are interpreted as UTC. DNS/TLS/QUIC/HTTP events share `source_type: "network"`, uppercase `protocol` and `evidence_type: "observation"`. Unsupported or malformed records are skipped with aggregate counters on standard error. Exit status is `0` for success, `2` if records were rejected, or `1` for an input/configuration/delivery failure. Check the counters even on a successful run; not every source record produces an observation.
 
-To deliver a reviewed log, provision a private file containing the deployment's agent API key, accessible only to the collector account. Use `--api-key-file`, `AGENT_API_KEY_FILE`, or a securely supplied `AGENT_API_KEY`; never pass the secret as a command-line value. The following paths and HTTPS origin are deployment examples, not bundled files:
+To deliver a reviewed log, enroll `office-mirror` with the `network` scope and provision its one-time key in a private file accessible only to the collector account. Use `--api-key-file`, `AGENT_API_KEY_FILE`, or a securely supplied `AGENT_API_KEY`; never pass the secret as a command-line value. Provision a private persistent spool parent owned by that account. The following paths and HTTPS origin are deployment examples, not bundled files:
 
 ```bash
-python -m shadai.collectors.network --sensor-id office-mirror --site-id paris --format zeek-tls --input ssl.jsonl --api-url https://shadai.example.test --api-key-file /etc/shadai/network-agent.key --ca-file /etc/shadai/organization-ca.pem
+python -m shadai.collectors.network --sensor-id office-mirror --site-id paris --format zeek-tls --input ssl.jsonl --api-url https://shadai.example.test --api-key-file /etc/shadai/network-agent.key --ca-file /etc/shadai/organization-ca.pem --spool-dir /var/lib/shadai/network/office-mirror
 ```
 
 HTTPS always validates the certificate and hostname. Omit `--ca-file` when the system trust store already recognizes the server. Redirects are refused; configure the final origin or exact `/api/v1/ingest/events` URL. Plain HTTP requires both a loopback URL and `--allow-http-loopback`, for local development only. Batches contain at most 500 events and 900 KiB, within the API's existing 2 MiB request limit.
 
 By default, the server fills the configured tenant; an explicit `--tenant-id` must agree with it. Keep sensor, tenant, site and parser settings consistent when replaying the same metadata: event UUIDs remain stable, including after renaming an input file, and retries reuse the exact batch bytes. The ingestion window rejects timestamps more than five minutes ahead or older than configured `ingestion_max_age_days`. Do not change source timestamps to make an old replay appear current. Duplicate IDs are deduplicated in observation counts.
+
+The client discovers and persists the verified server/collector binding and ingestion-age ceiling before any POST. An offline first start can retain metadata without transmitting; a different collector credential or scoped-to-legacy change preserves the backlog and stops capture/transmission. Same-collector key rotation preserves recovery. `--spool-max-bytes`, `--spool-max-batches` and `--spool-ttl-seconds` configure the defaults of 64 MiB, 2,048 batches and seven days; maxima are 16 GiB, 100,000 batches and 365 days, with TTL capped by the server limit. An already-old source observation can still expire from server acceptance while queued. For scoped ingestion the server derives a tenant/collector-bound stored UUID from the source UUID; collector CSV IDs remain source IDs.
 
 ## Analyze an offline PCAP
 

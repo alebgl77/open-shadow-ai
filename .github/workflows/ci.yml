@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install ".[dev]" ./agent
-      - run: python -m ruff check src tests agent/shadai_agent migrations
+      - run: python -m ruff check src tests agent/shadai_agent migrations scripts
       - run: python -m pytest -q
       - run: python scripts/verify-deployment.py
   network-sensor:
@@ -72,6 +72,9 @@ jobs:
         run: python -m pip install .
       - name: Verify real Windows collector key-file DACLs
         run: python scripts/test-network-key-acl.py
+      - name: Verify full native Windows spool guard and restart recovery
+        shell: pwsh
+        run: python scripts/test-delivery-spool-acl.py --temporary-parent "$env:USERPROFILE"
   compose-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -103,6 +106,40 @@ jobs:
       - run: docker compose --profile test run --build --rm integration-test
       - run: docker compose down --volumes
       - run: docker compose build api ingest-worker correlation-worker purge-worker frontend syslog-collector entra-collector
+      - name: Verify private syslog spool persists across two containers
+        run: |
+          docker compose --profile syslog run -T --rm --no-deps syslog-collector python - <<'PY'
+          import os
+          import stat
+          from pathlib import Path
+          from shadai.utils.delivery_spool import DurableSpool
+          parent = Path('/var/lib/shadai')
+          assert os.getuid() == 10001
+          assert parent.stat().st_uid == 10001
+          assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+          with DurableSpool(parent / 'ci-persist', clock=lambda: 1000) as spool:
+              spool.enqueue(b'synthetic-volume-proof')
+              assert spool.stats()['batches'] == 1
+          PY
+          docker compose --profile syslog run -T --rm --no-deps syslog-collector python - <<'PY'
+          import hashlib
+          import stat
+          from pathlib import Path
+          from shadai.utils.delivery_spool import DurableSpool
+          root = Path('/var/lib/shadai/ci-persist')
+          with DurableSpool(root, clock=lambda: 1000) as spool:
+              batch, = spool.claim(limit=1)
+              assert batch.payload == b'synthetic-volume-proof'
+              assert batch.batch_id == hashlib.sha256(batch.payload).hexdigest()
+              assert spool.ack(batch)
+              assert spool.stats()['batches'] == 0
+          assert root.stat().st_uid == 10001
+          assert stat.S_IMODE(root.stat().st_mode) == 0o700
+          database = root / 'delivery.sqlite3'
+          assert database.stat().st_uid == 10001
+          assert stat.S_IMODE(database.stat().st_mode) == 0o600
+          print('PASS: private syslog volume, exact restart recovery, acknowledgement')
+          PY
       - run: docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
       - run: python scripts/integration-smoke.py
       - name: Start optional identity API
@@ -119,7 +156,32 @@ jobs:
       - name: Verify optional identity HTTP lifecycle
         timeout-minutes: 5
         run: python scripts/identity-smoke.py
+      - name: Provision independent private monitoring token copies
+        run: |
+          python - <<'PY'
+          import os
+          import secrets
+          from pathlib import Path
+          token = secrets.token_hex(32) + '\n'
+          assert Path('secrets').stat().st_mode & 0o777 == 0o700
+          for name in ('metrics_api_key.api.txt', 'metrics_api_key.prometheus.txt'):
+              path = Path('secrets', name)
+              fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(fd, 'w', encoding='utf-8') as output:
+                  output.write(token)
+          PY
+          sudo chown 10001:10001 secrets/metrics_api_key.api.txt
+          sudo chown 65534:65534 secrets/metrics_api_key.prometheus.txt
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config --format json | python -c "import json,sys; c=json.load(sys.stdin); assert len(c['services']['api']['secrets']) == 7; p=c['services']['prometheus']; assert p['user'] == '65534:65534'; assert not p.get('ports'); assert p['networks'] == {'backend': None} or set(p['networks']) == {'backend'}"
+      - name: Verify private API metrics and actual Prometheus scrape
+        timeout-minutes: 7
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --no-deps --force-recreate --wait --wait-timeout 180 api prometheus
+          python scripts/monitoring-smoke.py
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --no-deps --force-recreate --wait --wait-timeout 90 prometheus
+          python scripts/monitoring-smoke.py --after-recreate
       - if: always()
         run: docker compose ps --all
       - if: always()
-        run: docker compose down --volumes
+        run: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down --volumes --remove-orphans
