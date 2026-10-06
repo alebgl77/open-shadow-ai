@@ -1,0 +1,19 @@
+# Maintained recipe 1: replace only signed, SHA256-pinned OpenSSL APKs.
+FROM golang:1.26.6-alpine3.24@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS packages
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) arch=x86_64; crypto=3c6fb1c90a974ef0fc83687868712340ca3df3ef5206cfc79fd81ff16f22596a; ssl=00e674d00a80c9808580546dd388093c1c67f21628a9d70e27628bddc86a31e8 ;; \
+      arm64) arch=aarch64; crypto=2303cca13dc8bba5798744a68abd07530abb35ab339d9cc4640fc53276049af0; ssl=d494a0a211dd78a8055c24885fc06375eabb79c82ae797f7f694cefbf3653b79 ;; \
+      *) exit 2 ;; \
+    esac \
+    && mkdir /packages \
+    && wget -O /packages/libcrypto3.apk https://dl-cdn.alpinelinux.org/alpine/v3.21/main/$arch/libcrypto3-3.3.7-r2.apk \
+    && wget -O /packages/libssl3.apk https://dl-cdn.alpinelinux.org/alpine/v3.21/main/$arch/libssl3-3.3.7-r2.apk \
+    && printf '%s\n' "$crypto  /packages/libcrypto3.apk" "$ssl  /packages/libssl3.apk" | sha256sum -c -
+FROM redis:7.4.11-alpine3.21@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+RUN --mount=type=bind,from=packages,source=/packages,target=/packages,ro \
+    apk add --no-network /packages/libcrypto3.apk /packages/libssl3.apk \
+    && apk info --exists 'libcrypto3=3.3.7-r2' 'libssl3=3.3.7-r2'
+LABEL io.shadai.maintenance.recipe="1" \
+      io.shadai.maintenance.component="openssl" \
+      io.shadai.maintenance.openssl="3.3.7-r2"

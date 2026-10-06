@@ -42,6 +42,7 @@ def delivery_tree(tmp_path):
         shutil.copyfile(ROOT / source, target)
     shutil.copytree(ROOT / "requirements", tmp_path / "requirements")
     shutil.copytree(ROOT / "docker", tmp_path / "docker")
+    shutil.copytree(ROOT / "deploy/service-builds", tmp_path / "deploy/service-builds")
     (tmp_path / "frontend").mkdir()
     shutil.copyfile(ROOT / "frontend/Dockerfile", tmp_path / "frontend/Dockerfile")
     for path in ROOT.glob("docker-compose*.yml"):
@@ -118,7 +119,12 @@ def test_lock_bytes_tampering_fails(delivery_tree):
 
 
 def test_failed_resolution_does_not_modify_existing_locks(delivery_tree, monkeypatch):
-    before = {path.name: path.read_bytes() for path in (delivery_tree / "requirements").iterdir()}
+    def snapshot():
+        directory = delivery_tree / "requirements"
+        return {path.relative_to(directory).as_posix(): path.read_bytes()
+                for path in sorted(directory.rglob("*")) if path.is_file() and not path.is_symlink()}
+
+    before = snapshot()
     monkeypatch.setattr(LOCK, "ROOT", delivery_tree)
     monkeypatch.setattr(LOCK.subprocess, "check_output", lambda *args, **kwargs: "uv 0.11.16")
 
@@ -128,7 +134,7 @@ def test_failed_resolution_does_not_modify_existing_locks(delivery_tree, monkeyp
     monkeypatch.setattr(LOCK.subprocess, "run", fail)
     with pytest.raises(RuntimeError, match="registry outage"):
         LOCK.generate("uv", verify=False, upgrade=[], constraints=None)
-    assert before == {path.name: path.read_bytes() for path in (delivery_tree / "requirements").iterdir()}
+    assert before == snapshot()
 
 
 def test_every_lock_compile_disables_ambient_configuration(delivery_tree, monkeypatch):
@@ -379,7 +385,7 @@ def test_pinned_trivy_cyclonedx_schema_subject_and_inventory():
         SCAN.cyclone_inventory(report, reference="other:1.0@sha256:" + "c" * 64)
     report["components"] = [{"type": "library", "name": "stdlib", "version": "go1.26.0",
                              "purl": "pkg:golang/stdlib@go1.26.0"}]
-    assert SCAN.cyclone_inventory(report, reference=reference)[0] == {("golang", "stdlib", "go1.26.0")}
+    assert SCAN.cyclone_inventory(report, reference=reference)[0] == {("golang", "stdlib", "v1.26.0")}
     report["components"] = []
     with pytest.raises(ValueError, match="empty"):
         SCAN.cyclone_inventory(report, reference=reference)

@@ -2,6 +2,7 @@
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -69,6 +70,25 @@ def test_prometheus_loads_the_read_only_rule_mount_without_public_ports():
     assert prometheus['user'] == '65534:65534'
     assert config['scrape_configs'][0]['authorization'] == {
         'type': 'Bearer', 'credentials_file': '/run/secrets/shadai_metrics_token'}
+
+
+def test_ci_promtool_scratch_is_bounded_and_keeps_container_and_rules_private():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+    commands = [shlex.split(line) for step in workflow['jobs']['compose-integration']['steps']
+                for line in step.get('run', '').splitlines()
+                if line.strip().startswith('docker run ') and '--entrypoint /bin/promtool' in line]
+    command, = commands
+    assert command[:3] == ['docker', 'run', '--rm']
+    assert command.count('--network') == 1 and command[command.index('--network') + 1] == 'none'
+    assert '--read-only' in command and not any(value.startswith(('--privileged', '--cap-add')) for value in command)
+    assert command.count('--tmpfs') == 1
+    target, options = command[command.index('--tmpfs') + 1].split(':', 1)
+    assert target == '/tmp' and set(options.split(',')) == {'rw', 'noexec', 'nosuid', 'nodev', 'size=128m'}
+    assert command.count('--entrypoint') == 1 and command[command.index('--entrypoint') + 1] == '/bin/promtool'
+    assert command.count('--mount') == 1
+    assert set(command[command.index('--mount') + 1].split(',')) == {
+        'type=bind', 'src=$PWD/deploy/monitoring', 'dst=/workspace/deploy/monitoring', 'readonly'}
+    assert command[-4:] == ['$prometheus_image', 'test', 'rules', '/workspace/deploy/monitoring/tests/alerts.test.yaml']
 
 
 def test_promtool_rule_scenarios():

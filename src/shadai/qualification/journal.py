@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import re
 import stat
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,18 @@ from uuid import UUID, uuid4
 from shadai.qualification.schemas import QualificationError, canonical_bytes, read_json, strict_object
 
 LABEL = "com.shadai.qualification."
+HELPER_SERVICES = {"inspector", "pressure-test", "pressure-assert"}
+
+
+def validate_helper_record(record):
+    """Legacy helper journals cannot authorize deletion without their admission proof."""
+    if record.get("kind") == "container" and record.get("service") in HELPER_SERVICES:
+        if (type(record.get("id")) is not str or not re.fullmatch(r"[0-9a-f]{64}", record["id"]) or
+                type(record.get("name")) is not str or
+                not re.fullmatch(r"/[a-zA-Z0-9][a-zA-Z0-9_.-]*", record["name"]) or
+                type(record.get("image")) is not str or
+                not re.fullmatch(r"sha256:[0-9a-f]{64}", record["image"])):
+            raise QualificationError("Temporary helper journal is missing its exact name/image identity proof")
 
 
 def atomic_json(path, value):
@@ -35,7 +48,7 @@ def resource_identity(kind, inspection, run_id, role, project):
     created = inspection.get("Created") if kind != "volume" else inspection.get("CreatedAt")
     if not identifier or not created or kind not in {"container", "network", "volume"}:
         raise QualificationError("Resource identity or creation proof is absent")
-    return {
+    record = {
         "kind": kind,
         "id": identifier,
         "created": created,
@@ -44,9 +57,14 @@ def resource_identity(kind, inspection, run_id, role, project):
         "role": role,
         "project": project,
     }
+    if kind == "container" and record["service"] in HELPER_SERVICES:
+        record.update({"name": inspection.get("Name"), "image": inspection.get("Image")})
+        validate_helper_record(record)
+    return record
 
 
 def verify_resource(record, inspection):
+    validate_helper_record(record)
     current = resource_identity(
         record["kind"], inspection, record["labels"][LABEL + "run"], record["role"], record["project"]
     )
@@ -127,6 +145,8 @@ class RunJournal:
             or value["profile_sha256"] != hashlib.sha256(canonical_bytes(profile)).hexdigest()
         ):
             raise QualificationError("Resume configuration or context differs from the recorded run")
+        for record in value["resources"]:
+            validate_helper_record(record)
         return cls(directory, value)
 
     def save(self):

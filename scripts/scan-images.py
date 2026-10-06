@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote
 
@@ -41,19 +42,26 @@ def package_key(purl: str) -> tuple[str, str, str]:
             version = epoch + ":" + version
     elif ecosystem == "pypi":
         name = re.sub(r"[-_.]+", "-", name).lower()
+    elif ecosystem == "golang" and name == "stdlib":
+        version = re.sub(r"^(?:go|v)?(?=\d+\.\d+\.\d+$)", "v", version)
     return ecosystem, name, version
 
 
-def spdx_inventory(sbom: dict, *, frontend: bool = False) -> set[tuple[str, str, str]]:
+def spdx_inventory(sbom: dict, *, frontend: bool = False, service: bool = False) -> set[tuple[str, str, str]]:
     expected = set()
     for package in sbom.get("packages", []):
         for reference in package.get("externalRefs", []):
             if reference.get("referenceType") == "purl":
                 key = package_key(reference.get("referenceLocator"))
+                if service:
+                    if key[0] not in {"deb", "apk", "golang"}:
+                        raise ValueError("Unsupported maintained runtime package ecosystem")
+                    expected.add(key)
+                    continue
                 # Browser bundles have no installed npm package inventory. Do not claim it.
                 if key[0] in ({"deb", "apk"} if frontend else {"deb", "apk", "pypi"}):
                     expected.add(key)
-    if not expected or not any(key[0] in {"deb", "apk"} for key in expected):
+    if not expected or not service and not any(key[0] in {"deb", "apk"} for key in expected):
         raise ValueError("Build SBOM has no supported operating-system package inventory")
     return expected
 
@@ -133,6 +141,8 @@ def gate(report: dict, *, expected: set | None = None, image_id: str | None = No
             version = package["Version"] + ("-" + package["Release"] if package.get("Release") else "")
             if package.get("Epoch") and ":" not in version:
                 version = str(package["Epoch"]) + ":" + version
+            if key[0] == "golang" and key[1] == "stdlib":
+                version = re.sub(r"^(?:go|v)?(?=\d+\.\d+\.\d+$)", "v", version)
             if (package_name, version) != key[1:]:
                 raise ValueError("Trivy package name/version differs from its inventory identifier")
             instance = (target, key, package.get("FilePath", ""))
@@ -160,7 +170,8 @@ def gate(report: dict, *, expected: set | None = None, image_id: str | None = No
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, help="OCI image archive built by this CI run")
-    parser.add_argument("--image", choices=("api", "worker", "collector", "test", "frontend"))
+    pins = script("verify-image-pins")
+    parser.add_argument("--image", choices=(*pins.APP_IMAGES, *pins.SERVICES))
     parser.add_argument("--platform", required=True, choices=("linux/amd64", "linux/arm64"))
     parser.add_argument("--infrastructure", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
@@ -171,12 +182,14 @@ def main() -> None:
         parser.error("Choose --input with --image, or --infrastructure")
     images_path = ROOT / "requirements/images.json"
     images_bytes = images_path.read_bytes()
-    images = json.loads(images_bytes)
+    images = pins.inventory(ROOT)
+    service_manifest = pins.check_service_builds(ROOT, images)
+    service_manifest_path = ROOT / "requirements/service-builds/manifest.json"
+    service_manifest_bytes = service_manifest_path.read_bytes()
     args.output.mkdir(parents=True, exist_ok=True)
     cache = ROOT / "tmp/production-delivery/trivy-cache"
     cache.mkdir(parents=True, exist_ok=True)
-    references = {name: images[name]["reference"]
-                  for name in ("postgres", "clickhouse", "redis", "prometheus", "node-exporter")} \
+    references = {name: image["reference"] for name, image in images.items() if image["role"] == "runtime"} \
         if args.infrastructure else {}
     targets = references if args.infrastructure else {args.image: None}
     invocation = uuid.uuid4().hex
@@ -186,75 +199,106 @@ def main() -> None:
         raise ValueError("Image evidence requires the exact source commit")
     repository = args.repository or os.environ.get("GITHUB_REPOSITORY") or "local"
     failures = []
-    for name, reference in targets.items():
-        mounts = ["--mount", f"type=bind,src={args.output.resolve()},dst=/output",
-                  "--mount", f"type=bind,src={cache.resolve()},dst=/cache"]
-        source = [reference]
-        artifact = reference
-        if args.input:
-            evidence = script("verify-oci-evidence").verify(args.input, platform=args.platform, include_sbom=True)
-            if len(evidence["image_manifests"]) != 1:
-                raise ValueError("Image gate requires one native runtime manifest")
-            image_digest = evidence["image_manifests"][0]
-            image_id = evidence["image_configs"][image_digest]
-            expected = spdx_inventory(evidence["sboms"][image_digest], frontend=name == "frontend")
-            if name != "frontend":
-                audit = script("audit-dependencies")
-                environment = audit.default_environment()
-                environment.update({"sys_platform": "linux", "os_name": "posix", "platform_system": "Linux",
-                                    "platform_machine": args.platform.split("/")[1], "python_version": "3.12",
-                                    "python_full_version": "3.12.15", "implementation_name": "cpython",
-                                    "platform_python_implementation": "CPython"})
-                lock = ROOT / "requirements" / ("development.txt" if name == "test" else "runtime.txt")
-                closure = audit.expected_python(lock, environment)
-                if not {("pypi", package, version) for package, version in closure.items()} <= expected:
-                    raise ValueError("Image SBOM does not include the complete native runtime hash-lock closure")
-            mounts.extend(["--mount", f"type=bind,src={args.input.resolve().parent},dst=/input,readonly"])
-            artifact = "/input/" + args.input.name
-            source = ["--input", artifact]
-            subject = {"archive_sha256": evidence["archive_sha256"], "image_manifest": image_digest,
-                       "image_config": image_id}
-        command = ["docker", "run", "--rm", *mounts, images["trivy"]["reference"], "image", "--cache-dir", "/cache",
-                   "--image-src", "remote",
-                   "--platform", args.platform, "--scanners", "vuln", "--list-all-pkgs"]
-        if reference:
-            inventory_output = args.output / f"{name}.inventory.json"
-            inventory_output.unlink(missing_ok=True)
-            subprocess.run([*command, "--format", "cyclonedx", "--output", f"/output/{inventory_output.name}", *source],
-                           check=True)
-            inventory = json.loads(inventory_output.read_text(encoding="utf-8"))
-            expected, image_id = cyclone_inventory(inventory, reference=reference)
-            subject = {"reference": reference, "image_config": image_id,
-                       "inventory_sha256": hashlib.sha256(inventory_output.read_bytes()).hexdigest()}
-        output = args.output / f"{name}.json"
-        output.unlink(missing_ok=True)
-        output.with_suffix(".metadata.json").unlink(missing_ok=True)
-        scan_command = [*command, "--format", "json", "--output", f"/output/{output.name}", *source]
-        subprocess.run(scan_command, check=True)
-        report = json.loads(output.read_text(encoding="utf-8"))
-        ecosystems = None if reference else {"deb", "apk"} if name == "frontend" else {"deb", "apk", "pypi"}
-        failures.extend(gate(report, expected=expected, image_id=image_id, artifact=artifact, platform=args.platform,
-                             reference=reference, ecosystems=ecosystems))
-        if args.input:
-            with args.input.open("rb") as source_file:
-                if hashlib.file_digest(source_file, "sha256").hexdigest() != subject["archive_sha256"]:
-                    raise ValueError("OCI archive changed during image scan")
-            if name != "frontend" and audit.expected_python(lock, environment) != closure:
-                raise ValueError("Runtime hash lock changed during image scan")
-        if images_path.read_bytes() != images_bytes:
-            raise ValueError("Image pin manifest changed during image scan")
-        metadata = {"invocation": invocation, "platform": args.platform, "subject": subject, "command": scan_command,
-                    "source_commit": source_commit, "repository": repository,
-                    "source_dirty": bool(subprocess.check_output(
-                        ["git", "status", "--porcelain"], cwd=ROOT, text=True).strip()),
-                    "scanner_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                    "scanner": images["trivy"]["reference"], "expected_packages": sorted(expected),
-                    "images_manifest_sha256": hashlib.sha256(images_bytes).hexdigest(),
-                    "report_sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
-        if args.input and name != "frontend":
-            metadata["lock_sha256"] = hashlib.sha256(lock.read_bytes()).hexdigest()
-            metadata["expected_dependencies"] = closure
-        output.with_suffix(".metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    pending_metadata = []
+    for name in targets:
+        # A rejected snapshot/preflight must not leave a prior successful scan sidecar.
+        for suffix in (".json", ".metadata.json", ".inventory.json"):
+            (args.output / (name + suffix)).unlink(missing_ok=True)
+    context = script("oci_scan_layout").prepared_layout(
+        args.input, platform=args.platform, scratch_parent=cache.parent,
+        expected_source={"commit": source_commit, "repository": repository}, expected_component=args.image,
+    ) if args.input else nullcontext(None)
+    with context as layout:
+        for name, reference in targets.items():
+            maintained = name in pins.SERVICES
+            python_runtime = name in pins.APP_IMAGES and name != "frontend"
+            mounts = ["--mount", f"type=bind,src={args.output.resolve()},dst=/output",
+                      "--mount", f"type=bind,src={cache.resolve()},dst=/cache"]
+            source = [reference]
+            artifact = reference
+            if args.input:
+                evidence = layout.evidence
+                layout.assert_unchanged()
+                if len(evidence["image_manifests"]) != 1:
+                    raise ValueError("Image gate requires one native runtime manifest")
+                image_digest = evidence["image_manifests"][0]
+                image_id = evidence["image_configs"][image_digest]
+                expected = spdx_inventory(evidence["sboms"][image_digest], frontend=name == "frontend",
+                                          service=maintained)
+                if python_runtime:
+                    audit = script("audit-dependencies")
+                    environment = audit.default_environment()
+                    environment.update({"sys_platform": "linux", "os_name": "posix", "platform_system": "Linux",
+                                        "platform_machine": args.platform.split("/")[1], "python_version": "3.12",
+                                        "python_full_version": "3.12.15", "implementation_name": "cpython",
+                                        "platform_python_implementation": "CPython"})
+                    lock = ROOT / "requirements" / ("development.txt" if name == "test" else "runtime.txt")
+                    closure = audit.expected_python(lock, environment)
+                    if not {("pypi", package, version) for package, version in closure.items()} <= expected:
+                        raise ValueError("Image SBOM does not include the complete native runtime hash-lock closure")
+                mounts.extend(["--mount", f"type=bind,src={layout.layout_path.resolve()},dst=/input/layout,readonly"])
+                artifact = layout.container_input
+                source = ["--input", artifact]
+                subject = {"archive_sha256": evidence["archive_sha256"], "image_manifest": image_digest,
+                           "image_config": image_id}
+            command = ["docker", "run", "--rm", *mounts, images["trivy"]["reference"], "image", "--cache-dir", "/cache",
+                       "--image-src", "remote",
+                       "--platform", args.platform, "--scanners", "vuln", "--list-all-pkgs"]
+            if reference:
+                inventory_output = args.output / f"{name}.inventory.json"
+                inventory_output.unlink(missing_ok=True)
+                subprocess.run([*command, "--format", "cyclonedx", "--output",
+                                f"/output/{inventory_output.name}", *source],
+                               check=True)
+                inventory = json.loads(inventory_output.read_text(encoding="utf-8"))
+                expected, image_id = cyclone_inventory(inventory, reference=reference)
+                subject = {"reference": reference, "image_config": image_id,
+                           "inventory_sha256": hashlib.sha256(inventory_output.read_bytes()).hexdigest()}
+            output = args.output / f"{name}.json"
+            output.unlink(missing_ok=True)
+            output.with_suffix(".metadata.json").unlink(missing_ok=True)
+            scan_command = [*command, "--format", "json", "--output", f"/output/{output.name}", *source]
+            subprocess.run(scan_command, check=True)
+            report = json.loads(output.read_text(encoding="utf-8"))
+            layout_metadata = layout.assert_unchanged() if layout else None
+            ecosystems = None if reference or maintained else \
+                {"deb", "apk"} if name == "frontend" else {"deb", "apk", "pypi"}
+            failures.extend(gate(report, expected=expected, image_id=image_id, artifact=artifact,
+                                 platform=args.platform,
+                                 reference=reference, ecosystems=ecosystems))
+            if args.input:
+                with args.input.open("rb") as source_file:
+                    if hashlib.file_digest(source_file, "sha256").hexdigest() != subject["archive_sha256"]:
+                        raise ValueError("OCI archive changed during image scan")
+                if python_runtime and audit.expected_python(lock, environment) != closure:
+                    raise ValueError("Runtime hash lock changed during image scan")
+            if images_path.read_bytes() != images_bytes:
+                raise ValueError("Image pin manifest changed during image scan")
+            if service_manifest_path.read_bytes() != service_manifest_bytes:
+                raise ValueError("Maintained service manifest changed during image scan")
+            pins.check_service_builds(ROOT, images)
+            metadata = {"invocation": invocation, "platform": args.platform, "subject": subject,
+                        "command": scan_command,
+                        "source_commit": source_commit, "repository": repository,
+                        "source_dirty": bool(subprocess.check_output(
+                            ["git", "status", "--porcelain"], cwd=ROOT, text=True).strip()),
+                        "scanner_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                        "scanner": images["trivy"]["reference"], "expected_packages": sorted(expected),
+                        "images_manifest_sha256": hashlib.sha256(images_bytes).hexdigest(),
+                        "report_sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
+            if layout:
+                metadata["oci_layout"] = layout_metadata
+            if maintained:
+                metadata["role"] = "derived-runtime"
+                metadata["service_recipe"] = service_manifest["services"][name]
+                metadata["service_manifest_sha256"] = hashlib.sha256(service_manifest_bytes).hexdigest()
+            if args.input and python_runtime:
+                metadata["lock_sha256"] = hashlib.sha256(lock.read_bytes()).hexdigest()
+                metadata["expected_dependencies"] = closure
+            pending_metadata.append((output.with_suffix(".metadata.json"), metadata))
+    # Successful disposal is part of the proof; a refused cleanup cannot publish success metadata.
+    for path, metadata in pending_metadata:
+        path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     if failures:
         raise SystemExit("Fixable severe image advisories:\n" + "\n".join(failures))
     print("PASS: complete subject-bound image reports; no fixable high/critical findings")

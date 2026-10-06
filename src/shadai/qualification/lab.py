@@ -14,7 +14,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from shadai.qualification.http_transport import HttpTransport
-from shadai.qualification.journal import LABEL, RunJournal, atomic_json, resource_identity, verify_resource
+from shadai.qualification.journal import (
+    LABEL,
+    RunJournal,
+    atomic_json,
+    resource_identity,
+    validate_helper_record,
+    verify_resource,
+)
 from shadai.qualification.load import LoadSender
 from shadai.qualification.schemas import SCENARIOS, QualificationError, canonical_bytes, report
 
@@ -360,6 +367,7 @@ class Laboratory:
             self.remove(record)
 
     def remove(self, record, *, volumes=False):
+        validate_helper_record(record)
         if record["kind"] == "volume" and not volumes:
             return
         inspected = self.docker.inspect(record["kind"], record["id"], absent=True)
@@ -843,7 +851,9 @@ class Laboratory:
             name = self.journal.value["projects"][role] + "-pressure-" + mode
             service = "pressure-test" if mode == "seed" else "pressure-assert"
             output = "/qualification/pressure-seed.xml" if mode == "seed" else "/reports/pressure-assert.xml"
-            identifier = self.compose(
+            if self.docker.inspect("container", name, absent=True) is not None:
+                raise QualificationError("Pressure helper name already exists")
+            self.compose(
                 "run",
                 "--build",
                 "--no-deps",
@@ -864,14 +874,44 @@ class Laboratory:
                 "--junitxml=" + output,
                 role=role,
             )
-            inspected = self.docker.inspect("container", identifier)
+            # Build progress is not an identity; resolve the exact generated name.
+            inspected = self.docker.inspect("container", name)
             record = resource_identity(
                 "container", inspected, self.journal.value["run_id"], "pressure", self.journal.value["projects"][role]
             )
+            image = inspected.get("Image")
+            if (record["service"] != service or inspected.get("Name") != "/" + name or
+                    type(record["id"]) is not str or not re.fullmatch(r"[0-9a-f]{64}", record["id"]) or
+                    type(image) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", image)):
+                raise QualificationError("Pressure helper identity proof is invalid")
+            identifier = record["id"]
             self.journal.add_resources([record])
-            code = int(self.docker.call("container", "wait", identifier, timeout=180))
-            verify_resource(record, self.docker.inspect("container", identifier))
-            self.remove(record)
+
+            def cleanup_pressure():
+                current = self.docker.inspect("container", identifier, absent=True)
+                if current is not None:
+                    verify_resource(record, current)
+                    if current.get("Name") != "/" + name or current.get("Image") != image:
+                        raise QualificationError("Pressure helper name or image changed")
+                self.remove(record)
+
+            primary = None
+            try:
+                code = int(self.docker.call("container", "wait", identifier, timeout=180))
+                current = self.docker.inspect("container", identifier)
+                verify_resource(record, current)
+                if current.get("Name") != "/" + name or current.get("Image") != image:
+                    raise QualificationError("Pressure helper name or image changed")
+            except BaseException as exc:
+                primary = exc
+                raise
+            finally:
+                try:
+                    cleanup_pressure()
+                except BaseException:
+                    if primary is None:
+                        raise
+                    primary.add_note("Pressure helper cleanup refused; owned journal record retained")
             result = ET.parse(
                 self.directory
                 / ("pressure-artifacts/pressure-seed.xml" if mode == "seed" else "pressure-reports/pressure-assert.xml")

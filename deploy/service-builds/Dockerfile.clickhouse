@@ -1,0 +1,19 @@
+# Maintained recipe 1: replace only signed, SHA256-pinned OpenSSL APKs.
+FROM golang:1.26.6-alpine3.24@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS packages
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) arch=x86_64; crypto=6632d758d8f5e9ea3b650fe966f23bbf9a202f8b8dceecac93da135dec5e3689; ssl=05e3393fb95aa5751ca2f9d242f659f6cff82c1cc7767cc2df4a086f7ad01877 ;; \
+      arm64) arch=aarch64; crypto=2676a2b0b6e23ea2edccf3ee982b9842a665d52603d047de3d0a185dc316d983; ssl=20ac252b276d73f2c69c1d25f84537c7fba81caefc026c6be1094b394af2082e ;; \
+      *) exit 2 ;; \
+    esac \
+    && mkdir /packages \
+    && wget -O /packages/libcrypto3.apk https://dl-cdn.alpinelinux.org/alpine/v3.24/main/$arch/libcrypto3-3.5.9-r0.apk \
+    && wget -O /packages/libssl3.apk https://dl-cdn.alpinelinux.org/alpine/v3.24/main/$arch/libssl3-3.5.9-r0.apk \
+    && printf '%s\n' "$crypto  /packages/libcrypto3.apk" "$ssl  /packages/libssl3.apk" | sha256sum -c -
+FROM clickhouse/clickhouse-server:25.8.33.6-alpine@sha256:87e0a5b72f5465b18eacca7c76850e7ff551c9795c50e451f5646299e5e24146
+RUN --mount=type=bind,from=packages,source=/packages,target=/packages,ro \
+    apk add --no-network /packages/libcrypto3.apk /packages/libssl3.apk \
+    && apk info --exists 'libcrypto3=3.5.9-r0' 'libssl3=3.5.9-r0'
+LABEL io.shadai.maintenance.recipe="1" \
+      io.shadai.maintenance.component="openssl" \
+      io.shadai.maintenance.openssl="3.5.9-r0"
