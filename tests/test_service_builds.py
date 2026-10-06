@@ -209,3 +209,27 @@ def test_every_derived_runtime_architecture_is_gated_and_then_signed():
     assert set(signed["strategy"]["matrix"]["image"]) == set(PINS.APP_IMAGES) | set(PINS.SERVICES)
     assert signed["if"] == "github.event_name == 'push'"
     assert not any(step.get("continue-on-error") for step in job["steps"])
+
+
+
+def test_test_image_removes_complete_installer_after_locked_install_and_runtime_smoke():
+    recipe = (ROOT / 'docker/Dockerfile.test').read_text()
+    steps = [
+        'requirements/build.txt', 'requirements/development.txt',
+        'pip install --no-cache-dir --no-deps --no-build-isolation . ./agent',
+        'python -m pip check', 'import pytest, shadai, shadai_agent.main',
+        'python -m pip uninstall --yes pip', "shutil.rmtree('/usr/local/lib/python3.12/ensurepip')",
+        "find_spec('pip') is None", "find_spec('ensurepip') is None",
+        "Path('/usr/local/lib/python3.12/ensurepip').exists()",
+        "Path('/usr/local/lib/python3.12').rglob('pip-*.whl')",
+        "Path('/usr/local/lib/python3.12/site-packages').glob('pip*')",
+        "Path('/usr/local/bin').glob('pip*')", 'useradd', 'USER 10001:10001',
+    ]
+    offsets = [recipe.index(step) for step in steps]
+    assert offsets == sorted(offsets)
+    assert recipe.count('import pytest, shadai, shadai_agent.main') == 2
+    assert 'bom.cdx.json' not in recipe  # Remove the installer rather than an advisory manifest.
+    assert 'ENTRYPOINT ["python", "/app/entrypoint.py"]' in recipe
+    assert 'CMD ["python", "-m", "pytest"' in recipe
+    for name in ('api', 'worker', 'collector'):
+        assert 'pip uninstall' not in (ROOT / f'docker/Dockerfile.{name}').read_text()

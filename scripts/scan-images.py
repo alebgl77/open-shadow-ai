@@ -223,8 +223,8 @@ def main() -> None:
                     raise ValueError("Image gate requires one native runtime manifest")
                 image_digest = evidence["image_manifests"][0]
                 image_id = evidence["image_configs"][image_digest]
-                expected = spdx_inventory(evidence["sboms"][image_digest], frontend=name == "frontend",
-                                          service=maintained)
+                # Run the subject-bound scan before inventory validation so a rejected
+                # SBOM still leaves raw diagnostic findings, never an accepted sidecar.
                 if python_runtime:
                     audit = script("audit-dependencies")
                     environment = audit.default_environment()
@@ -234,8 +234,6 @@ def main() -> None:
                                         "platform_python_implementation": "CPython"})
                     lock = ROOT / "requirements" / ("development.txt" if name == "test" else "runtime.txt")
                     closure = audit.expected_python(lock, environment)
-                    if not {("pypi", package, version) for package, version in closure.items()} <= expected:
-                        raise ValueError("Image SBOM does not include the complete native runtime hash-lock closure")
                 mounts.extend(["--mount", f"type=bind,src={layout.layout_path.resolve()},dst=/input/layout,readonly"])
                 artifact = layout.container_input
                 source = ["--input", artifact]
@@ -261,6 +259,12 @@ def main() -> None:
             subprocess.run(scan_command, check=True)
             report = json.loads(output.read_text(encoding="utf-8"))
             layout_metadata = layout.assert_unchanged() if layout else None
+            if args.input:
+                expected = spdx_inventory(evidence["sboms"][image_digest], frontend=name == "frontend",
+                                          service=maintained)
+                if python_runtime and not \
+                        {("pypi", package, version) for package, version in closure.items()} <= expected:
+                    raise ValueError("Image SBOM does not include the complete native runtime hash-lock closure")
             ecosystems = None if reference or maintained else \
                 {"deb", "apk"} if name == "frontend" else {"deb", "apk", "pypi"}
             failures.extend(gate(report, expected=expected, image_id=image_id, artifact=artifact,

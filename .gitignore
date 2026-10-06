@@ -46,3 +46,4 @@ Thumbs.db
 catalog/local/*.yaml
 
 *.tsbuildinfo
+/artifacts/

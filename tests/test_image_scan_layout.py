@@ -41,7 +41,8 @@ def harness(tmp_path, monkeypatch):
     output = tmp_path / 'reports'
     output.mkdir()
     calls = []
-    state = SimpleNamespace(component='redis', mutate=None, error=None, drift_at=None, cleanup_error=None)
+    state = SimpleNamespace(component='redis', mutate=None, sbom_mutate=None, error=None, drift_at=None,
+                            cleanup_error=None)
     archive_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
     layout = tmp_path / 'private-workspace/layout'
     layout.mkdir(parents=True)
@@ -77,6 +78,8 @@ def harness(tmp_path, monkeypatch):
         assert expected_source == {'commit': COMMIT, 'repository': REPOSITORY}
         assert expected_component == state.component
         sbom = {'packages': [{'externalRefs': [{'referenceType': 'purl', 'referenceLocator': p}]} for p in inventory()]}
+        if state.sbom_mutate:
+            state.sbom_mutate(sbom)
         handle = SimpleNamespace(layout_path=layout, container_input='/input/layout', assert_unchanged=unchanged,
                                  evidence={'archive_sha256': archive_hash, 'image_manifests': [MANIFEST],
                                            'image_configs': {MANIFEST: CONFIG}, 'sboms': {MANIFEST: sbom}})
@@ -202,3 +205,32 @@ def test_complete_inventory_and_purl_version_are_not_bypassed_by_bridge(harness,
         harness.run()
     assert harness.calls[-1] == 'cleanup'
     assert not (harness.output / 'redis.metadata.json').exists()
+
+
+@pytest.mark.parametrize('component,purl,error', [
+    ('node-exporter', 'pkg:generic/busybox@1.38.0', 'Unsupported'),
+    ('postgres', 'pkg:golang/github.com/tianon/gosu', 'exact versions'),
+])
+def test_rejected_actual_sbom_shapes_retain_raw_scan_without_accepted_sidecar(harness, component, purl, error):
+    def change(sbom):
+        sbom['packages'].append({'externalRefs': [{'referenceType': 'purl', 'referenceLocator': purl}]})
+    harness.state.sbom_mutate = change
+    (harness.output / f'{component}.metadata.json').write_text('{"invocation":"old"}')
+    with pytest.raises(ValueError, match=error):
+        harness.run(component)
+    assert harness.calls == ['prepare', 'check', 'trivy', 'check', 'cleanup']
+    raw = json.loads((harness.output / f'{component}.json').read_text())
+    assert raw['Metadata']['ImageID'] == CONFIG
+    assert not (harness.output / f'{component}.metadata.json').exists()
+
+
+def test_incomplete_native_lock_closure_still_rejects_after_retaining_raw_scan(harness):
+    def change(sbom):
+        sbom['packages'] = [package for package in sbom['packages']
+                            if not package['externalRefs'][0]['referenceLocator'].startswith('pkg:pypi/')]
+    harness.state.sbom_mutate = change
+    with pytest.raises(ValueError, match='complete native runtime hash-lock closure'):
+        harness.run('test')
+    assert harness.calls == ['prepare', 'check', 'trivy', 'check', 'cleanup']
+    assert (harness.output / 'test.json').is_file()
+    assert not (harness.output / 'test.metadata.json').exists()
