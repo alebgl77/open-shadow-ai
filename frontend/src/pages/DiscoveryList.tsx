@@ -128,7 +128,7 @@ export default function DiscoveryList() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
           <input aria-label="Search discoveries" type="text" value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()} placeholder="Search AI tools..."
-            className="w-full bg-surface-800 border border-surface-600/40 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-accent/50 placeholder-slate-600" />
+            className="w-full bg-surface-800 border border-surface-600/40 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-hidden focus:border-accent/50 placeholder-slate-600" />
         </div>
         <button onClick={() => setShowFilters(!showFilters)}
           className={clsx('flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors',
@@ -190,7 +190,7 @@ export default function DiscoveryList() {
           <div className="flex gap-2">
             {(['sanctioned', 'tolerated', 'unsanctioned'] as const).map(cls => (
               <button disabled={actionsDisabled || bulkMutation.isPending} key={cls} onClick={() => bulkMutation.mutate({ ids: Array.from(selectedIds), classification: cls })}
-                className="px-3 py-1 text-xs bg-surface-700 text-slate-300 rounded hover:bg-surface-600 transition-colors capitalize">{cls}</button>
+                className="px-3 py-1 text-xs bg-surface-700 text-slate-300 rounded-sm hover:bg-surface-600 transition-colors capitalize">{cls}</button>
             ))}
           </div>
           <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-slate-500 hover:text-slate-300">Deselect</button>
@@ -210,7 +210,7 @@ export default function DiscoveryList() {
                 <tr className="border-b border-surface-600/30 text-left text-xs text-slate-500 uppercase tracking-wider">
                   <th className="px-4 py-3 w-10">
                     <input aria-label="Select visible discoveries" disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={data ? selectedIds.size === data.items.length && data.items.length > 0 : false}
-                      onChange={toggleSelectAll} className="rounded bg-surface-900 border-surface-600" />
+                      onChange={toggleSelectAll} className="rounded-sm bg-surface-900 border-surface-600" />
                   </th>
                   <SortHeader col="entity_name" label="AI Tool" />
                   <th className="px-4 py-3 font-medium">Type</th>
@@ -235,7 +235,7 @@ export default function DiscoveryList() {
                   <tr key={d.detection_id} className="data-row cursor-pointer group">
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <input aria-label={`Select ${d.entity_name}`} disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={selectedIds.has(d.detection_id)} onChange={() => toggleSelect(d.detection_id)}
-                        className="rounded bg-surface-900 border-surface-600" />
+                        className="rounded-sm bg-surface-900 border-surface-600" />
                     </td>
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}>
                       <Link to={`/discoveries/${d.detection_id}`} className="font-medium text-slate-100 group-hover:text-accent transition-colors">{d.entity_name}</Link>
@@ -263,15 +263,15 @@ export default function DiscoveryList() {
                   {((filters.page! - 1) * filters.page_size! + 1)}–{Math.min(filters.page! * filters.page_size!, data.total)} of {data.total}
                 </span>
                 <select aria-label="Results per page" value={filters.page_size} onChange={(e) => setFilter('page_size', e.target.value)}
-                  className="bg-surface-900 border border-surface-600/40 rounded px-2 py-1 text-xs text-slate-400">
+                  className="bg-surface-900 border border-surface-600/40 rounded-sm px-2 py-1 text-xs text-slate-400">
                   {PAGE_SIZES.map(s => <option key={s} value={s}>{s}/page</option>)}
                 </select>
               </div>
               <div className="flex gap-2">
                 <button disabled={filters.page! <= 1} onClick={() => setFilter('page', String(filters.page! - 1))}
-                  className="px-3 py-1 text-xs bg-surface-700 rounded hover:bg-surface-600 disabled:opacity-30 transition-colors">Previous</button>
+                  className="px-3 py-1 text-xs bg-surface-700 rounded-sm hover:bg-surface-600 disabled:opacity-30 transition-colors">Previous</button>
                 <button disabled={filters.page! * filters.page_size! >= data.total} onClick={() => setFilter('page', String(filters.page! + 1))}
-                  className="px-3 py-1 text-xs bg-surface-700 rounded hover:bg-surface-600 disabled:opacity-30 transition-colors">Next</button>
+                  className="px-3 py-1 text-xs bg-surface-700 rounded-sm hover:bg-surface-600 disabled:opacity-30 transition-colors">Next</button>
               </div>
             </div>
           )}

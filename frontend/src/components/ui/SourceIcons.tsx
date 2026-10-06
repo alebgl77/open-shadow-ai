@@ -25,7 +25,7 @@ export default function SourceIcons({ sources }: Props) {
         <span
           key={s}
           title={sourceLabel(s)}
-          className="text-[10px] bg-surface-700 px-1.5 py-0.5 rounded font-mono text-slate-400 flex items-center gap-1"
+          className="text-[10px] bg-surface-700 px-1.5 py-0.5 rounded-sm font-mono text-slate-400 flex items-center gap-1"
         >
           <span className={`w-1.5 h-1.5 rounded-full ${SOURCE_COLORS[s] || 'bg-slate-500'}`} />
           {sourceLabel(s)}

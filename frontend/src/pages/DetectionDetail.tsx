@@ -41,7 +41,7 @@ function NetworkEvidence({ data }: { data: Record<string, unknown> }) {
     <p className="font-sans text-slate-400 leading-relaxed">{NETWORK_NOTICE} DNS is weaker evidence; repeats and additional protocols do not create independent sources.</p>
     <dl className="flex flex-wrap gap-3">{NETWORK_PROTOCOLS.map(protocol => typeof protocols[protocol] === 'number' && Number.isFinite(protocols[protocol]) ? <div key={protocol} className="flex gap-2"><dt>{protocol}</dt><dd>{String(protocols[protocol])}</dd></div> : null)}</dl>
     {canInspect ? <><p className="text-slate-500">Retained sample: up to 10 observations.</p>
-    {observations.map((observation, index) => <div key={index} className="rounded bg-surface-800 p-3 space-y-2 break-words">
+    {observations.map((observation, index) => <div key={index} className="rounded-sm bg-surface-800 p-3 space-y-2 break-words">
       <p className="text-slate-200">{text(observation.protocol)} · {text(observation.domain)}</p>
       <p className="text-slate-500">{text(observation.timestamp)}</p>
       <dl className="grid sm:grid-cols-2 gap-2"><div><dt className="text-slate-500">Source address</dt><dd className="break-all">{text(observation.src_ip)}</dd></div><div><dt className="text-slate-500">Destination</dt><dd className="break-all">{networkEndpoint(typeof observation.dst_ip === 'string' ? observation.dst_ip : null, typeof observation.dst_port === 'number' ? observation.dst_port : null)}</dd></div><div><dt className="text-slate-500">Sensor</dt><dd className="break-all">{text(observation.collector_id)}</dd></div></dl>
@@ -78,7 +78,7 @@ function EvidenceSection({ source, data }: { source: string; data: Record<string
               <span className="text-slate-500">Sample values:</span>
               <div className="mt-1 space-y-0.5">
                 {data.sample_values.filter((value): value is string => typeof value === 'string').map((v, i) => (
-                  <div key={i} className="bg-surface-800 px-2 py-1 rounded text-slate-300">{v}</div>
+                  <div key={i} className="bg-surface-800 px-2 py-1 rounded-sm text-slate-300">{v}</div>
                 ))}
               </div>
             </div>
@@ -192,7 +192,7 @@ export default function DetectionDetail() {
                 </p>
                 <div className="space-y-2">
                   {confFactors.map((f, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs bg-surface-900/50 rounded px-3 py-1.5">
+                    <div key={i} className="flex items-center justify-between text-xs bg-surface-900/50 rounded-sm px-3 py-1.5">
                       <span className="text-slate-400">{f.description}</span>
                       <span className={clsx('font-mono font-medium', f.value >= 0 ? 'text-emerald-400' : 'text-red-400')}>
                         {f.value >= 0 ? '+' : ''}{typeof f.value === 'number' ? f.value.toFixed(2) : f.value}
@@ -207,7 +207,7 @@ export default function DetectionDetail() {
                 </p>
                 <div className="space-y-2">
                   {riskFactors.map((f, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs bg-surface-900/50 rounded px-3 py-1.5">
+                    <div key={i} className="flex items-center justify-between text-xs bg-surface-900/50 rounded-sm px-3 py-1.5">
                       <span className="text-slate-400">{f.description}</span>
                       <span className={clsx('font-mono font-medium', f.value > 0 ? 'text-red-400' : 'text-emerald-400')}>
                         {f.value >= 0 ? '+' : ''}{f.value}
@@ -275,7 +275,7 @@ export default function DetectionDetail() {
               <div>
                 <label htmlFor="review-classification" className="text-xs text-slate-500 mb-1 block">Classification</label>
                 <select id="review-classification" aria-label="Classification" disabled={!canEdit || mutation.isPending} value={detection.classification} onChange={(e) => mutation.mutate({ classification: e.target.value })}
-                  className="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-2 text-sm focus:border-accent/50 focus:outline-none">
+                  className="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-2 text-sm focus:border-accent/50 focus:outline-hidden">
                   <option value="unknown">Unknown</option>
                   <option value="unsanctioned">Unsanctioned</option>
                   <option value="tolerated">Tolerated</option>
@@ -285,7 +285,7 @@ export default function DetectionDetail() {
               <div>
                 <label htmlFor="review-status" className="text-xs text-slate-500 mb-1 block">Status</label>
                 <select id="review-status" aria-label="Review status" disabled={!canEdit || mutation.isPending} value={detection.analyst_status} onChange={(e) => mutation.mutate({ analyst_status: e.target.value })}
-                  className="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-2 text-sm focus:border-accent/50 focus:outline-none">
+                  className="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-2 text-sm focus:border-accent/50 focus:outline-hidden">
                   <option value="new">New</option>
                   <option value="investigating">Investigating</option>
                   <option value="classified">Classified</option>
@@ -296,7 +296,7 @@ export default function DetectionDetail() {
               <div>
                 <label htmlFor="review-note" className="text-xs text-slate-500 mb-1 block">Add Note</label>
                 <textarea id="review-note" aria-label="Analyst note" disabled={!canEdit || mutation.isPending} value={note} onChange={(e) => setNote(e.target.value)}
-                  className="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-2 text-sm h-20 resize-none focus:border-accent/50 focus:outline-none"
+                  className="w-full bg-surface-900 border border-surface-600 rounded-lg px-3 py-2 text-sm h-20 resize-none focus:border-accent/50 focus:outline-hidden"
                   placeholder="Write a note..." />
                 <button onClick={() => mutation.mutate({ analyst_notes: note })} disabled={!canEdit || !note.trim() || mutation.isPending}
                   className="mt-2 w-full bg-accent/20 text-accent border border-accent/30 rounded-lg py-1.5 text-sm hover:bg-accent/30 disabled:opacity-50 transition-colors">
