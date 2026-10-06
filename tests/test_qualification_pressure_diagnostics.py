@@ -30,6 +30,8 @@ PAIR_STEPS = {
              "remove_inspect": "container_inspect", "remove": "container_rm"},
     "stop": {"inspect": "container_inspect", "stop": "container_stop", "reinspect": "container_inspect"},
     "export": {"source_inspect": "container_inspect", "stopped_inspect": "container_inspect",
+               "volume_absence": "volume_inspect", "volume_create": "volume_create", "volume_capture": "volume_inspect",
+               "name_inspect": "container_inspect",
                "worker_inspect": "container_inspect", "volume_inspect": "volume_inspect", "create": "container_create",
                "capture": "container_inspect", "inspect": "container_inspect", "start": "container_start",
                "wait": "container_wait", "logs": "container_logs", "copy_inspect": "container_inspect",
@@ -49,6 +51,7 @@ CASES |= {(f"pressure_{section}_launch", operation)
 CASES |= {("pressure_restore_up", operation) for operation in ("container_inspect", "volume_inspect")}
 CASES |= {("pressure_restore_discover_list", operation) for operation in ("network_ls", "volume_ls")}
 CASES |= {("pressure_restore_discover_inspect", "volume_inspect")}
+CASES |= {("pressure_export_remove_inspect", "volume_inspect"), ("pressure_export_remove", "volume_rm")}
 
 
 class CliModel:
@@ -149,17 +152,22 @@ class CliModel:
                                                   if item.get("Name", "").lstrip("/") == target), None)
             return self.response(json.dumps([current])) if current else self.response("", 1, "No such " + kind)
         if operation == "create":
-            if kind == "volume":
-                current = self.volume(args[-1], "restore")
-                self.volumes[current["Name"]] = current
-                return self.response(current["Name"])
             labels = dict(value.split("=", 1) for index, value in enumerate(args)
                           if index and args[index - 1] == "--label")
+            if kind == "volume":
+                current = self.volume(args[-1], "restore")
+                current["Labels"] = labels
+                self.volumes[current["Name"]] = current
+                return self.response(current["Name"])
             project_role = "restore" if labels[LABEL + "role"] == "restore" else "source"
             ident = ("e" if project_role == "restore" else "d") * 64
-            current = self.container(ident, "archive-helper-" + ident[:1], project_role, labels[LABEL + "role"])
+            name = args[args.index("--name") + 1] if "--name" in args else "archive-helper-" + ident[:1]
+            current = self.container(ident, name, project_role, labels[LABEL + "role"])
             self.containers[ident] = current
             return self.response(ident)
+        if kind == "volume" and operation == "rm":
+            self.volumes.pop(args[2])
+            return self.response()
         identifier = args[2].split(":", 1)[0]
         assert identifier in self.containers and len(identifier) == 64
         if operation == "wait":

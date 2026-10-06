@@ -50,7 +50,8 @@ PRESSURE_STEPS = {
              "remove", "junit"},
     "stop": {"inspect", "stop", "reinspect"},
     "export": {"source_inspect", "stopped_inspect", "worker_inspect", "volume_inspect", "create", "capture",
-               "inspect", "start", "wait", "logs", "copy_inspect", "copy", "remove_inspect", "remove", "validate"},
+               "volume_absence", "volume_create", "volume_capture", "name_inspect", "inspect", "start", "wait",
+               "logs", "copy_inspect", "copy", "remove_inspect", "remove", "validate"},
     "import": {"validate", "volume_absence", "volume_create", "volume_capture", "worker_inspect", "volume_inspect",
                "create", "capture", "inspect", "start", "wait", "logs", "remove_inspect", "remove"},
     "restore": {"up", "discover_list", "discover_inspect"},
@@ -59,6 +60,15 @@ PRESSURE_STEPS = {
 }
 PRESSURE_CHECKPOINTS = {"pressure_" + section + "_" + step
                         for section, steps in PRESSURE_STEPS.items() for step in steps}
+EXPORT_ARCHIVE_LIMIT = 1073741824
+EXPORT_METADATA_MARGIN = 10485760
+EXPORT_SNAPSHOT_CODE = """import resource,runpy,sys
+limit=int(sys.argv[1])
+if limit <= 0: raise ValueError('archive_limit')
+resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit))
+sys.argv=['shadai.qualification',*sys.argv[2:]]
+runpy.run_module('shadai.qualification',run_name='__main__')
+"""
 FAILURE_STAGES |= PRESSURE_CHECKPOINTS
 DOCKER_OPERATIONS = {
     (kind, command): kind + "_" + command
@@ -682,7 +692,51 @@ class Laboratory:
             recovery_seconds=time.monotonic() - before,
         )
 
-    def run_owned(self, command, *, role="source", volumes=(), root=False, caps=(), archive=None):
+    def create_export_resource(self, kind, name, args, *, image=None):
+        """Capture an owned creation even when its CLI response fails or is cancelled."""
+        project = self.journal.value["projects"]["source"]
+        suffix = r"_export_[0-9a-f]{32}" if kind == "volume" else r"-export-[0-9a-f]{32}"
+        if kind not in {"container", "volume"} or not re.fullmatch(re.escape(project) + suffix, name) or \
+                (kind == "container" and (type(image) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", image))):
+            raise QualificationError("Export resource creation contract is invalid")
+        self.pressure_checkpoint("volume_absence" if kind == "volume" else "name_inspect")
+        if self.docker.inspect(kind, name, absent=True) is not None:
+            raise QualificationError("Export resource name already exists")
+        primary = None
+        record = None
+        try:
+            self.pressure_checkpoint("volume_create" if kind == "volume" else "create")
+            self.docker.call(*args)
+        except BaseException as error:
+            primary = error
+            if self.pressure_section == "export" and self.failure is None:
+                self.failure = failure_evidence(error, "redis_pressure", self.stage)
+        try:
+            self.pressure_checkpoint("volume_capture" if kind == "volume" else "capture")
+            inspected = self.docker.inspect(kind, name, absent=True)
+            if inspected is None:
+                if primary is None:
+                    raise QualificationError("Created export resource identity is absent")
+            else:
+                record = resource_identity(kind, inspected, self.journal.value["run_id"], "source", project)
+                if (kind == "volume" and record["id"] != name) or (kind == "container" and (
+                    inspected.get("Name") != "/" + name or inspected.get("Image") != image or
+                    type(record["id"]) is not str or not re.fullmatch(r"[0-9a-f]{64}", record["id"]))):
+                    raise QualificationError("Export resource identity is invalid")
+                self.journal.add_resources([record])
+        except BaseException as secondary:
+            if primary is None:
+                raise
+            primary.add_note("owned_export_capture_failed")
+            if self.pressure_section == "export":
+                self.pressure_secondary(primary, secondary)
+            if isinstance(secondary, (KeyboardInterrupt, SystemExit)):
+                raise
+        if primary is not None:
+            raise primary
+        return record
+
+    def run_owned(self, command, *, role="source", volumes=(), root=False, caps=(), archive=None, export_name=None):
         project = self.journal.value["projects"][role]
         worker = self.containers({"ingest-worker"})[0]
         self.pressure_checkpoint("worker_inspect")
@@ -720,7 +774,8 @@ class Laboratory:
             args.extend(
                 [
                     "--mount",
-                    "type=volume,src=" + volume["id"] + ",dst=" + destination + (",readonly" if readonly else ""),
+                    "type=volume,src=" + volume["id"] + ",dst=" + destination + (",readonly" if readonly else "")
+                    + (",volume-nocopy" if export_name and destination == "/export" else ""),
                 ]
             )
         if archive:
@@ -729,6 +784,11 @@ class Laboratory:
                 raise QualificationError("Archive must be a regular owned-run file")
             args.extend(["--mount", "type=bind,src=" + str(path) + ",dst=/archive.tar,readonly"])
         args.extend([inspected["Image"], *command])
+        if export_name is not None:
+            if role != "source" or not re.fullmatch(re.escape(project) + r"-export-[0-9a-f]{32}", export_name):
+                raise QualificationError("Export helper name is invalid")
+            args[2:2] = ["--name", export_name]
+            return self.create_export_resource("container", export_name, args, image=inspected["Image"])
         self.pressure_checkpoint("create")
         identifier = self.docker.call(*args)
         self.pressure_checkpoint("capture")
@@ -755,15 +815,15 @@ class Laboratory:
             self.pressure_checkpoint("copy_inspect")
             verify_resource(record, self.docker.inspect("container", record["id"]))
             destination = self.directory / copy_archive
-            if destination.exists():
+            if destination.exists() or destination.is_symlink():
                 raise QualificationError("Archive destination already exists")
             if type(result.get("bytes")) is not int or not 0 < result["bytes"] <= self.artifact_remaining():
                 raise QualificationError("Cold archive exceeds cumulative remaining artifact budget")
             self.pressure_checkpoint("copy")
-            self.docker.call("container", "cp", record["id"] + ":/tmp/archive.tar", str(destination))
-            destination.chmod(0o600)
+            self.docker.call("container", "cp", record["id"] + ":/export/archive.tar", str(destination))
             if destination.is_symlink() or destination.stat().st_size != result["bytes"]:
                 raise QualificationError("Copied archive size differs from the owned helper proof")
+            destination.chmod(0o600)
             self.retained_bytes()
         self.remove(record)
         return result
@@ -785,32 +845,45 @@ class Laboratory:
     def archive_store(self, service):
         from shadai.qualification.snapshot import digest_file
 
-        available = min(self.artifact_remaining(reserve=10485760), 1073741824 - 10485760)
+        archive_limit = min(self.artifact_remaining(), EXPORT_ARCHIVE_LIMIT)
+        available = archive_limit - EXPORT_METADATA_MARGIN
+        if available <= 0:
+            raise QualificationError("Cumulative run artifact budget exhausted")
         volume = self.volume(service)
         container = self.containers({service})[0]
         self.pressure_checkpoint("stopped_inspect")
         if self.docker.inspect("container", container["id"])["State"]["Running"]:
             raise QualificationError("A cold snapshot requires verified stopped stores")
         name = service + "-cold.tar"
+        project = self.journal.value["projects"]["source"]
+        output_name = project + "_export_" + uuid4().hex
+        output = self.create_export_resource("volume", output_name, [
+            "volume", "create", "--label", LABEL + "run=" + self.journal.value["run_id"],
+            "--label", LABEL + "role=source", "--label", "com.docker.compose.project=" + project,
+            "--label", "com.docker.compose.volume=archive-export", output_name,
+        ])
         record = self.run_owned(
             [
-                "-m",
-                "shadai.qualification",
+                "-c",
+                EXPORT_SNAPSHOT_CODE,
+                str(archive_limit),
                 "snapshot",
                 "export",
                 "--archive",
-                "/tmp/archive.tar",
+                "/export/archive.tar",
                 "--max-bytes",
                 str(available),
             ],
-            volumes=[(volume, "/volume", True)],
+            volumes=[(volume, "/volume", True), (output, "/export", False)],
             root=True,
             caps=["DAC_READ_SEARCH"],
+            export_name=project + "-export-" + uuid4().hex,
         )
         result = self.helper_result(record, copy_archive=name)
         self.pressure_checkpoint("validate")
         if digest_file(self.directory / name) != result["sha256"]:
             raise QualificationError("Copied cold archive does not match the helper manifest")
+        self.remove(output, volumes=True)
         return {**result, "archive": name, "source_volume": volume}
 
     def fresh_restore_volume(self, source, *, service):
