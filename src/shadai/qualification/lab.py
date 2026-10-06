@@ -60,6 +60,16 @@ PRESSURE_STEPS = {
 }
 PRESSURE_CHECKPOINTS = {"pressure_" + section + "_" + step
                         for section, steps in PRESSURE_STEPS.items() for step in steps}
+PHYSICAL_STEPS = {
+    "inspector": {"guard_inspect", "run", "name_inspect", "wait", "logs", "remove_inspect", "remove"},
+    "services": {"inspect", "stats"},
+    "volume": {"source_inspect", "worker_inspect", "volume_inspect", "create", "capture", "inspect", "start",
+               "wait", "logs", "remove_inspect", "remove"},
+    "exporter": {"guard_inspect", "up", "discover_list", "discover_inspect", "inspect", "observe"},
+}
+PHYSICAL_CHECKPOINTS = {"physical_" + section + "_" + step
+                        for section, steps in PHYSICAL_STEPS.items() for step in steps}
+DIAGNOSTIC_CHECKPOINTS = PRESSURE_CHECKPOINTS | PHYSICAL_CHECKPOINTS
 EXPORT_ARCHIVE_LIMIT = 1073741824
 EXPORT_METADATA_MARGIN = 10485760
 EXPORT_SNAPSHOT_CODE = """import resource,runpy,sys
@@ -69,7 +79,7 @@ resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit))
 sys.argv=['shadai.qualification',*sys.argv[2:]]
 runpy.run_module('shadai.qualification',run_name='__main__')
 """
-FAILURE_STAGES |= PRESSURE_CHECKPOINTS
+FAILURE_STAGES |= DIAGNOSTIC_CHECKPOINTS
 DOCKER_OPERATIONS = {
     (kind, command): kind + "_" + command
     for kind, commands in {
@@ -78,7 +88,7 @@ DOCKER_OPERATIONS = {
         "compose": {"run", "up"},
     }.items() for command in commands
 }
-DOCKER_OPERATION_NAMES = set(DOCKER_OPERATIONS.values()) | {"container_list", "unknown"}
+DOCKER_OPERATION_NAMES = set(DOCKER_OPERATIONS.values()) | {"container_list", "container_stats", "unknown"}
 
 
 def docker_operation(args):
@@ -86,6 +96,8 @@ def docker_operation(args):
         return "unknown"
     if args[0] == "ps":
         return "container_list"
+    if args[0] == "stats":
+        return "container_stats"
     command = args[1] if len(args) > 1 else None
     if args[0] == "compose" and len(args) > 7 and type(args[1]) is str and args[1] == "--project-name":
         if type(args[3]) is not str or type(args[5]) is not str or args[3] != "--file" or args[5] != "--env-file":
@@ -102,9 +114,9 @@ class DockerOperationError(QualificationError):
         self.code = code if type(code) is str and code in DOCKER_FAILURE_CODES else "docker_process_error"
         self.returncode = returncode if type(returncode) is int and -255 <= returncode <= 255 else None
         self.operation = operation if type(operation) is str and operation in DOCKER_OPERATION_NAMES else "unknown"
-        self.checkpoint = checkpoint if type(checkpoint) is str and checkpoint in PRESSURE_CHECKPOINTS else None
+        self.checkpoint = checkpoint if type(checkpoint) is str and checkpoint in DIAGNOSTIC_CHECKPOINTS else None
         self.last_completed = (last_completed if type(last_completed) is str and
-                               last_completed in PRESSURE_CHECKPOINTS else None)
+                               last_completed in DIAGNOSTIC_CHECKPOINTS else None)
 
 
 def safe_exception_type(exc):
@@ -131,13 +143,14 @@ def failure_evidence(exc, phase, stage):
                          else "docker_process_error")
         if type(exc.returncode) is int and -255 <= exc.returncode <= 255:
             value["returncode"] = exc.returncode
-        checkpoint = exc.checkpoint if type(exc.checkpoint) is str and exc.checkpoint in PRESSURE_CHECKPOINTS else None
+        checkpoint = (exc.checkpoint if type(exc.checkpoint) is str and
+                      exc.checkpoint in DIAGNOSTIC_CHECKPOINTS else None)
         if checkpoint is not None:
             # Freeze the failed call's context before a finally-block performs cleanup.
             value["stage"] = value["checkpoint"] = checkpoint
             value["operation"] = (exc.operation if type(exc.operation) is str and
                                   exc.operation in DOCKER_OPERATION_NAMES else "unknown")
-            if type(exc.last_completed) is str and exc.last_completed in PRESSURE_CHECKPOINTS:
+            if type(exc.last_completed) is str and exc.last_completed in DIAGNOSTIC_CHECKPOINTS:
                 value["last_completed"] = exc.last_completed
     return value
 
@@ -202,12 +215,39 @@ class Laboratory:
         self.failure = None
         self.stage = "scenario"
         self.pressure_section = None
+        self.physical_section = None
 
     def pressure_checkpoint(self, step):
         section = self.pressure_section
         if type(section) is str and section in PRESSURE_STEPS and type(step) is str and step in PRESSURE_STEPS[section]:
             self.stage = "pressure_" + section + "_" + step
             self.docker.checkpoint = self.stage
+        else:
+            self.physical_checkpoint(step)
+
+    def physical_checkpoint(self, step):
+        section = getattr(self, "physical_section", None)
+        if type(section) is str and section in PHYSICAL_STEPS and type(step) is str and step in PHYSICAL_STEPS[section]:
+            self.stage = "physical_" + section + "_" + step
+            self.docker.checkpoint = self.stage
+
+    @contextmanager
+    def physical_diagnostics(self, section):
+        previous = self.physical_section, self.stage, getattr(self.docker, "checkpoint", None)
+        self.physical_section = section if type(section) is str and section in PHYSICAL_STEPS else None
+        try:
+            yield
+        except BaseException as exc:
+            if self.failure is None:
+                self.failure = failure_evidence(exc, "physical", self.stage)
+            raise
+        finally:
+            self.physical_section, self.stage, self.docker.checkpoint = previous
+
+    def physical_secondary(self, primary, secondary):
+        if self.failure is None:
+            self.failure = failure_evidence(primary, "physical", self.stage)
+        self.failure["secondary"] = [failure_evidence(secondary, "physical", self.stage)]
 
     @contextmanager
     def pressure_diagnostics(self, section):
@@ -359,6 +399,8 @@ class Laboratory:
     def compose(self, *args, role="source", timeout=120):
         self.guard_all()
         project = self.journal.value["projects"][role]
+        if args:
+            self.physical_checkpoint(args[0])
         return self.docker.call(
             "compose",
             "--project-name",
@@ -392,6 +434,7 @@ class Laboratory:
     def guard_all(self):
         if self.journal:
             for record in self.journal.value["resources"]:
+                self.physical_checkpoint("guard_inspect")
                 inspected = self.docker.inspect(record["kind"], record["id"])
                 verify_resource(record, inspected)
 
@@ -443,6 +486,7 @@ class Laboratory:
         )
         # Compose can build this one-off image and mix progress with its ID on
         # stdout. Resolve our generated name, then use only the verified ID.
+        self.physical_checkpoint("name_inspect")
         inspected = self.docker.inspect("container", name)
         record = resource_identity(
             "container", inspected, self.journal.value["run_id"], role, self.journal.value["projects"][role]
@@ -454,14 +498,30 @@ class Laboratory:
             raise QualificationError("Inspector identity proof is invalid")
         identifier = record["id"]
         self.journal.add_resources([record])
+        primary = None
         try:
+            self.physical_checkpoint("wait")
             code = self.docker.call("container", "wait", identifier, timeout=180)
+            self.physical_checkpoint("logs")
             output = self.docker.call("container", "logs", identifier)
             if int(code) != 0:
                 raise QualificationError("Lab inspector failed its requested proof")
             return json.loads(output.splitlines()[-1])
+        except BaseException as exc:
+            primary = exc
+            if self.physical_section is not None and self.failure is None:
+                self.failure = failure_evidence(exc, "physical", self.stage)
+            raise
         finally:
-            self.remove(record)
+            try:
+                self.remove(record)
+            except BaseException as secondary:
+                if primary is None or self.physical_section is None:
+                    raise
+                self.physical_secondary(primary, secondary)
+                if isinstance(secondary, (KeyboardInterrupt, SystemExit)):
+                    raise
+                primary.add_note("physical_inspector_cleanup_failed")
 
     def remove(self, record, *, volumes=False):
         validate_helper_record(record)
@@ -1217,45 +1277,68 @@ class Laboratory:
     def experiment_physical(self, url):
         from shadai.qualification.physical import host_exporter_proof
 
-        metrics = self.inspector("physical")
-        records = self.containers(STORES | WRITERS)
-        for record in records:
-            verify_resource(record, self.docker.inspect("container", record["id"]))
-        stats = self.docker.call("stats", "--no-stream", "--format", "{{json .}}", *(item["id"] for item in records))
+        with self.physical_diagnostics("inspector"):
+            metrics = self.inspector("physical")
+        with self.physical_diagnostics("services"):
+            records = self.containers(STORES | WRITERS)
+            for record in records:
+                self.physical_checkpoint("inspect")
+                verify_resource(record, self.docker.inspect("container", record["id"]))
+            self.physical_checkpoint("stats")
+            stats = self.docker.call(
+                "stats", "--no-stream", "--format", "{{json .}}", *(item["id"] for item in records))
         rows = [json.loads(line) for line in stats.splitlines()]
         assert len(rows) == len(records)
         volumes = []
         for service in sorted(STORES):
-            volume = self.volume(service)
-            helper = self.run_owned(
-                [
-                    "-c",
-                    "import os,json; s=os.statvfs('/volume'); "
-                    "print(json.dumps({'size_bytes':s.f_blocks*s.f_frsize,'available_bytes':s.f_bavail*s.f_frsize,"
-                    "'filesystem_id':s.f_fsid,'provenance':'statvfs owned volume mount'}))",
-                ],
-                volumes=[(volume, "/volume", True)],
-                root=True,
-                caps=["DAC_READ_SEARCH"],
-            )
-            volumes.append({"store": service, "volume_id": volume["id"], **self.helper_result(helper)})
-        try:
-            self.compose("up", "-d", "node-exporter")
-        finally:
-            self.discover()
-        exporter = self.containers({"node-exporter"})[0]
-        verify_resource(exporter, self.docker.inspect("container", exporter["id"]))
-        deadline = self.local_deadline(30)
-        while True:
-            try:
-                physical = host_exporter_proof(
-                    self.context, self.journal.value["projects"]["source"], exporter["id"], deadline=deadline
+            with self.physical_diagnostics("volume"):
+                volume = self.volume(service)
+                helper = self.run_owned(
+                    [
+                        "-c",
+                        "import os,json; s=os.statvfs('/volume'); "
+                        "print(json.dumps({'size_bytes':s.f_blocks*s.f_frsize,'available_bytes':s.f_bavail*s.f_frsize,"
+                        "'filesystem_id':s.f_fsid,'provenance':'statvfs owned volume mount'}))",
+                    ],
+                    volumes=[(volume, "/volume", True)],
+                    root=True,
+                    caps=["DAC_READ_SEARCH"],
                 )
-                break
-            except QualificationError:
-                if time.monotonic() >= deadline:
-                    raise
-                self.sleep(min(1, max(0, deadline - time.monotonic())))
+                volumes.append({"store": service, "volume_id": volume["id"], **self.helper_result(helper)})
+        with self.physical_diagnostics("exporter"):
+            primary = None
+            try:
+                self.compose("up", "-d", "node-exporter")
+            except BaseException as exc:
+                primary = exc
+                if self.failure is None:
+                    self.failure = failure_evidence(exc, "physical", self.stage)
+                raise
+            finally:
+                try:
+                    self.discover()
+                except BaseException as secondary:
+                    if primary is None:
+                        raise
+                    self.physical_secondary(primary, secondary)
+                    if isinstance(secondary, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    primary.add_note("physical_exporter_discover_failed")
+            exporter = self.containers({"node-exporter"})[0]
+            self.physical_checkpoint("inspect")
+            verify_resource(exporter, self.docker.inspect("container", exporter["id"]))
+            self.physical_checkpoint("observe")
+            deadline = self.local_deadline(30)
+            while True:
+                try:
+                    physical = host_exporter_proof(
+                        self.context, self.journal.value["projects"]["source"], exporter["id"], deadline=deadline
+                    )
+                    break
+                except QualificationError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    self.sleep(min(1, max(0, deadline - time.monotonic())))
         self.record(
             "physical",
             redis_and_filesystem=metrics,

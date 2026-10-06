@@ -72,6 +72,8 @@ docker compose -f docker-compose.host-monitoring.yml up -d
 
 Le laboratoire compare un scrape réel à `/proc/meminfo` et `statvfs(/)` : égalité pour les totaux, tolérance temporelle 5 % pour mémoire disponible et 1 % pour disque disponible, plancher 64 MiB. Il mesure aussi Docker stats, Redis `INFO memory` et `statvfs` de chaque volume possédé. RSS Redis, usage/cache Docker, limites et espace filesystem restent distincts ; plusieurs volumes d'un même filesystem ne sont pas additionnés. Kubernetes peut utiliser `kubelet_volume_stats_available_bytes/capacity_bytes` existants ; si absents, l'espace est **inconnu**, aucune jauge applicative physique n'est inventée.
 
+Si ce scénario échoue, `evidence.failure` indique un checkpoint physique fixe, l'opération Docker et le dernier checkpoint terminé. Ces constantes distinguent l'inspecteur, les sept services mesurés, les helpers de volumes et l'exporter ; aucun ID, argument, environnement, sortie ou message d'exception n'est publié. Une erreur secondaire de nettoyage ou de découverte reste distincte de l'erreur primaire ; une interruption reste une interruption. Ces diagnostics ne valident pas une mesure physique absente.
+
 ## Qualité du catalogue
 
 ```bash
