@@ -32,6 +32,16 @@ Console sessions use an HttpOnly, SameSite=Strict cookie that scripts cannot rea
 
 Never log authorization codes, bearer tokens, cookies or client secrets. The bundled nginx omits query strings/referrers, suppresses callback error logs, and the API image disables raw access logs. Apply equivalent controls at ingress, load balancers and tracing systems. Keep TLS verification enabled. See the [identity operations guide](docs/sso-scim.md) for configuration, rotation and validation boundaries.
 
+## Frontend dependency maintenance
+
+On 2026-10-06, the frontend lockfile was regenerated with npm to resolve `source-map-js` to `1.2.2` for [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) and `postcss-selector-parser` to `7.1.6` for [GHSA-rj75-hqrm-r3gf](https://github.com/advisories/GHSA-rj75-hqrm-r3gf). Direct dependency versions remain unchanged.
+
+Tailwind CSS `3.4.19` and `postcss-nested` `6.2.0` still request parser version 6. Scoped [npm overrides](https://docs.npmjs.com/cli/v10/configuring-npm/package-json/#overrides) pin both parents to the patched parser. Tailwind-only regeneration of this lockfile retained the vulnerable hoisted parser used by `postcss-nested`; the explicit second scope covers that resolved parent. Remove these overrides when supported parent updates resolve a patched parser without them, then repeat clean-install and CSS compatibility checks.
+
+Verified from `frontend` with Node `22.23.2` and npm `10.9.8`: clean `npm ci`; `npm ls source-map-js postcss-selector-parser --all`; `npm explain` for both packages; `npm audit --package-lock-only --include=dev --json`; `npm test` (96 passing tests); `npm run build`; and `npm run lint`. All installed and locked paths use the patched versions. Generated CSS remains byte-identical to the pre-update baseline (28,800 bytes); additional smoke checks covered selector/nesting compatibility and invalid or excessive indexed source-map offsets.
+
+That audit still reports [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) for `braces` `3.0.3`, propagated through `chokidar`, `fast-glob`, `micromatch` and Tailwind (one advisory, five affected package nodes). The advisory lists no patched release, and npm's latest `braces` remains `3.0.3` as of this verification. The affected frontend development/build chain processes repository sources; review who can supply those sources and glob patterns. The two fixes above do not constitute a clean audit.
+
 ## Supported versions
 
 Security fixes target the current development branch. Older tags have no support commitment. Review the exact commit and CI result before deployment.

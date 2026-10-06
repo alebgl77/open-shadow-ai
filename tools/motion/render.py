@@ -158,7 +158,7 @@ def common(story: str) -> Canvas:
     c.box((40, 34, 88, 82), "panel", radius=13)
     c.aperture(62, 58, 16)
     c.text(104, 43, "OPEN SHADOW AI", 21, role="bold")
-    c.text(104, 68, "ÉCLAIRER LES DÉCISIONS DSI", 12, "muted", "mono")
+    c.text(104, 68, "ÉCLAIRER LES DÉCISIONS", 12, "muted", "mono")
     c.box((806, 42, 1220, 78), "raised", radius=9)
     c.circle(825, 60, 3, "mint")
     c.text(839, 51, "ILLUSTRATION · DONNÉES FICTIVES", 17, "muted", "mono")
