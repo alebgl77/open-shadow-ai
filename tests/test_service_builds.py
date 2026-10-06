@@ -156,7 +156,10 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
         if service in {"redis", "clickhouse"}:
             assert "apk add --no-network" in recipe
             assert "ARG TARGETARCH" in recipe and "amd64) arch=x86_64" in recipe and "arm64) arch=aarch64" in recipe
-            assert "sha256sum -c -" in recipe and "apk info --exists" in recipe
+            assert "sha256sum -c -" in recipe and "apk info -e" in recipe
+            version = "3.3.7-r2" if service == "redis" else "3.5.9-r0"
+            assert f"apk info -e 'libcrypto3={version}' 'libssl3={version}'" in recipe
+            assert "--exists" not in recipe
         else:
             for guard in ("GOTOOLCHAIN=local", "GOSUMDB=sum.golang.org", "GOFLAGS=-mod=readonly", "CGO_ENABLED=0",
                           "go mod verify", "go list -m all | cmp", "go build -trimpath -buildvcs=false"):

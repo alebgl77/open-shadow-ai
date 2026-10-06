@@ -13,7 +13,7 @@ RUN case "$TARGETARCH" in \
 FROM redis:7.4.11-alpine3.21@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
 RUN --mount=type=bind,from=packages,source=/packages,target=/packages,ro \
     apk add --no-network /packages/libcrypto3.apk /packages/libssl3.apk \
-    && apk info --exists 'libcrypto3=3.3.7-r2' 'libssl3=3.3.7-r2'
+    && apk info -e 'libcrypto3=3.3.7-r2' 'libssl3=3.3.7-r2'
 LABEL io.shadai.maintenance.recipe="1" \
       io.shadai.maintenance.component="openssl" \
       io.shadai.maintenance.openssl="3.3.7-r2"

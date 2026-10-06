@@ -169,10 +169,10 @@
     "requirements/service-builds/node-exporter/modules.txt": "0f1b0bf5064fba7be1eb6d9a50b0cd8966540ee4d0de909efbc36fd1c0f77148",
     "requirements/service-builds/node-exporter/upstream.go.mod": "0e4614c617f16e308698ed1afdd0f0f055b119d4cdf015b336c095eb35fa34ed",
     "requirements/service-builds/node-exporter/upstream.go.sum": "e9457fad10a31b707ebfb68dc8378ec71f3271d04faf84f7ec8f9d231d81ea57",
-    "deploy/service-builds/Dockerfile.clickhouse": "b03afeb6eb906b5ca4d8d2e985775b4a382db6d7ee7e7fde39f8c27ced11dfd6",
+    "deploy/service-builds/Dockerfile.clickhouse": "bea27924d25f818407944a0d77931478a1440d18643a93d9f59afcb21296d93d",
     "deploy/service-builds/Dockerfile.node-exporter": "b4748ec84fff95e14c3c8a13ee3c039643cd74b6fd6cd29ea08bc67f25743d68",
     "deploy/service-builds/Dockerfile.postgres": "1a9715f158bef83338cf84069901dc6a345e048943dd77b6e930484fd05986e1",
-    "deploy/service-builds/Dockerfile.redis": "7ec5e0a5fd10c984aa69056fdf2520f07dea8f6aebff940bc6ffec080e633e3b",
+    "deploy/service-builds/Dockerfile.redis": "fbdfd201d5868278af33d9e1075631426465ee2928ee9506ee4e47f969782459",
     "requirements/service-builds/.gitattributes": "2804281a76c3635e66dabadffc7212e07184a22816f277a03591b3297539fc64",
     "deploy/service-builds/.gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
     "requirements/service-builds/NOTICE.md": "f050421e7ef1f2c4b8665a2c8b95975b04723c0e550358a003bc0b87dc67fa6d"
