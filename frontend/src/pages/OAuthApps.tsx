@@ -79,7 +79,7 @@ export default function OAuthApps() {
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1 max-w-[300px]">
                         {scopes.slice(0, 4).map((s, i) => (
-                          <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                          <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded-sm font-mono ${
                             s.toLowerCase().includes('mail') || s.toLowerCase().includes('write')
                               ? 'bg-red-500/15 text-red-400'
                               : 'bg-surface-700 text-slate-400'

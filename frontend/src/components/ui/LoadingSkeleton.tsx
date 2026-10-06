@@ -7,7 +7,7 @@ interface Props {
 }
 
 function SkeletonPulse({ className }: { className?: string }) {
-  return <div className={clsx('animate-pulse bg-surface-700/50 rounded', className)} />
+  return <div className={clsx('animate-pulse bg-surface-700/50 rounded-sm', className)} />
 }
 
 export function TableSkeleton({ rows = 8, columns = 6 }: { rows?: number; columns?: number }) {

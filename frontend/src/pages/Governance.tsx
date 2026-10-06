@@ -64,7 +64,7 @@ export default function Governance() {
                   <td className="px-4 py-3"><div className="flex flex-wrap gap-1"><ClassificationBadge classification={g.org_classification} /><ApprovalBadge status={g.approval_status} /></div></td>
                   <td className="px-4 py-3 text-xs text-slate-400">{g.owner || '—'}</td>
                   <td className="px-4 py-3">
-                    <span className="text-xs bg-surface-700 px-2 py-0.5 rounded">{g.enforcement_mode}</span>
+                    <span className="text-xs bg-surface-700 px-2 py-0.5 rounded-sm">{g.enforcement_mode}</span>
                   </td>
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {g.approved_until ? formatDistanceToNow(new Date(g.approved_until), { addSuffix: true }) : 'Never'}

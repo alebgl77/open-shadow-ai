@@ -1,7 +1,41 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss" source(none);
+@config "../tailwind.config.js";
+@source "../index.html";
+@source "./**/*.ts";
+@source "./**/*.tsx";
+/* Preserve the existing sibling margins/separators across the v4 selector change. */
+@source not inline("space-y-0.5 space-y-1 space-y-2 space-y-3 space-y-4 space-y-5 space-y-6 space-y-7 divide-x divide-surface-600/30");
+@theme {
+  --color-amber-200: #fde68a;
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-cyan-300: #67e8f9;
+  --color-cyan-400: #22d3ee;
+  --color-cyan-500: #06b6d4;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --color-gray-200: #e5e7eb;
+  --color-purple-500: #a855f7;
+  --color-red-300: #fca5a5;
+  --color-red-400: #f87171;
+  --color-red-500: #ef4444;
+  --color-rose-300: #fda4af;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-yellow-400: #facc15;
+  --color-yellow-500: #eab308;
+}
+
 @layer base {
+  *, ::before, ::after, ::backdrop, ::file-selector-button { border-color: var(--color-gray-200); }
+  button, [role="button"] { cursor: pointer; }
   :root { color-scheme: dark; font-synthesis: none; }
   body { @apply bg-surface-950 text-slate-100; }
   * { scrollbar-width: thin; scrollbar-color: #33464c #10191f; }
@@ -12,6 +46,24 @@
   td { white-space: nowrap; }
   h1,h2,h3 { text-wrap: balance; }
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
+}
+@layer utilities {
+  .space-y-0\.5 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(.125rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(.125rem * var(--tw-space-y-reverse)); }
+  .space-y-1 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(.25rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(.25rem * var(--tw-space-y-reverse)); }
+  .space-y-2 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(.5rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(.5rem * var(--tw-space-y-reverse)); }
+  .space-y-3 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(.75rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(.75rem * var(--tw-space-y-reverse)); }
+  .space-y-4 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(1rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(1rem * var(--tw-space-y-reverse)); }
+  .space-y-5 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(1.25rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(1.25rem * var(--tw-space-y-reverse)); }
+  .space-y-6 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(1.5rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(1.5rem * var(--tw-space-y-reverse)); }
+  .space-y-7 > :not([hidden]) ~ :not([hidden]) { --tw-space-y-reverse: 0; margin-top: calc(1.75rem * (1 - var(--tw-space-y-reverse))); margin-bottom: calc(1.75rem * var(--tw-space-y-reverse)); }
+  .divide-x > :not([hidden]) ~ :not([hidden]) {
+    --tw-divide-x-reverse: 0;
+    border-right-width: calc(1px * var(--tw-divide-x-reverse));
+    border-left-width: calc(1px * (1 - var(--tw-divide-x-reverse)));
+  }
+  .divide-surface-600\/30 > :not([hidden]) ~ :not([hidden]) {
+    border-color: rgb(60 77 87 / .3);
+  }
 }
 @layer components {
   .stat-card { @apply bg-surface-900 border border-surface-600/35 rounded-xl p-5; }
@@ -24,7 +76,7 @@
   .secondary-button { @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-surface-800 border border-surface-600/50 text-slate-200 font-medium text-xs hover:border-accent/40 hover:text-accent transition-colors; }
   .page-heading { @apply text-[28px] md:text-[30px] font-semibold tracking-[-.035em]; }
   .page-description { @apply text-sm text-slate-400 mt-2 leading-relaxed; }
-  .skip-link { @apply fixed top-2 left-2 z-50 bg-accent text-surface-950 px-4 py-2 rounded -translate-y-20 focus:translate-y-0; }
+  .skip-link { @apply fixed top-2 left-2 z-50 bg-accent text-surface-950 px-4 py-2 rounded-sm -translate-y-20 focus:translate-y-0; }
 }
 .login-scene { background: radial-gradient(ellipse at 5% 35%, #142a2c 0%, transparent 50%), #0c1217; }
 .nav-item.active { box-shadow: inset 2px 0 0 #65dbc6; }

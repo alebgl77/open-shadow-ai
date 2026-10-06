@@ -64,7 +64,7 @@ export default function UserView() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search users..."
-          className="w-full bg-surface-800 border border-surface-600/40 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-accent/50 placeholder-slate-600"
+          className="w-full bg-surface-800 border border-surface-600/40 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-hidden focus:border-accent/50 placeholder-slate-600"
         />
       </div>
 

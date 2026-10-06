@@ -2,6 +2,26 @@
 
 The [CI workflow](../.github/workflows/ci.yml) defines Python 3.12/3.13 lint and regression checks, frontend tests and build, PowerShell validation and Docker-backed integration.
 
+## Local frontend brace-chain verification
+
+The 2026-10-06 Tailwind 4/Vite 6.4.4 follow-up is a new source revision, separate from the historical successful CI runs below. Its authoring-host checks use Node `22.23.2` and npm `10.9.8`. The dependency tree has no named brace-chain/parser nodes and all installed `source-map-js` paths resolve to `1.2.2`; bundled affected brace parsers remain in Vite/Rollup and are mitigated on the protected watcher paths. See [frontend build security](frontend-build-security.md).
+
+| Check | Current status and limits |
+|---|---|
+| Author clean installation and suite | Offline `npm ci --no-audit` installed 318 packages from the populated cache; complete `npm ls --all` passed; all 145 tests in 12 files passed, including the existing 96 tests, 44 guard cases and five filesystem cases |
+| Author guard/config verification | Actual Vite resolution verifies asynchronous root/environment mutations, option-list preservation and captured references; the guard module is included in a focused TypeScript check |
+| Author build/type checks | Production build and lint passed; final artifact hashes are recorded below |
+| Real filesystem watch integration | Middleware-mode self-accepting module HMR hook, cached-transform invalidation and updated code passed without TCP/WebSocket clients; opt-in build output rebuilt and default build terminated; benign Vite and private bundled Rollup `watch/add` controls observed actual glob alternatives versus literal filename/change; no stack-exhaustion reproduction is claimed |
+| Dependency audit | Earlier regenerated-graph audit saved at `2026-10-06T11:49:12Z` reported zero known findings; fresh final audit is pending because sandbox registry DNS failed and automatic approval review rejected metadata disclosure to npm |
+| Independent compatibility verification | Offline `npm ci --offline --no-audit` installed 318 packages; the complete development/optional dependency tree and all 145 tests in 12 files passed; production build and lint passed, including the guard TypeScript check; generated baseline/candidate static CSS passed all 83 effective palette comparisons and 15 semantic assertions covering divider width/color, fixed nested spacing, radius, fonts, focus and important zero padding; ring declarations were checked; this does not prove rendered browser equality |
+| Independent security review | APPROVE for the current default resolved factory paths: bundled watcher call paths and immutable root/build/environment reference chains were reviewed with no actionable P1/P2 findings; the mitigation and private Rollup/HMR limits above remain applicable |
+| Real browser comparison | Unavailable locally because browser-control sandbox initialization failed; no pixel or rendered-layout pass is claimed |
+| Mandatory CI/platform checks | Final-source Ubuntu ARM frontend, Docker Alpine/musl and native Windows workflow results are pending; no mandatory gate has been weakened |
+
+The saved baseline comes from `6f76ca89391e19cecc66f73be757c4016c815139`: CSS 28,800 bytes, SHA-256 `797f47cadf9f1e569bb2f4aec5b24e674c83b010b81e94bba5fb67a7fe11d939`. Tailwind 4 changes generated CSS. Preservation claims require semantic and supported-browser verification rather than byte comparison. Three independent local code checks passed on the same frozen version: author verification, independent compatibility QA and independent security review. The audit, rendered-browser and platform-CI checks remain pending.
+
+The independently compared candidate stylesheet is `index-B9Vljf4J.css`, 38,281 bytes, SHA-256 `06574beb46e5c84b0efb5d926d7c29fcbb267d9b18db1bbef164de5b1ace06dc`. Initial static findings on divider color, a nested spacing variable and the rose palette were corrected before this comparison. A later source change requires another artifact comparison.
+
 ## Verified collector hardening CI run
 
 Scoped credentials/rotation, persistent collector queues and bounded replay, operational health, and per-observation retention/pseudonymization with honest risk timestamps passed all six jobs in [CI run 37435294695](https://github.com/alebgl77/open-shadow-ai/actions/runs/37435294695) for source commit [f2c5fd8015f5d22aa919b0a1a75d17fd8d58b973](https://github.com/alebgl77/open-shadow-ai/commit/f2c5fd8015f5d22aa919b0a1a75d17fd8d58b973), on 6 October 2026. Every mandatory workflow gate executed successfully; no job or step was skipped.
