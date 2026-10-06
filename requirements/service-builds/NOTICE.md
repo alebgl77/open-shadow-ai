@@ -13,13 +13,26 @@ through `proxy.golang.org` and `sum.golang.org`, verifies the module cache,
 checks the complete selected graph and builds with `-mod=readonly`,
 `CGO_ENABLED=0`, `-trimpath` and `-buildvcs=false`.
 
-The gosu source and module dependencies are unchanged. The node_exporter
-source is unchanged; its only module changes are x/crypto 0.54.0 to 0.55.0
-and the x/text 0.40.0 to 0.41.0 change required by x/crypto's module graph.
+Both publisher sources are unchanged. gosu updates only x/sys 0.1.0 to
+0.44.0, the fixed version reported for CVE-2026-39824; that module requires
+the Go language directive to move from 1.20 to 1.25.0. node_exporter updates
+x/crypto 0.54.0 to 0.56.0 (superseding the first maintained build's 0.55.0),
+which fixes the reported CVE-2026-56855 and CVE-2026-78662. Its Go language
+directive moves from 1.25.0 to the required 1.26.0; the compiler stays 1.26.6.
+The earlier x/text 0.40.0 to 0.41.0 MVS update remains required. No other
+selected module version changes in either maintained build.
 The reviewed `go.mod.diff` and upstream module files record that difference.
 The node_exporter binary reports `1.12.1-shadai.1`; gosu retains its upstream
 1.19 version and reports the new compiler. Image labels identify maintenance
 recipe 1 and the upstream source commit.
+
+The module-level GO-2026-5932 advisory remains visible: x/crypto's OpenPGP
+packages are unmaintained and have no fixed version. Updating x/crypto does
+not resolve that advisory or establish whether those specific imports are
+used in a binary. Native bound scans and separate coverage analysis remain
+required; unknown main-module versions in generated SBOMs are not invented.
+The x/sys advisory concerns Windows NewNTUnicodeString; its module update
+does not establish that this Windows function is present in a Linux binary.
 
 OpenSSL APKs come from the official Alpine repository for the runtime's
 existing distribution and native architecture. Redis uses 3.3.7-r2 on Alpine
@@ -58,4 +71,8 @@ tags do not satisfy that contract.
 Primary sources: [gosu 1.19](https://github.com/tianon/gosu/releases/tag/1.19),
 [node_exporter 1.12.1](https://github.com/prometheus/node_exporter/releases/tag/v1.12.1),
 [Go downloads](https://go.dev/dl/), [Go checksum database](https://go.dev/ref/mod#authenticating),
-[Alpine package repositories](https://dl-cdn.alpinelinux.org/alpine/).
+[Alpine package repositories](https://dl-cdn.alpinelinux.org/alpine/),
+[x/sys advisory](https://pkg.go.dev/vuln/GO-2026-5024),
+[x/crypto SSH advisories](https://pkg.go.dev/vuln/GO-2026-6354),
+[second SSH advisory](https://pkg.go.dev/vuln/GO-2026-6355),
+[OpenPGP residual](https://pkg.go.dev/vuln/GO-2026-5932).

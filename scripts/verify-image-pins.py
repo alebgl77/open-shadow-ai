@@ -101,8 +101,10 @@ def check_service_builds(root: Path, images: dict) -> dict:
         directory = root / "requirements/service-builds" / name
         upstream = (directory / "upstream.go.mod").read_text(encoding="utf-8")
         maintained = (directory / "go.mod").read_text(encoding="utf-8")
-        expected = upstream if name == "gosu" else upstream.replace(
-            "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.55.0"
+        expected = upstream.replace("go 1.20\n", "go 1.25.0\n").replace(
+            "golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0"
+        ) if name == "gosu" else upstream.replace("go 1.25.0\n", "go 1.26.0\n").replace(
+            "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.56.0"
         ).replace("golang.org/x/text v0.40.0", "golang.org/x/text v0.41.0")
         if maintained != expected:
             raise ValueError("Maintained module changes exceed the approved targeted dependency updates")

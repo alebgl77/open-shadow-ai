@@ -155,26 +155,26 @@
     }
   },
   "files": {
-    "requirements/service-builds/gosu/go.mod": "0475f1708db81d718b633faf2d9dd64695037eabdc8562125060607bcb01b2ba",
-    "requirements/service-builds/gosu/go.mod.diff": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
-    "requirements/service-builds/gosu/go.sum": "2a8f3fb6adb84839bbb9999f12f1416fb86c184135aaa1c2e489b35203c08346",
+    "requirements/service-builds/gosu/go.mod": "c29d3a92f3cae2a45faab57ad6656fb54e8d77cd26248b3f859dcef6bbcc6e2a",
+    "requirements/service-builds/gosu/go.mod.diff": "23a2612ec7ec538f4ac374bfca7c74302fe31fea9164714f4a820a513bc8f19f",
+    "requirements/service-builds/gosu/go.sum": "fe68cfefef81c6e10bce5a8fc1e1ff6852ff878fff639346ff955515af73057b",
     "requirements/service-builds/gosu/LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-    "requirements/service-builds/gosu/modules.txt": "b70689176f6f20583005676536c5bb86b46a5249499fdf9bdf6920728b89ed6a",
+    "requirements/service-builds/gosu/modules.txt": "368c1cf68f4dd744f9e452e66b49b446f292564aef9f4261e8a50f0493595893",
     "requirements/service-builds/gosu/upstream.go.mod": "0475f1708db81d718b633faf2d9dd64695037eabdc8562125060607bcb01b2ba",
     "requirements/service-builds/gosu/upstream.go.sum": "2a8f3fb6adb84839bbb9999f12f1416fb86c184135aaa1c2e489b35203c08346",
-    "requirements/service-builds/node-exporter/go.mod": "97771f3e918c850a6eee90091d30fa34da928731c9db061e758df2ad5cebdfb5",
-    "requirements/service-builds/node-exporter/go.mod.diff": "9298e772e62f6351fce00021a04535a9027d1ec45ca17dc9408d1288da7db8d0",
-    "requirements/service-builds/node-exporter/go.sum": "3dabbe3836fce2c930051905d8387c1244a72aefc3207b1f8afc9f14826d9d61",
+    "requirements/service-builds/node-exporter/go.mod": "261fad93f8f76ebdce7317674fd68256f95e59f6cb435ca1cd351083ac8f65bb",
+    "requirements/service-builds/node-exporter/go.mod.diff": "241c0551f42b04e61658e1ac8f2af8ceccaaf191ba556409a751f708bf1d6ad0",
+    "requirements/service-builds/node-exporter/go.sum": "f8e510431472d38ed55d0a2e3d7839a0d2a78fe591e0c41e78205dbf6b8f02c0",
     "requirements/service-builds/node-exporter/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-    "requirements/service-builds/node-exporter/modules.txt": "0f1b0bf5064fba7be1eb6d9a50b0cd8966540ee4d0de909efbc36fd1c0f77148",
+    "requirements/service-builds/node-exporter/modules.txt": "45df7e15ac5939a832aa9bfcc3e488ca8cbb69c8c28b2fc766e2d0ef59e16d54",
     "requirements/service-builds/node-exporter/upstream.go.mod": "0e4614c617f16e308698ed1afdd0f0f055b119d4cdf015b336c095eb35fa34ed",
     "requirements/service-builds/node-exporter/upstream.go.sum": "e9457fad10a31b707ebfb68dc8378ec71f3271d04faf84f7ec8f9d231d81ea57",
     "deploy/service-builds/Dockerfile.clickhouse": "bea27924d25f818407944a0d77931478a1440d18643a93d9f59afcb21296d93d",
-    "deploy/service-builds/Dockerfile.node-exporter": "b4748ec84fff95e14c3c8a13ee3c039643cd74b6fd6cd29ea08bc67f25743d68",
-    "deploy/service-builds/Dockerfile.postgres": "1a9715f158bef83338cf84069901dc6a345e048943dd77b6e930484fd05986e1",
+    "deploy/service-builds/Dockerfile.node-exporter": "821d523de49e3b31148e6ed2c6fb2813330077c662d993850e60ad486525b095",
+    "deploy/service-builds/Dockerfile.postgres": "9448efc06b0ecc77ae0ad0167cff1a3ab239e2bf1acddd5bed3807d1d56d2ead",
     "deploy/service-builds/Dockerfile.redis": "fbdfd201d5868278af33d9e1075631426465ee2928ee9506ee4e47f969782459",
     "requirements/service-builds/.gitattributes": "2804281a76c3635e66dabadffc7212e07184a22816f277a03591b3297539fc64",
     "deploy/service-builds/.gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    "requirements/service-builds/NOTICE.md": "f050421e7ef1f2c4b8665a2c8b95975b04723c0e550358a003bc0b87dc67fa6d"
+    "requirements/service-builds/NOTICE.md": "58f6705d6bbac65573efa144638f5bcd2f90595e1bdb236cfcfb46266891d12d"
   }
 }

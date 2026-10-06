@@ -1,6 +1,6 @@
 module github.com/prometheus/node_exporter
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/alecthomas/kingpin/v2 v2.4.0
@@ -53,7 +53,7 @@ require (
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

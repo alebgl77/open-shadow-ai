@@ -9,7 +9,7 @@ RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.6 \
     && rm /tmp/source.tar.gz
 COPY requirements/service-builds/gosu/go.mod requirements/service-builds/gosu/go.sum ./
 COPY requirements/service-builds/gosu/modules.txt /locked-modules.txt
-RUN printf '%s\n' '0475f1708db81d718b633faf2d9dd64695037eabdc8562125060607bcb01b2ba  go.mod' '2a8f3fb6adb84839bbb9999f12f1416fb86c184135aaa1c2e489b35203c08346  go.sum' 'b70689176f6f20583005676536c5bb86b46a5249499fdf9bdf6920728b89ed6a  /locked-modules.txt' | sha256sum -c - \
+RUN printf '%s\n' 'c29d3a92f3cae2a45faab57ad6656fb54e8d77cd26248b3f859dcef6bbcc6e2a  go.mod' 'fe68cfefef81c6e10bce5a8fc1e1ff6852ff878fff639346ff955515af73057b  go.sum' '368c1cf68f4dd744f9e452e66b49b446f292564aef9f4261e8a50f0493595893  /locked-modules.txt' | sha256sum -c - \
     && go mod download \
     && go mod verify \
     && go list -m all | cmp - /locked-modules.txt \

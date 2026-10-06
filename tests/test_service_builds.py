@@ -138,15 +138,41 @@ def test_release_sources_and_only_approved_module_difference():
     directory = ROOT / "requirements/service-builds/node-exporter"
     before = (directory / "upstream.go.mod").read_text()
     after = (directory / "go.mod").read_text()
-    assert after == before.replace("golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.55.0").replace(
+    assert after == before.replace("go 1.25.0\n", "go 1.26.0\n").replace(
+        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.56.0").replace(
         "golang.org/x/text v0.40.0", "golang.org/x/text v0.41.0")
     added_sums = set((directory / "go.sum").read_text().splitlines()) - \
         set((directory / "upstream.go.sum").read_text().splitlines())
-    assert len(added_sums) == 4
-    assert all(line.startswith(("golang.org/x/crypto v0.55.0", "golang.org/x/text v0.41.0")) for line in added_sums)
+    assert len(added_sums) == 6
+    assert all(line.startswith(("golang.org/x/crypto v0.55.0", "golang.org/x/crypto v0.56.0",
+                                "golang.org/x/text v0.41.0")) for line in added_sums)
     gosu = ROOT / "requirements/service-builds/gosu"
-    assert (gosu / "go.mod").read_bytes() == (gosu / "upstream.go.mod").read_bytes()
-    assert (gosu / "go.sum").read_bytes() == (gosu / "upstream.go.sum").read_bytes()
+    assert (gosu / "go.mod").read_text() == (gosu / "upstream.go.mod").read_text().replace(
+        "go 1.20\n", "go 1.25.0\n").replace("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")
+    gosu_sums = set((gosu / "go.sum").read_text().splitlines()) - \
+        set((gosu / "upstream.go.sum").read_text().splitlines())
+    assert len(gosu_sums) == 2 and all(line.startswith("golang.org/x/sys v0.44.0") for line in gosu_sums)
+
+
+@pytest.mark.parametrize("component,before,after", [
+    ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.1.0"),
+    ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.45.0"),
+    ("gosu", "github.com/moby/sys/user v0.1.0", "github.com/moby/sys/user v0.2.0"),
+    ("node-exporter", "golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.55.0"),
+    ("node-exporter", "golang.org/x/text v0.41.0", "golang.org/x/text v0.42.0"),
+    ("node-exporter", "go 1.26.0", "go 1.25.0"),
+])
+def test_refreshed_hash_cannot_authorize_stale_or_unapproved_go_delta(service_tree, component, before, after):
+    import hashlib
+
+    name = f"requirements/service-builds/{component}/go.mod"
+    path = service_tree / name
+    value = path.read_text().replace(before, after)
+    path.write_text(value)
+    edit_manifest(service_tree, lambda manifest: manifest["files"].update(
+        {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
+    with pytest.raises(ValueError, match="approved targeted dependency updates"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
 
 
 def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
