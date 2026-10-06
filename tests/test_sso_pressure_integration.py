@@ -11,7 +11,7 @@ import httpx
 import pytest
 import redis.asyncio as aioredis
 from fastapi import FastAPI
-from redis.exceptions import OutOfMemoryError
+from redis_pressure_fixture import sustained_pressure
 
 from shadai.api import sso
 from shadai.config import OIDCSettings, ShadAIConfig
@@ -59,7 +59,8 @@ async def sso_pressure_redis():
         await client.aclose()
 
 
-async def test_real_redis_oom_before_allocation_and_owned_release_recovers(sso_pressure_redis, monkeypatch):
+async def test_real_redis_oom_before_allocation_and_owned_release_recovers(
+        sso_pressure_redis, monkeypatch, record_property):
     redis = sso_pressure_redis
     namespace = "test-sso-pressure-" + uuid4().hex
     config = ShadAIConfig(tenant_id=namespace, oidc=OIDCSettings(
@@ -72,7 +73,7 @@ async def test_real_redis_oom_before_allocation_and_owned_release_recovers(sso_p
     monkeypatch.setattr(sso, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(sso, "OIDCClient", lambda settings: SimpleNamespace(authorization_url=provider))
     original_store = sso.store_bound
-    handles, fillers = [], []
+    handles = []
 
     async def remember(*args):
         handle = await original_store(*args)
@@ -85,40 +86,20 @@ async def test_real_redis_oom_before_allocation_and_owned_release_recovers(sso_p
     await redis.set(sentinel, "preserve-peer-owned-state", ex=120)
     app = FastAPI()
     app.include_router(sso.router)
+    primary = None
     try:
-        for index in range(64):
-            key = f"{namespace}:filler:{index}"
-            fillers.append(key)  # Track even a lost reply; cleanup owns the entire namespace.
-            try:
-                await redis.set(key, "x" * (1024 * 1024), ex=120)
-            except OutOfMemoryError:
-                break
-        else:
-            pytest.fail("Bounded owned filler did not produce actual Redis OOM")
-        # A large rejected SET may temporarily count its query buffer. Top up with
-        # small owned keys until read-only INFO observes sustained pressure.
-        for index in range(2048):
-            memory = await redis.info("memory")
-            if memory["used_memory"] - memory.get("mem_not_counted_for_evict", 0) > 32 * 1024 * 1024:
-                break
-            key = f"{namespace}:filler:small:{index}"
-            fillers.append(key)
-            try:
-                await redis.set(key, "x" * 1024, ex=120)
-            except OutOfMemoryError:
-                await asyncio.sleep(0.001)
-        else:
-            pytest.fail("Redis OOM did not persist after the large query buffer was released")
-        before = [await redis.dump(key) for key in admission.keys]
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url=config.oidc.public_base_url
         ) as http:
-            response = await http.get("/api/v1/auth/sso/login")
-            assert response.status_code == 503 and not provider.called and not handles
-            assert [await redis.dump(key) for key in admission.keys] == before
-            assert await redis.get(sentinel) == "preserve-peer-owned-state"
-            await redis.delete(*fillers)
-            fillers.clear()
+            async with sustained_pressure(redis, prefix=namespace + ":filler:",
+                                          chunk_bytes=1024 * 1024, max_fill=64) as proof:
+                before = [await redis.dump(key) for key in admission.keys]
+                response = await http.get("/api/v1/auth/sso/login")
+                assert response.status_code == 503 and not provider.called and not handles
+                assert [await redis.dump(key) for key in admission.keys] == before
+                assert await redis.get(sentinel) == "preserve-peer-owned-state"
+            for key, value in proof.items():
+                record_property(key, value)
             seconds, _ = await redis.time()
             if seconds % 60 >= 55:
                 await asyncio.sleep(61 - seconds % 60)
@@ -130,8 +111,26 @@ async def test_real_redis_oom_before_allocation_and_owned_release_recovers(sso_p
             assert [await redis.dump(key) for key in admission.keys] == before_denial
             assert await redis.zcard(admission.keys[2]) == 0
             assert await redis.get(sentinel) == "preserve-peer-owned-state"
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
-        owned = [*fillers, *admission.keys, *("oidc:state:" + digest(handle) for handle in handles), sentinel]
-        await redis.delete(*owned)
-        verify_pressure_policy(await redis.config_get("maxmemory", "maxmemory-policy", "appendonly"),
-                               await redis.info("persistence"))
+        owned = [*admission.keys, *("oidc:state:" + digest(handle) for handle in handles), sentinel]
+        cleanup_error = None
+        try:
+            async with asyncio.timeout(5):
+                await redis.delete(*owned)
+        except BaseException as exc:
+            cleanup_error = exc
+            if primary is not None:
+                primary.add_note("sso_pressure_owned_cleanup_failed")
+        try:
+            async with asyncio.timeout(5):
+                verify_pressure_policy(await redis.config_get("maxmemory", "maxmemory-policy", "appendonly"),
+                                       await redis.info("persistence"))
+        except BaseException as exc:
+            cleanup_error = cleanup_error or exc
+            if primary is not None:
+                primary.add_note("sso_pressure_policy_verification_failed")
+        if primary is None and cleanup_error is not None:
+            raise cleanup_error

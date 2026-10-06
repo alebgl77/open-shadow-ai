@@ -1,21 +1,163 @@
 """Required, private lab-only Redis pressure/AOF fixture prerequisites.
 
-The host qualification orchestrator owns stop/copy/recreate. This module never
-uses Docker, changes maxmemory, imports an archive, or prints credentials.
+The host qualification orchestrator owns stop/copy/recreate. Only the explicitly
+validated pressure fixture receives bounded, temporary maxmemory injection.
+This module never uses Docker, imports an archive, or prints credentials.
 """
 
 import asyncio
 import json
 import os
+import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import redis.asyncio as aioredis
+from redis.exceptions import OutOfMemoryError
 
 from shadai.utils.delivery_spool import _check_path, _private_ancestors
 
 
 class PressurePrerequisiteError(RuntimeError):
     pass
+
+
+ORIGINAL_LIMIT = 32 * 1024 * 1024
+PRESSURE_MARGIN = 1024 * 1024
+
+
+def _injection_target(redis, prefix, chunk_bytes, max_fill):
+    connection = redis.connection_pool.connection_kwargs
+    if (os.environ.get("SHADAI_REQUIRE_REDIS_PRESSURE") != "1" or
+            os.environ.get("SHADAI_REDIS_PRESSURE_HOST") != "labredis-pressure" or
+            os.environ.get("SHADAI_REDIS_PRESSURE_PORT") != "6379" or
+            (connection.get("host"), connection.get("port"), connection.get("db", 0)) !=
+            ("labredis-pressure", 6379, 0)):
+        raise PressurePrerequisiteError("Explicit pressure lab fixture required")
+    if (type(prefix) is not str or
+            prefix != "pressure:fill:" and not re.fullmatch(r"test-sso-pressure-[a-f0-9]{32}:filler:", prefix) or
+            type(chunk_bytes) is not int or not 1024 <= chunk_bytes <= PRESSURE_MARGIN or
+            type(max_fill) is not int or not 1 <= max_fill <= 256 or chunk_bytes * max_fill > 64 * PRESSURE_MARGIN):
+        raise PressurePrerequisiteError("Invalid owned pressure filler bounds")
+
+
+async def _injection_policy(redis, expected):
+    policy = await redis.config_get("maxmemory", "maxmemory-policy", "appendonly")
+    persistence = await redis.info("persistence")
+    if (policy.get("maxmemory") != str(expected) or policy.get("maxmemory-policy") != "noeviction" or
+            policy.get("appendonly") != "yes" or type(persistence.get("aof_enabled")) is not int or
+            persistence.get("aof_enabled") != 1 or
+            persistence.get("aof_last_write_status") != "ok"):
+        raise PressurePrerequisiteError("Pressure fixture configuration mismatch")
+
+
+def _heap(memory):
+    used, excluded = memory.get("used_memory"), memory.get("mem_not_counted_for_evict", 0)
+    if type(used) is not int or type(excluded) is not int or not 0 <= excluded <= used <= 64 * PRESSURE_MARGIN:
+        raise PressurePrerequisiteError("Invalid measured pressure heap")
+    return used - excluded
+
+
+async def _restore_pressure(redis, fillers):
+    failures = []
+
+    async def attempt(note, operation):
+        try:
+            # Each safety operation gets a fresh budget outside setup/body deadlines.
+            async with asyncio.timeout(5):
+                await operation()
+        except BaseException:
+            failures.append(note)
+
+    async def restore():
+        if await redis.config_set("maxmemory", ORIGINAL_LIMIT) is not True:
+            raise PressurePrerequisiteError("Pressure restore refused")
+
+    async def release():
+        if fillers:
+            await redis.delete(*fillers)
+            if await redis.exists(*fillers):
+                raise PressurePrerequisiteError("Owned pressure cleanup refused")
+
+    await attempt("pressure_restore_failed", restore)
+    await attempt("pressure_owned_cleanup_failed", release)
+    await attempt("pressure_restore_verification_failed", lambda: _injection_policy(redis, ORIGINAL_LIMIT))
+    return failures
+
+
+async def _finish_pressure_cleanup(redis, fillers):
+    task = asyncio.create_task(_restore_pressure(redis, fillers))
+    interrupted = None
+    while True:
+        try:
+            return await asyncio.shield(task), interrupted
+        except asyncio.CancelledError as exc:
+            # Finish the independently bounded cleanup even if the caller is cancelled again.
+            interrupted = interrupted or exc
+            if task.done():
+                if task.cancelled():
+                    return ["pressure_cleanup_failed"], interrupted
+                return task.result(), interrupted
+
+
+@asynccontextmanager
+async def sustained_pressure(redis, *, prefix, chunk_bytes, max_fill):
+    """Controlled lab-only OOM injection; never a 32 MiB capacity certification."""
+    _injection_target(redis, prefix, chunk_bytes, max_fill)
+    keys = [prefix + str(index) for index in range(max_fill)]
+    async with asyncio.timeout(10):
+        await _injection_policy(redis, ORIGINAL_LIMIT)
+        if await redis.exists(*keys):
+            raise PressurePrerequisiteError("Pressure filler collision")
+    fillers, primary, proof = [], None, None
+    try:
+        async with asyncio.timeout(30):
+            for key in keys:
+                fillers.append(key)  # Include a write whose reply may be lost.
+                try:
+                    await redis.set(key, "x" * chunk_bytes)
+                except OutOfMemoryError:
+                    break
+            else:
+                raise PressurePrerequisiteError("Bounded filler did not reach Redis OOM")
+            measured = _heap(await redis.info("memory"))
+            if measured < 2 * PRESSURE_MARGIN:
+                raise PressurePrerequisiteError("Measured pressure heap too small")
+            injected = min(ORIGINAL_LIMIT, measured - PRESSURE_MARGIN)
+            if not PRESSURE_MARGIN <= injected < measured:
+                raise PressurePrerequisiteError("Invalid pressure injection limit")
+            if await redis.config_set("maxmemory", injected) is not True:
+                raise PressurePrerequisiteError("Pressure injection refused")
+            await _injection_policy(redis, injected)
+            pressure_heap = _heap(await redis.info("memory"))
+            if pressure_heap <= injected:
+                raise PressurePrerequisiteError("Sustained pressure not observed")
+            proof = {"kind": "controlled_lab_oom", "original_maxmemory_bytes": ORIGINAL_LIMIT,
+                     "injected_maxmemory_bytes": injected, "post_fill_heap_bytes": measured,
+                     "pressure_heap_bytes": pressure_heap, "restored_maxmemory_bytes": None}
+        async with asyncio.timeout(60):
+            yield proof
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        failures, interrupted = await _finish_pressure_cleanup(redis, fillers)
+        if primary is not None:
+            for note in failures:
+                primary.add_note(note)
+            if interrupted:
+                primary.add_note("pressure_cleanup_cancelled")
+        elif interrupted is not None:
+            for note in failures:
+                interrupted.add_note(note)
+            raise interrupted
+        elif failures:
+            error = PressurePrerequisiteError("Pressure cleanup refused")
+            for note in failures:
+                error.add_note(note)
+            raise error
+        if proof is not None and not failures:
+            proof["restored_maxmemory_bytes"] = ORIGINAL_LIMIT
 
 
 async def pressure_connection():

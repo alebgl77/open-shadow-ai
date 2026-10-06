@@ -87,7 +87,8 @@ class StreamConsumer:
         # Repeated failing backlog must not starve fresh, healthy observations.
         fresh = await self.redis.xreadgroup(
             self.group, self.consumer, {stream: ">" for stream in self.streams}, count=50,
-            block=1 if recovered else 5000,
+            # Leave a margin below redis-py's five-second socket deadline.
+            block=1 if recovered else 1000,
         )
         if self.operations:
             await self.operations.pulse('last_poll_at')

@@ -1,14 +1,19 @@
 """Identity, monotonic progress and local liveness fail closed per process."""
 
+import asyncio
 import copy
 import json
 import os
+import time
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+import redis.asyncio as aioredis
+from redis.exceptions import ConnectionError
 
 from shadai.workers import probe
+from shadai.workers.streams import StreamConsumer
 
 
 @pytest.fixture
@@ -180,3 +185,59 @@ def test_private_probe_file_symlink_hardlink_partial_huge(proc, value, tmp_path,
     os.link(other, path)
     with pytest.raises(ValueError):
         probe.read_probe("ingest", root=root, proc=proc, now=100)
+
+
+class DelayedEmptyRedis:
+    """Use the genuine redis-py socket deadline with a bounded synthetic parser."""
+
+    def __init__(self, error=None):
+        client = aioredis.from_url("redis://rca.invalid:6379/0", decode_responses=True)
+        self.connection = client.connection_pool.make_connection()
+        assert self.connection.socket_timeout == 5
+        self.error = error
+        self.xautoclaim = AsyncMock(return_value=["0-0", [], []])
+
+    async def xreadgroup(self, *args, block, **kwargs):
+        async def parser(**unused):
+            if self.error:
+                raise self.error
+            # A server timeout need not be delivered at its exact deadline.
+            await asyncio.sleep(block / 1000 + 0.05)
+            return []
+
+        self.connection._read_response_from_parser = parser
+        return await self.connection.read_response(disconnect_on_error=False)
+
+
+def process_witness(monkeypatch):
+    witness = probe.ProcessProbe("ingest")
+    now = time.monotonic()
+    witness.data = {"initialized": True, "heartbeat_monotonic": now, "last_poll_monotonic": None,
+                    "last_successful_cycle_monotonic": None, "phase": "idle", "phase_started_monotonic": now}
+    monkeypatch.setattr(probe, "read_probe", lambda *args, **kwargs: (witness.data, time.monotonic()))
+    return witness
+
+
+async def test_idle_stream_returns_before_real_default_client_deadline(monkeypatch):
+    witness = process_witness(monkeypatch)
+    consumer = StreamConsumer(DelayedEmptyRedis(), "ingest_group", "deadline-test", ["events:dns"], probe=witness)
+    task = asyncio.create_task(consumer.read())
+    await asyncio.sleep(0)
+    assert witness.data["phase"] == "poll" and witness.data["last_poll_monotonic"] is None
+    assert probe.local_check("startup", "ingest") and probe.local_check("liveness", "ingest")
+    assert not probe.local_check("readiness", "ingest")
+    assert await task == []
+    assert witness.data["last_poll_monotonic"] is not None
+    assert probe.local_check("readiness", "ingest")
+
+
+async def test_failed_stream_read_preserves_null_progress_and_unreadiness(monkeypatch):
+    witness = process_witness(monkeypatch)
+    failure = ConnectionError("synthetic dependency unavailable")
+    consumer = StreamConsumer(DelayedEmptyRedis(failure), "ingest_group", "deadline-test", ["events:dns"],
+                              probe=witness)
+    with pytest.raises(ConnectionError) as caught:
+        await consumer.read()
+    assert caught.value is failure
+    assert witness.data["last_poll_monotonic"] is None and witness.data["phase"] == "failed"
+    assert probe.local_check("liveness", "ingest") and not probe.local_check("readiness", "ingest")

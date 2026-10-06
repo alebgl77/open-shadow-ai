@@ -1,6 +1,5 @@
 """Mandatory two-phase pressure/AOF acceptance for the isolated lab service."""
 
-import asyncio
 import hashlib
 import json
 import os
@@ -8,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from redis.exceptions import OutOfMemoryError
-from redis_pressure_fixture import pressure_connection
+from redis_pressure_fixture import pressure_connection, sustained_pressure
 
 from shadai.config import RedisQueueSettings
 from shadai.utils.delivery_spool import _check_path, _private_ancestors, _private_directory
@@ -57,45 +56,19 @@ def read_manifest(path):
 
 async def exercise_oom(redis):
     assert await redis.dbsize() == 0, "Pressure seed fixture must initially be empty"
-    fills = []
     payload = [{"stream": "events:dns", "fields": {"data": "immutable pressure synthetic"}},
                {"stream": "events:proxy", "fields": {"data": "immutable pressure synthetic"}}]
-    try:
-        for index in range(256):
-            key = f"pressure:fill:{index}"
-            fills.append(key)  # Own cleanup even if a reply is lost.
-            try:
-                await redis.set(key, "x" * (256 * 1024))
-            except OutOfMemoryError:
-                break
-        else:
-            pytest.fail("32 MiB fixture did not reach noeviction memory pressure")
-        # A large rejected SET may temporarily count its query buffer. Top up with
-        # small owned keys until read-only INFO observes sustained pressure.
-        for index in range(2048):
-            memory = await redis.info("memory")
-            if memory["used_memory"] - memory.get("mem_not_counted_for_evict", 0) > 32 * 1024 * 1024:
-                break
-            key = f"pressure:fill:small:{index}"
-            fills.append(key)
-            try:
-                await redis.set(key, "x" * 1024, ex=120)
-            except OutOfMemoryError:
-                await asyncio.sleep(0.001)
-        else:
-            pytest.fail("Redis OOM did not persist after the large query buffer was released")
+    async with sustained_pressure(redis, prefix="pressure:fill:", chunk_bytes=256 * 1024, max_fill=256) as proof:
         # A refused first allocation/EVAL leaves both destinations unchanged.
         with pytest.raises(OutOfMemoryError):
             await admit_records(redis, payload)
         assert await redis.xlen("events:dns") == await redis.xlen("events:proxy") == 0
-    finally:
-        if fills:
-            await redis.delete(*fills)
     identifiers = await admit_records(redis, payload)
     assert len(identifiers) == 2
     for row, ident in zip(payload, identifiers, strict=True):
         assert (await redis.xrange(row["stream"], ident, ident))[0][1] == row["fields"]
     await redis.delete("events:dns", "events:proxy")
+    return proof
 
 
 async def seed_graph(redis):
@@ -164,14 +137,16 @@ async def assert_restored(redis, manifest):
     assert all([await redis.ttl(refs_key(stream)) == -1 for stream in STREAMS])
 
 
-async def test_required_pressure_and_aof_phase():
+async def test_required_pressure_and_aof_phase(record_property):
     # In required mode missing credentials/service/settings raises and FAILS;
     # the host prerequisite CLI also exits 2, never a silent green skip.
     redis, mode, path = await pressure_connection()
     try:
         if mode == "seed":
-            await exercise_oom(redis)
-            write_manifest(path, await seed_graph(redis))
+            proof = await exercise_oom(redis)
+            for key, value in proof.items():
+                record_property(key, value)
+            write_manifest(path, {**await seed_graph(redis), "pressure_injection": proof})
         else:
             await assert_restored(redis, read_manifest(path))
     finally:
