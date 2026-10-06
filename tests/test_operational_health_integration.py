@@ -23,6 +23,9 @@ pytestmark = [pytest.mark.integration,
 CHILD = """
 import asyncio, json, os, sys, time
 import redis.asyncio as aioredis
+import structlog
+
+structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
 from shadai.utils import operations
 from shadai.workers.streams import StreamConsumer
 

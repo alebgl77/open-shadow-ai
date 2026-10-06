@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
-from shadai.utils.delivery_spool import DurableSpool, SpoolError, _check_path
+from shadai.utils.delivery_spool import DurableSpool, SpoolError, _check_path, _windows_private
 
 _FIXTURE_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
@@ -72,9 +72,68 @@ switch ($env:SHADAI_SPOOL_ACL_ACTION) {
                 $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band 852032) })
         if ($replacement.Count) { exit 23 }
     }
+    'inherit-only' {
+        & $icacls $path /grant '*S-1-5-32-545:(OI)(CI)(IO)M' /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { exit 24 }
+        $acl = Get-Acl -LiteralPath $path
+        $templates = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+            Where-Object { $_.IdentityReference.Value -eq $publicSid.Value -and
+                $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band 852032) -and
+                ($_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) })
+        $effective = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+            Where-Object { $_.IdentityReference.Value -eq $publicSid.Value -and
+                $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band 852032) -and
+                -not ($_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) })
+        if (-not $templates.Count -or $effective.Count) { exit 25 }
+    }
+    'verify-effective-inherited' {
+        $acl = Get-Acl -LiteralPath $path
+        $effective = @($acl.GetAccessRules($false, $true, [Security.Principal.SecurityIdentifier]) |
+            Where-Object { $_.IdentityReference.Value -eq $publicSid.Value -and
+                $_.AccessControlType -eq 'Allow' -and ($_.FileSystemRights -band 852032) -and
+                -not ($_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) })
+        if (-not $effective.Count) { exit 26 }
+    }
     default { exit 19 }
 }
 exit 0
+"""
+
+_ANCESTOR_DIAGNOSTIC = r"""
+$ErrorActionPreference = 'Stop'
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$trusted = @($sid, 'S-1-5-18', 'S-1-5-32-544',
+             'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$directory = [IO.DirectoryInfo]$env:SHADAI_SPOOL_ACL_PARENT
+$depth = 0
+$original = $null
+$effective = $null
+while ($null -ne $directory -and $depth -lt 64) {
+    if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        $effective = @{ depth=$depth; reason='reparse' }; break
+    }
+    try { $acl = Get-Acl -LiteralPath $directory.FullName } catch {
+        $effective = @{ depth=$depth; reason='acl_read_failed'; error_type=$_.Exception.GetType().Name }; break
+    }
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) {
+        $effective = @{ depth=$depth; reason='untrusted_owner' }; break
+    }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        $rights = [int]$rule.FileSystemRights -band 852032
+        if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted -and $rights) {
+            $only = [bool]($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)
+            $issue = @{ depth=$depth; reason='untrusted_allow'; dangerous_rights=$rights;
+                        inherit_only=$only; inherited=[bool]$rule.IsInherited }
+            if ($null -eq $original) { $original = $issue }
+            if (-not $only) { $effective = $issue; break }
+        }
+    }
+    if ($null -ne $effective) { break }
+    $directory = $directory.Parent
+    $depth++
+}
+if ($null -ne $directory -and $depth -ge 64) { $effective = @{ reason='diagnostic_depth_limit' } }
+@{ original_mask_first_rejection=$original; first_effective_issue=$effective } | ConvertTo-Json -Compress -Depth 4
 """
 
 _RESTART_SCRIPT = """
@@ -130,7 +189,25 @@ def rejected_file(path: Path) -> None:
         raise RuntimeError("native_public_file_accepted")
 
 
+def ancestor_diagnostic(parent: Path) -> None:
+    """Report bounded ACL facts only: no paths, account names, SIDs or secrets."""
+    powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    environment = os.environ.copy()
+    environment["PSModulePath"] = str(powershell.parent / "Modules")
+    environment["SHADAI_SPOOL_ACL_PARENT"] = str(parent)
+    result = subprocess.run(
+        [str(powershell), "-NoProfile", "-NonInteractive", "-Command", _ANCESTOR_DIAGNOSTIC],
+        env=environment, capture_output=True, text=True, timeout=15, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode or len(result.stdout) > 4096:
+        raise RuntimeError("native_ancestor_diagnostic_failed")
+    report = json.loads(result.stdout)
+    print("NATIVE ANCESTOR DIAGNOSTIC: " + json.dumps(report, sort_keys=True))
+
+
 def verify(root: Path) -> None:
+    ancestor_diagnostic(root.parent)
     with DurableSpool(root):
         pass
     print("PASS: real private spool and complete trusted-ancestor guard")
@@ -164,6 +241,43 @@ def verify(root: Path) -> None:
         if not spool.ack(batches[0]):
             raise RuntimeError("native_restart_ack_failed")
     print("PASS: real process restart preserves exact bytes/ID; database and journal DACLs private")
+
+    parent = root / "inherit-only-template"
+    directory = parent / "protected-child"
+    with DurableSpool(parent):
+        pass
+    with DurableSpool(directory):
+        pass
+    fixture_action("inherit-only", parent, root)
+    _check_path(directory, directory=True)
+    with DurableSpool(directory) as spool:
+        payload = b"synthetic-inherit-only-safe"
+        batch_id = spool.enqueue(payload)
+        [batch] = spool.claim(limit=1)
+        if (batch.batch_id, batch.payload) != (batch_id, payload) or not spool.ack(batch):
+            raise RuntimeError("native_inherit_only_safe_delivery_failed")
+    print("PASS: real InheritOnly Modify template permits a protected private descendant")
+
+    inherited = parent / "effective-inherited-child"
+    inherited.mkdir()
+    fixture_action("verify-effective-inherited", inherited, root)
+    directory = inherited / "protected-grandchild"
+    if not _windows_private(directory, create=True):
+        raise RuntimeError("native_protected_grandchild_creation_failed")
+    _check_path(directory, directory=True)
+    rejected(directory, "spool_unsafe_parent")
+    if (directory / "delivery.sqlite3").exists():
+        raise RuntimeError("native_effective_inherited_parent_opened_sqlite")
+    print("PASS: inherited Modify becomes effective on a descendant and is rejected before SQLite opens")
+
+    directory = root / "unsafe-leaf-inherit-only"
+    if not _windows_private(directory, create=True):
+        raise RuntimeError("native_private_leaf_creation_failed")
+    fixture_action("inherit-only", directory, root)
+    rejected(directory, "spool_private_acl_required")
+    if (directory / "delivery.sqlite3").exists():
+        raise RuntimeError("native_inherit_only_leaf_opened_sqlite")
+    print("PASS: untrusted InheritOnly leaf template rejected before future SQLite files are created")
 
     for action in ("explicit", "inherited"):
         directory = root / action
@@ -206,6 +320,22 @@ def verify(root: Path) -> None:
     if database.exists():
         raise RuntimeError('native_ancestor_owner_opened_sqlite')
     print('PASS: real unsafe ancestor owner with read-only public ACE rejected before SQLite opens')
+
+    parent = root / "unsafe-ancestor-owner-inherit-only"
+    directory = parent / "protected-child"
+    with DurableSpool(parent):
+        pass
+    with DurableSpool(directory):
+        pass
+    database = directory / "delivery.sqlite3"
+    database.unlink()
+    fixture_action("inherit-only", parent, root)
+    fixture_action("owner", parent, root)
+    _check_path(directory, directory=True)
+    rejected(directory, "spool_unsafe_parent")
+    if database.exists():
+        raise RuntimeError("native_inherit_only_ancestor_owner_opened_sqlite")
+    print("PASS: unsafe ancestor owner remains rejected even when its public Modify ACE is InheritOnly")
 
     import _winapi
 
