@@ -1,6 +1,6 @@
 # Discovery in motion
 
-Three silent French editorial diagrams introduce Open Shadow AI's discovery and evidence boundaries. Every clip carries a synthetic-data label. These are illustrative flows, not product screenshots or measurements from a customer environment.
+Three silent French editorial diagrams introduce Open Shadow AI's discovery and evidence boundaries. Their shared “Éclairer les décisions” signature accompanies Open Shadow AI's aperture mark and graphite and mint palette. Every clip carries a synthetic-data label. These are illustrative flows, not product screenshots or measurements from a customer environment.
 
 Static posters appear first below. Expand a GIF to view its looping animation, or open/download the MP4 for controlled playback. Return to the [English README](../README.md#discovery-in-motion) or the [French README](../README.fr.md#la-découverte-en-mouvement).
 

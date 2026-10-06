@@ -36,60 +36,60 @@
   "assets": [
     {
       "file": "footprint.mp4",
-      "bytes": 149288,
-      "sha256": "e11c81fff9665fbc6cfbda35f3b1cb114a11b460e3a34566a3eed01887bffe89"
+      "bytes": 149197,
+      "sha256": "17a8e0bb96a36f4e1d5da7833d85183fec28e6e8e68b9b5e9c93642194071ec3"
     },
     {
       "file": "footprint.gif",
-      "bytes": 619294,
-      "sha256": "357f7a15b513b29483834c11abdc72892c12952e46e3eeaad3003cc6354a642d",
+      "bytes": 642083,
+      "sha256": "406b8228de41fb1fa1c40c5340d38d6e95f067624499b6c97a1f9820d59c4ace",
       "fps": 12,
       "palette_colors": 96
     },
     {
       "file": "footprint.webp",
-      "bytes": 102692,
-      "sha256": "6556fed02ae07d153855afd1a8b8cb555358685c2f4ef2e03c05a936109dbcbc",
+      "bytes": 102334,
+      "sha256": "14286f6cfddb6ecf9beb6b56b3f33a1364ca0d6db3817a9237fa204ddc2a7ba7",
       "width": 1280,
       "height": 720,
       "poster_time_seconds": 6.8
     },
     {
       "file": "evidence.mp4",
-      "bytes": 115739,
-      "sha256": "c4fd97e3185d16f73cdef01a18270877dd3171722e54bba9a80fba957fa29f1e"
+      "bytes": 114232,
+      "sha256": "7aae1406bb68af9ac40d598ee3d72202e76ccf9d6639d30c1df88a495396f886"
     },
     {
       "file": "evidence.gif",
-      "bytes": 505747,
-      "sha256": "14cbf60cd9f3d6ba8fa8b17c16d16377af0b34775dfe292b5abd04e0e37398d3",
+      "bytes": 502813,
+      "sha256": "4690a700b41453f8218a05695a6ee959915e3614b763a8f8ee90b154a49ffbbd",
       "fps": 12,
       "palette_colors": 96
     },
     {
       "file": "evidence.webp",
-      "bytes": 100800,
-      "sha256": "8e841a3b2ff0f436d06d012b56d2e1e4e2018f4f358096f02f28f5ace976f609",
+      "bytes": 100502,
+      "sha256": "939f9b15c79a89f191e2e7b62294ea29d55b2dd8d74153345fd5b07281773159",
       "width": 1280,
       "height": 720,
       "poster_time_seconds": 6.8
     },
     {
       "file": "resilience.mp4",
-      "bytes": 115681,
-      "sha256": "fd351e9b4e3de4bdac169ce603a686260a4812bf42684c3e7633458703ea2b70"
+      "bytes": 114691,
+      "sha256": "68b0c42319c9fc839651625a54fcf0a03035e8cfe6bcc13e57e43abb9504f8cd"
     },
     {
       "file": "resilience.gif",
-      "bytes": 410544,
-      "sha256": "4c37b2b5964c0a8149557ab667f3ef289de9716bc0d6308e3284c5a492f0be48",
+      "bytes": 387908,
+      "sha256": "1b57f9401977803627ccda551a620d945c8bbd133b3ca67900fa4751f3818af5",
       "fps": 12,
       "palette_colors": 96
     },
     {
       "file": "resilience.webp",
-      "bytes": 88664,
-      "sha256": "f4bc2b983591a1a6465bdeabc41ed248fc87d7f1c925233a75f9f1faeb486128",
+      "bytes": 88330,
+      "sha256": "aaf250d5fc20f8bcc595f7b2acf22947ce8fc16136167c5af3f4ad130c15c6ad",
       "width": 1280,
       "height": 720,
       "poster_time_seconds": 3.8
