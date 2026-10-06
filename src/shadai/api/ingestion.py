@@ -117,12 +117,16 @@ async def ingest_events(
         events = [prepare_event(event, matcher=matcher) for event in batch.events]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    redis = await get_redis()
-    pipe = redis.pipeline(transaction=True)
-    from shadai.utils.queueing import queue_event
+    from shadai.utils.queue_admission import admit_records
+    from shadai.utils.queueing import queue_fields
 
-    for event in events:
-        queue_event(pipe, event, accepted_at=received_at)
-    await pipe.execute()
+    try:
+        redis = await get_redis()
+        await admit_records(redis, [{"stream": f"events:{event.source_type}",
+                                     "fields": queue_fields(event.model_dump_json(), accepted_at=received_at)}
+                                    for event in events])
+    except Exception:
+        raise HTTPException(status_code=503, detail="Queue temporarily unavailable",
+                            headers={"Retry-After": "5"}) from None
     principal.contact(max(event.timestamp for event in events))
     return {"received": len(events), "tenant_id": get_config().tenant_id}

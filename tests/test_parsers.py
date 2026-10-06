@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from queue_fakes import admission_fake
 
 from shadai.collectors.syslog_receiver import SyslogCollector
 from shadai.models.event import CanonicalEvent
@@ -70,6 +71,7 @@ async def test_rejected_event_does_not_drop_its_neighbours():
     pipe = MagicMock()
     pipe.execute = AsyncMock()
     redis.pipeline.return_value = pipe
+    admission_fake(redis, pipe)
     collector = SyslogCollector("fw", FortiGateWebFilterParser(), redis)
     now = datetime.now(UTC)
     events = [

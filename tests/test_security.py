@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from queue_fakes import admission_fake
 
 from shadai.api.agent import TelemetryBatch, _validate_api_key
 from shadai.api.ingestion import EventBatch, InputEvent, prepare_event
@@ -53,7 +54,7 @@ def test_jwt_requires_organization_and_valid_claims():
 
 async def test_revoked_token_never_queries_user(monkeypatch):
     token = create_access_token(str(uuid4()), "viewer")
-    redis = AsyncMock()
+    redis = admission_fake(AsyncMock())
     redis.exists.return_value = 1
     monkeypatch.setattr("shadai.security.auth.get_redis", AsyncMock(return_value=redis))
     session = AsyncMock()
@@ -178,7 +179,7 @@ def test_canonical_ingestion_authenticates_missing_empty_wrong_and_valid_keys(mo
     from shadai.main import app
 
     pipe = SimpleNamespace(xadd=Mock(), execute=AsyncMock())
-    redis = SimpleNamespace(pipeline=Mock(return_value=pipe))
+    redis = admission_fake(SimpleNamespace(pipeline=Mock(return_value=pipe)), pipe)
     get_redis = AsyncMock(return_value=redis)
     monkeypatch.setattr("shadai.api.ingestion.get_redis", get_redis)
     client = TestClient(app)

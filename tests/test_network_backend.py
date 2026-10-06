@@ -11,6 +11,7 @@ import pytest
 from clickhouse_driver.util.escape import escape_params
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from queue_fakes import admission_fake
 
 from shadai.api import network
 from shadai.api.ingestion import SOURCE_TYPES, prepare_event
@@ -222,7 +223,8 @@ def test_network_ingest_api_requires_key_and_enqueues_only_valid_metadata(monkey
 
     pipe = SimpleNamespace(xadd=Mock(), execute=AsyncMock())
     monkeypatch.setattr(
-        "shadai.api.ingestion.get_redis", AsyncMock(return_value=SimpleNamespace(pipeline=Mock(return_value=pipe)))
+        "shadai.api.ingestion.get_redis",
+        AsyncMock(return_value=admission_fake(SimpleNamespace(pipeline=Mock(return_value=pipe)), pipe))
     )
     client = TestClient(app)
     event = observation("TLS", "SERVICE.Example.Test.").model_dump(mode="json")
@@ -257,7 +259,7 @@ def test_network_ingest_api_requires_key_and_enqueues_only_valid_metadata(monkey
 def test_invalid_network_batch_is_atomic_and_ingestion_errors_do_not_echo_content(monkeypatch, fields):
     from shadai.main import app
 
-    redis = AsyncMock()
+    redis = admission_fake(AsyncMock())
     monkeypatch.setattr("shadai.api.ingestion.get_redis", redis)
     valid = observation().model_dump(mode="json")
     invalid = observation().model_dump(mode="json") | fields
@@ -273,7 +275,7 @@ def test_invalid_network_batch_is_atomic_and_ingestion_errors_do_not_echo_conten
 def test_network_batch_keeps_existing_500_event_limit(monkeypatch):
     from shadai.main import app
 
-    redis = AsyncMock()
+    redis = admission_fake(AsyncMock())
     monkeypatch.setattr("shadai.api.ingestion.get_redis", redis)
     event = observation().model_dump(mode="json")
     response = TestClient(app).post(
@@ -290,7 +292,7 @@ async def test_network_worker_persists_real_match_before_insert_and_suppresses_r
     session.begin.return_value = session
     session.execute = AsyncMock()
     session.get = AsyncMock(side_effect=[None, True, None])
-    rows, redis = [], AsyncMock()
+    rows, redis = [], admission_fake(AsyncMock())
     processor = EventProcessor(
         redis, SimpleNamespace(execute=lambda query, values: rows.extend(values)), lambda: session, service_matcher()
     )

@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from test_sso_admission import AdmissionRedis
 
 from shadai.api import sso
 from shadai.config import validate_identity_settings
@@ -30,12 +31,11 @@ from shadai.security.auth import decode_access_token
 from shadai.security.oidc import HANDOFF_TTL, STATE_TTL, OIDCClient, OIDCError, consume_bound, digest, store_bound
 
 
-class BoundRedis:
+class BoundRedis(AdmissionRedis):
     """The Redis Lua contract, with deterministic TTL and atomic event-loop access."""
 
     def __init__(self):
-        self.values = {}
-        self.now = 0
+        super().__init__()
 
     async def set(self, key, value, *, ex, nx):
         if key in self.values and self.values[key][1] > self.now:
@@ -43,7 +43,10 @@ class BoundRedis:
         self.values[key] = (value, self.now + ex)
         return True
 
-    async def eval(self, script, key_count, key, binding):
+    async def eval(self, script, key_count, *args):
+        if key_count == 3:
+            return await super().eval(script, key_count, *args)
+        key, binding = args
         assert key_count == 1 and "redis.call('DEL', KEYS[1])" in script
         entry = self.values.get(key)
         if entry is None:
@@ -437,7 +440,7 @@ async def test_redis_outage_is_generic_and_no_upstream_request(flow, monkeypatch
 
     monkeypatch.setattr(sso, "get_redis", outage)
     response = await flow.client.get("/api/v1/auth/sso/login")
-    assert response.headers["location"].endswith("/login?sso_error=failed")
+    assert response.status_code == 503
     assert "sensitive" not in response.text and not flow.idp.requests
 
 

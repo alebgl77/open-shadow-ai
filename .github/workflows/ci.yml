@@ -12,22 +12,33 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install ".[dev]" ./agent
+      - name: Verify dependency and image source drift
+        run: |
+          python scripts/lock-dependencies.py --check
+          python scripts/verify-image-pins.py
+      - name: Install hash-checked test dependencies and local projects
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/development.txt
+          python -m pip install --no-deps --no-build-isolation . ./agent
       - run: python -m ruff check src tests agent/shadai_agent migrations scripts
       - run: python -m pytest -q
       - run: python scripts/verify-deployment.py
   network-sensor:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - run: python -m pip install .
+      - run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/runtime.txt
+          python -m pip install --no-deps --no-build-isolation .
       - name: Install offline dissector (no capture permissions)
         run: sudo env DEBIAN_FRONTEND=noninteractive apt-get update && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y tshark
       - name: Verify real offline DNS, IPv6, HTTP, TLS and QUIC metadata
@@ -35,10 +46,10 @@ jobs:
   frontend:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
+          node-version: "22.23.3"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
@@ -47,11 +58,19 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+      - name: Audit frontend runtime and retain tooling residuals
+        run: python scripts/audit-dependencies.py --npm --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/dependency-audit
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: frontend-dependency-advisories
+          path: artifacts/dependency-audit
+          if-no-files-found: error
   powershell:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
       - shell: pwsh
@@ -69,7 +88,10 @@ jobs:
           ./scripts/test-bootstrap-security.ps1 -TemporaryDirectory "$env:USERPROFILE/osa-bootstrap-tests"
           ./scripts/Export-ActiveDirectory.ps1 -SearchBase 'OU=Pilot,DC=example,DC=com' -OutputDirectory "$env:RUNNER_TEMP/osa-ad" -WhatIf
       - name: Install package for native collector credential checks
-        run: python -m pip install .
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/runtime.txt
+          python -m pip install --no-deps --no-build-isolation .
       - name: Verify real Windows collector key-file DACLs
         run: python scripts/test-network-key-acl.py
       - name: Verify full native Windows spool guard and restart recovery
@@ -79,8 +101,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - run: bash scripts/bootstrap.sh
@@ -103,7 +125,7 @@ jobs:
           PY
           docker compose -f docker-compose.yml -f docker-compose.sso.yml config --quiet
           SCIM_GROUP_ROLE_MAP='{"00000000-0000-0000-0000-000000000001":"analyst"}' docker compose -f docker-compose.yml -f docker-compose.sso.yml config --format json | python -c "import json, sys; c=json.load(sys.stdin); assert json.loads(c['services']['api']['environment']['SCIM_GROUP_ROLE_MAP']) == {'00000000-0000-0000-0000-000000000001': 'analyst'}; assert len(c['services']['api']['secrets']) == 8; assert all(not any(k.startswith(('OIDC_', 'SCIM_')) for k in s.get('environment', {})) for name, s in c['services'].items() if name != 'api')"
-      - run: docker compose --profile test run --build --rm integration-test
+      - run: docker compose --profile test run --build --rm integration-test python -m shadai.qualification.integration
       - run: docker compose down --volumes
       - run: docker compose build api ingest-worker correlation-worker purge-worker frontend syslog-collector entra-collector
       - name: Verify private syslog spool persists across two containers
@@ -140,7 +162,15 @@ jobs:
           assert stat.S_IMODE(database.stat().st_mode) == 0o600
           print('PASS: private syslog volume, exact restart recovery, acknowledgement')
           PY
-      - run: docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
+      - name: Initialize actual groups and indexed retention before readiness
+        run: |
+          docker compose up -d api ingest-worker correlation-worker purge-worker frontend
+          for attempt in $(seq 1 30); do
+            if docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+            if [ "$attempt" = 30 ]; then exit 1; fi
+            sleep 2
+          done
+          docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
       - run: python scripts/integration-smoke.py
       - name: Start optional identity API
         env:
@@ -178,6 +208,10 @@ jobs:
         timeout-minutes: 7
         run: |
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --no-deps --force-recreate --wait --wait-timeout 180 api prometheus
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml exec -T prometheus promtool check config --lint-fatal /etc/prometheus/prometheus.yml
+          docker compose -f docker-compose.yml -f docker-compose.monitoring.yml exec -T prometheus promtool check rules --lint-fatal /etc/prometheus/alerts.yaml
+          prometheus_image="$(python scripts/verify-image-pins.py --reference prometheus)"
+          docker run --rm --network none --read-only --entrypoint /bin/promtool --mount "type=bind,src=$PWD/deploy/monitoring,dst=/workspace/deploy/monitoring,readonly" "$prometheus_image" test rules /workspace/deploy/monitoring/tests/alerts.test.yaml
           python scripts/monitoring-smoke.py
           docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --no-deps --force-recreate --wait --wait-timeout 90 prometheus
           python scripts/monitoring-smoke.py --after-recreate
@@ -185,3 +219,226 @@ jobs:
         run: docker compose ps --all
       - if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down --volumes --remove-orphans
+
+  dependency-security:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install hash-checked maintenance tools
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/tools.txt
+          python scripts/lock-dependencies.py --check
+          python scripts/lock-dependencies.py --verify
+          python scripts/verify-image-pins.py --registry
+      - name: Audit every Python closure and gate severe fixable runtime advisories
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/audit-dependencies.py --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/dependency-audit
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: python-dependency-advisories-${{ matrix.os }}
+          path: artifacts/dependency-audit
+          if-no-files-found: error
+
+  agent-offline:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.10"
+      - name: Build and prove a clean hash-checked offline Python 3.10 wheelhouse
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
+          python scripts/build-agent-wheelhouse.py --output artifacts/agent-wheelhouse
+      - name: Prove exact installed agent wheel and native delivery recovery on Linux
+        if: runner.os != 'Windows'
+        run: python scripts/test-installed-agent.py --wheelhouse artifacts/agent-wheelhouse
+      - name: Prove exact installed agent wheel and native delivery recovery on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python scripts/test-installed-agent.py --wheelhouse artifacts/agent-wheelhouse --temporary-parent "$env:USERPROFILE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: installed-agent-proof-${{ matrix.os }}-py310
+          path: artifacts/installed-agent-proof.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-wheelhouse-${{ matrix.os }}-py310
+          path: artifacts/agent-wheelhouse
+          if-no-files-found: error
+
+  image-security:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        image: [api, worker, collector, test, frontend]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Resolve immutable build and SBOM tools
+        id: tools
+        run: |
+          mkdir -p artifacts
+          echo "buildkit=$(python scripts/verify-image-pins.py --reference buildkit)" >> "$GITHUB_OUTPUT"
+          echo "sbom=$(python scripts/verify-image-pins.py --reference sbom-generator)" >> "$GITHUB_OUTPUT"
+          if [ '${{ matrix.image }}' = frontend ]; then
+            echo 'context=frontend' >> "$GITHUB_OUTPUT"
+            echo 'file=frontend/Dockerfile' >> "$GITHUB_OUTPUT"
+          else
+            echo 'context=.' >> "$GITHUB_OUTPUT"
+            echo 'file=docker/Dockerfile.${{ matrix.image }}' >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$(uname -m)" = aarch64 ]; then echo 'platform=linux/arm64' >> "$GITHUB_OUTPUT"; else echo 'platform=linux/amd64' >> "$GITHUB_OUTPUT"; fi
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: v0.37.2
+          driver-opts: image=${{ steps.tools.outputs.buildkit }}
+      - name: Build runtime OCI archive with image-bound SBOM and provenance
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ steps.tools.outputs.context }}
+          file: ${{ steps.tools.outputs.file }}
+          platforms: ${{ steps.tools.outputs.platform }}
+          outputs: type=oci,dest=artifacts/runtime.oci.tar
+          provenance: mode=max
+          sbom: generator=${{ steps.tools.outputs.sbom }}
+      - name: Verify OCI evidence and gate severe fixable image advisories
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
+          python scripts/verify-oci-evidence.py artifacts/runtime.oci.tar --platform '${{ steps.tools.outputs.platform }}' --output artifacts/evidence.json
+          python scripts/scan-images.py --input artifacts/runtime.oci.tar --image '${{ matrix.image }}' --platform '${{ steps.tools.outputs.platform }}' --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/image-audit
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: image-${{ matrix.image }}-${{ matrix.os }}
+          path: artifacts
+          if-no-files-found: error
+          retention-days: 7
+
+  infrastructure-security:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Gate severe fixable advisories in the actual pinned service images
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
+          if [ "$(uname -m)" = aarch64 ]; then platform=linux/arm64; else platform=linux/amd64; fi
+          python scripts/scan-images.py --infrastructure --platform "$platform" --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/infrastructure-audit
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: infrastructure-image-advisories-${{ matrix.os }}
+          path: artifacts/infrastructure-audit
+          if-no-files-found: error
+
+  production-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Execute the isolated mandatory load, faults, probes, pressure and cold restore
+        run: |
+          python scripts/qualification-lab.py run --execute --docker-context default --profile deploy/qualification/profiles/lab-smoke.json --run-dir "$HOME/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}"
+      - name: Validate separate physical monitoring rules with the pinned real promtool
+        run: |
+          image="$(python scripts/verify-image-pins.py --reference prometheus)"
+          docker --context default run --rm --network none --read-only --entrypoint /bin/promtool --mount "type=bind,src=$PWD/deploy/host-monitoring,dst=/workspace/deploy/host-monitoring,readonly" "$image" test rules /workspace/deploy/host-monitoring/tests/rules.test.yaml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: production-qualification-proof
+          path: |
+            ~/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}/report.json
+            ~/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}/source.json
+            ~/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}/pressure-artifacts/pressure-seed.xml
+            ~/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}/pressure-reports/pressure-assert.xml
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove only reverified disposable run resources and volumes
+        if: always()
+        run: |
+          if [ -f "$HOME/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}/journal.json" ]; then
+            python scripts/qualification-lab.py clean --execute --remove-volumes --docker-context default --profile deploy/qualification/profiles/lab-smoke.json --run-dir "$HOME/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}"
+          fi
+
+  signed-image-evidence:
+    # Untrusted/external PRs still run every unsigned build, evidence and scanner gate.
+    # Signing is mandatory after all gates on the workflow's internal main push event.
+    if: github.event_name == 'push'
+    needs: [python, network-sensor, frontend, powershell, compose-integration, dependency-security, agent-offline, image-security, infrastructure-security, production-qualification]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        image: [api, worker, collector, test, frontend]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: image-${{ matrix.image }}-${{ matrix.os }}
+          path: artifacts
+      - name: Verify the downloaded exact archive before signing
+        run: |
+          if [ '${{ matrix.os }}' = ubuntu-24.04-arm ]; then platform=linux/arm64; else platform=linux/amd64; fi
+          python scripts/verify-oci-evidence.py artifacts/runtime.oci.tar --platform "$platform" --output artifacts/rechecked-evidence.json
+          python -c "import json; from pathlib import Path; a=json.loads(Path('artifacts/evidence.json').read_text()); b=json.loads(Path('artifacts/rechecked-evidence.json').read_text()); assert a == b, 'Downloaded OCI archive/evidence changed'"
+      - name: Sign the exact scanned OCI archive with ephemeral GitHub Sigstore identity
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: artifacts/runtime.oci.tar
+          push-to-registry: false
+          create-storage-record: false
+      - name: Verify signature, repository, workflow, ref and exact source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          python scripts/download-gh-verifier.py --output "$RUNNER_TEMP/gh-verifier"
+          "$RUNNER_TEMP/gh-verifier/bin/gh" attestation verify artifacts/runtime.oci.tar --repo "${{ github.repository }}" --signer-workflow "${{ github.repository }}/.github/workflows/ci.yml" --source-ref "${{ github.ref }}" --source-digest "${{ github.sha }}" --deny-self-hosted-runners --bundle "$ATTESTATION_BUNDLE" --format json > artifacts/signature-verification.json
+          cp "$ATTESTATION_BUNDLE" artifacts/sigstore-bundle.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-evidence-${{ matrix.image }}-${{ matrix.os }}
+          path: |
+            artifacts/evidence.json
+            artifacts/signature-verification.json
+            artifacts/sigstore-bundle.json
+          if-no-files-found: error
+          retention-days: 7

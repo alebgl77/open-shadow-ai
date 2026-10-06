@@ -190,6 +190,48 @@ class EntraInventory:
         return events
 
 
+class InventoryDelivery:
+    """Retry the exact rejected chunks before fetching another inventory.
+
+    Pending bytes live in this process; restarting it loses this buffer. Stable
+    snapshot IDs permit a subsequent inventory to overlap uncertain delivery.
+    """
+
+    def __init__(self, redis, settings):
+        self.redis, self.settings = redis, settings
+        self.pending = []
+        self.total = 0
+
+    def retain(self, events):
+        from shadai.utils.queue_admission import record_size
+        from shadai.utils.queueing import queue_fields
+
+        if self.pending:
+            raise RuntimeError("Inventory delivery still pending")
+        records = [{"stream": "events:oauth", "fields": queue_fields(event.model_dump_json())}
+                   for event in events]
+        self.pending = []
+        chunk, size = [], 0
+        for record in records:
+            length = record_size(record)
+            if chunk and (len(chunk) == 500 or size + length > self.settings.admission_max_batch_bytes):
+                self.pending.append(chunk)
+                chunk, size = [], 0
+            chunk.append(record)
+            size += length
+        if chunk:
+            self.pending.append(chunk)
+        self.total = len(events)
+
+    async def flush(self):
+        from shadai.utils.queue_admission import admit_records
+
+        while self.pending:
+            await admit_records(self.redis, self.pending[0], settings=self.settings)
+            self.pending.pop(0)
+        return self.total
+
+
 async def main():
     config = load_config()
     validate_security(config)
@@ -198,15 +240,13 @@ async def main():
     try:
         async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
             collector = EntraInventory(settings, client)
+            delivery = InventoryDelivery(redis, config.redis_queue)
             while True:
                 try:
-                    events = await collector.collect(config.tenant_id)
-                    for offset in range(0, len(events), 500):
-                        pipe = redis.pipeline(transaction=True)
-                        for event in events[offset : offset + 500]:
-                            pipe.xadd("events:oauth", {"data": event.model_dump_json()})
-                        await pipe.execute()
-                    logger.info("entra_inventory_collected", records=len(events))
+                    if not delivery.pending:
+                        delivery.retain(await collector.collect(config.tenant_id))
+                    count = await delivery.flush()
+                    logger.info("entra_inventory_collected", records=count)
                 except Exception as exc:
                     logger.error("entra_inventory_failed", error_type=type(exc).__name__)
                 await asyncio.sleep(settings.poll_interval_seconds)

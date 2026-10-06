@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "scope": "target",
+  "installation": "target-requires-operator-input",
+  "run": "read-only-plan",
+  "scenarios": ["baseline", "kubernetes", "idp", "quality"],
+  "load": {"total_events": 1000, "events_per_second": 10, "batch_size": 10, "concurrency": 2, "request_timeout_seconds": 5, "drain_timeout_seconds": 120, "seed": 0},
+  "limits": {"max_wall_seconds": 600, "max_requests": 200, "max_request_bytes": 2097152, "max_disk_bytes": 1073741824},
+  "target": {}
+}

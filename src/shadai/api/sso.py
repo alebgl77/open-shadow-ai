@@ -1,6 +1,8 @@
 """Browser-bound OIDC sign-in for accounts provisioned explicitly through SCIM."""
 
+import asyncio
 import secrets
+import time
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -18,6 +20,7 @@ from shadai.models.user import LoginResponse, UserORM, UserRead
 from shadai.security.audit import log_audit
 from shadai.security.auth import create_access_token, csrf_token_for, effective_role, set_session_cookie
 from shadai.security.oidc import HANDOFF_TTL, STATE_TTL, OIDCClient, OIDCError, consume_bound, origin, store_bound
+from shadai.security.sso_admission import AdmissionDeniedError, SSOAdmission, normalized_peer
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
@@ -94,21 +97,78 @@ async def providers():
 
 
 @router.get("/sso/login")
-async def login():
-    config = get_config().oidc
+async def login(request: Request):
+    installation = get_config()
+    config = installation.oidc
     if not config.enabled:
         return failure(config, status=404)
-    binding, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
+    deadline = time.monotonic() + config.login_timeout_seconds
+    admission, token, state, binding = None, None, None, None
+    release, completed, phase = False, False, "admission"
+
+    def remaining():
+        budget = deadline - time.monotonic()
+        if budget <= 0:
+            raise TimeoutError()
+        return budget
+
     try:
-        redis = await get_redis()
-        state = await store_bound(redis, "state", {"nonce": nonce, "verifier": verifier}, binding, STATE_TTL)
-        url = await OIDCClient(config).authorization_url(state, nonce, verifier)
-    except (OIDCError, RedisError):
-        return failure(config, redirect=True)
-    response = RedirectResponse(url, status_code=303, headers=HEADERS)
-    clear_cookies(response, config)
-    set_cookie(response, config, cookie_names(config)[0], binding, STATE_TTL + HANDOFF_TTL)
-    return response
+        async with asyncio.timeout(remaining()):
+            redis = await get_redis()
+            admission = SSOAdmission(redis, installation.tenant_id, config)
+            token = admission.token()
+            remaining()
+            # The reply can be lost after Redis admits us; release this owned token
+            # even in that case. A definite denial owns no lease.
+            release = True
+            await admission.admit(normalized_peer(request), token)
+        phase = "state"
+        remaining()
+        binding, nonce, verifier = (secrets.token_urlsafe(32) for _ in range(3))
+        async with asyncio.timeout(remaining()):
+            state = await store_bound(redis, "state", {"nonce": nonce, "verifier": verifier}, binding, STATE_TTL)
+        phase = "provider"
+        async with asyncio.timeout(remaining()):
+            remaining()
+            url = await OIDCClient(config).authorization_url(state, nonce, verifier)
+        remaining()
+        response = RedirectResponse(url, status_code=303, headers=HEADERS)
+        clear_cookies(response, config)
+        set_cookie(response, config, cookie_names(config)[0], binding, STATE_TTL + HANDOFF_TTL)
+        completed = True
+        return response
+    except AdmissionDeniedError as exc:
+        release = False
+        response = failure(config, status=429)
+        response.headers["Retry-After"] = str(exc.retry_after)
+        return response
+    except RedisError:
+        return failure(config, status=503)
+    except (OIDCError, TimeoutError):
+        return failure(config, redirect=phase == "provider", status=503)
+    finally:
+        operations = []
+        if state is not None and not completed:
+            operations.append(consume_bound(redis, "state", state, binding))
+        if release and admission is not None:
+            operations.append(admission.release(token))
+        if operations:
+            cleanup = asyncio.gather(*(_bounded_cleanup(operation) for operation in operations))
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                # A second cancellation does not cancel the bounded cleanup task.
+                # Redis TTLs remain the fallback when cleanup cannot complete.
+                raise
+
+
+async def _bounded_cleanup(operation):
+    try:
+        async with asyncio.timeout(2):
+            await operation
+    except Exception:
+        # Best effort only: never replace the sanitized response with Redis data.
+        pass
 
 
 @router.get("/sso/callback")

@@ -83,9 +83,21 @@ def main() -> None:
     subparsers.add_parser("create-admin", help="Create initial admin user")
     subparsers.add_parser("sync-catalog", help="Sync YAML catalog into PostgreSQL")
 
+    from shadai.workers.redis_lifecycle import add_arguments
+    add_arguments(subparsers.add_parser("queue-maintenance", help="Explicit Redis inventory/archive/retention"))
+
     args = parser.parse_args()
 
-    if args.command == "init-db":
+    if args.command == "queue-maintenance":
+        import json
+
+        from shadai.workers.redis_lifecycle import run
+        try:
+            print(json.dumps(asyncio.run(run(args)), separators=(",", ":")))
+        except Exception as exc:
+            print(json.dumps({"status": "retention_failed", "error_type": type(exc).__name__}))
+            sys.exit(1)
+    elif args.command == "init-db":
         asyncio.run(_init_db())
     elif args.command == "sync-catalog":
         asyncio.run(_sync_catalog())

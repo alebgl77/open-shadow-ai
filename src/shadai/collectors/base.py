@@ -15,6 +15,7 @@ from shadai.engine.catalog_loader import CatalogIndex
 from shadai.models.event import CanonicalEvent
 from shadai.parsers.base import BaseParser
 from shadai.utils.metrics import EVENTS_INGESTED, EVENTS_REJECTED
+from shadai.utils.queue_admission import admit_records, bounded_batches
 from shadai.utils.queueing import queue_fields
 
 logger = structlog.get_logger()
@@ -72,21 +73,21 @@ class BaseCollector(ABC):
 
         if not accepted:
             return 0
+        chunks = list(bounded_batches(queued))
         if self.spool is not None:
             try:
-                await asyncio.to_thread(self.spool.enqueue,
-                                        json.dumps(queued, separators=(",", ":")).encode("utf-8"),
-                                        event_count=accepted)
+                for chunk in chunks:
+                    await asyncio.to_thread(self.spool.enqueue,
+                                            json.dumps(chunk, separators=(",", ":")).encode("utf-8"),
+                                            event_count=len(chunk))
             except Exception:
                 self.counters["retention_failures"] += 1
                 raise
             # Successful retention is counted separately from actual Redis delivery.
             await self.flush_spool()
             return accepted
-        pipe = self.redis.pipeline(transaction=True)
-        for record in queued:
-            pipe.xadd(record["stream"], record["fields"])
-        await pipe.execute()
+        for chunk in chunks:
+            await admit_records(self.redis, chunk)
         EVENTS_INGESTED.labels(source_type=self.source_type).inc(accepted)
         logger.debug("events_pushed", collector=self.collector_id, count=accepted)
         return accepted
@@ -100,12 +101,10 @@ class BaseCollector(ABC):
             if not batches:
                 break
             [batch] = batches
-            records = json.loads(batch.payload)
-            pipe = self.redis.pipeline(transaction=True)
-            for record in records:
-                pipe.xadd(record["stream"], record["fields"])
             try:
-                await pipe.execute()
+                records = json.loads(batch.payload)
+                for chunk in list(bounded_batches(records)):
+                    await admit_records(self.redis, chunk)
             except Exception as exc:
                 self.counters["delivery_failures"] += 1
                 await asyncio.to_thread(self.spool.retry, batch)

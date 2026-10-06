@@ -152,6 +152,7 @@ def trusted_url(value: str, allow_local: bool = False, *, origin_only: bool = Fa
 
 
 class OIDCSettings(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
     enabled: bool = False
     issuer: str = Field(default="", max_length=1024)
     client_id: str = Field(default="", max_length=255)
@@ -160,6 +161,19 @@ class OIDCSettings(BaseModel):
     label: str = Field(default="Organization sign-in", max_length=100)
     identity_claim: Literal["sub", "oid"] = "sub"
     allow_insecure_localhost: bool = False
+    login_peer_limit: int = Field(default=10, ge=1, le=1000)
+    login_installation_limit: int = Field(default=120, ge=1, le=10000)
+    login_concurrency: int = Field(default=4, ge=1, le=64)
+    login_timeout_seconds: int = Field(default=12, ge=1, le=30)
+    login_lease_seconds: int = Field(default=15, ge=1, le=60)
+
+    @model_validator(mode="after")
+    def admission_bounds(self):
+        if self.login_installation_limit < self.login_peer_limit:
+            raise ValueError("login_installation_limit must be at least login_peer_limit")
+        if self.login_lease_seconds < self.login_timeout_seconds + 3:
+            raise ValueError("login_lease_seconds must be at least login_timeout_seconds + 3")
+        return self
 
     @property
     def secure_cookies(self) -> bool:
@@ -176,6 +190,13 @@ class SCIMSettings(BaseModel):
     group_role_map: dict[str, Literal["viewer", "analyst", "admin"]] = Field(default_factory=dict)
 
 
+class RedisQueueSettings(BaseModel):
+    stream_max_entries: int = Field(default=100000, ge=1, le=10000000)
+    dlq_max_entries: int = Field(default=10000, ge=1, le=20000)
+    retained_days: int = Field(default=7, ge=1, le=365)
+    admission_max_batch_bytes: int = Field(default=2097152, ge=1, le=16777216)
+
+
 class ShadAIConfig(BaseModel):
     model_config = ConfigDict(hide_input_in_errors=True)
     tenant_id: str = Field(default="default", min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
@@ -187,6 +208,7 @@ class ShadAIConfig(BaseModel):
     privacy: PrivacySettings = PrivacySettings()
     oidc: OIDCSettings = OIDCSettings()
     scim: SCIMSettings = SCIMSettings()
+    redis_queue: RedisQueueSettings = RedisQueueSettings()
 
 
 def _read_secret_file(path: str) -> str:
@@ -245,6 +267,15 @@ def _apply_env_overrides(config: ShadAIConfig) -> ShadAIConfig:
         "OIDC_LABEL": ("oidc", "label"),
         "OIDC_IDENTITY_CLAIM": ("oidc", "identity_claim"),
         "OIDC_ALLOW_INSECURE_LOCALHOST": ("oidc", "allow_insecure_localhost"),
+        "OIDC_LOGIN_PEER_LIMIT": ("oidc", "login_peer_limit"),
+        "OIDC_LOGIN_INSTALLATION_LIMIT": ("oidc", "login_installation_limit"),
+        "OIDC_LOGIN_CONCURRENCY": ("oidc", "login_concurrency"),
+        "OIDC_LOGIN_TIMEOUT_SECONDS": ("oidc", "login_timeout_seconds"),
+        "OIDC_LOGIN_LEASE_SECONDS": ("oidc", "login_lease_seconds"),
+        "REDIS_STREAM_MAX_ENTRIES": ("redis_queue", "stream_max_entries"),
+        "REDIS_DLQ_MAX_ENTRIES": ("redis_queue", "dlq_max_entries"),
+        "REDIS_RETAINED_DAYS": ("redis_queue", "retained_days"),
+        "REDIS_ADMISSION_MAX_BATCH_BYTES": ("redis_queue", "admission_max_batch_bytes"),
         "SCIM_ENABLED": ("scim", "enabled"),
         "ALLOW_LEGACY_AGENT_KEY": ("security", "allow_legacy_agent_key"),
         "PSEUDONYMIZE_IDENTITIES": ("security", "pseudonymize_identities"),

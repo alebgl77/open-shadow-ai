@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from queue_fakes import admission_fake
 
 from shadai.api.ingestion import prepare_event
 from shadai.collectors.syslog_receiver import SyslogCollector
@@ -116,7 +117,7 @@ async def test_transient_ambiguity_survives_worker_without_weaker_attribution(tr
     session.begin.return_value = session
     session.execute = AsyncMock()
     session.get = AsyncMock(return_value=None)
-    redis = AsyncMock()
+    redis = admission_fake(AsyncMock())
     rows = []
     clickhouse = SimpleNamespace(execute=lambda query, values: rows.extend(values))
     worker_matcher = CatalogMatcher(build_catalog_index([fallback])) if catalog_changed else matcher
@@ -234,6 +235,7 @@ async def test_native_squid_username_survives_ingestion_without_inference(userna
     assert event.username == expected and event.user_id == ""
     redis = MagicMock()
     redis.pipeline.return_value.execute = AsyncMock()
+    admission_fake(redis, redis.pipeline.return_value)
     collector = SyslogCollector("squid", parser, redis)
     assert await collector.push_events([event]) == 1
     payload = json.loads(redis.pipeline.return_value.xadd.call_args.args[1]["data"])

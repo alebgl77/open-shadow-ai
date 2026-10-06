@@ -35,6 +35,8 @@ assert prometheus["user"] == "65534:65534", "Prometheus data UID changed"
 assert "ports" not in prometheus and prometheus["networks"] == ["backend"], "Monitoring exposed publicly"
 assert prometheus["secrets"] == [{"source": "metrics_prometheus_token", "target": "shadai_metrics_token"}]
 assert "prometheus_data:/prometheus" in prometheus["volumes"]
+assert "./deploy/monitoring/alerts.yaml:/etc/prometheus/alerts.yaml:ro" in prometheus["volumes"]
+assert scraping["rule_files"] == ["/etc/prometheus/alerts.yaml"]
 assert scraping["scrape_configs"] == [
     {
         "job_name": "open-shadow-ai",

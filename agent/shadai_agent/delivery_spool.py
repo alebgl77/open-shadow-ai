@@ -86,8 +86,8 @@ foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.Security
 }
 exit 0
 """
-    environment = os.environ.copy()
-    environment["PSModulePath"] = str(powershell.parent / "Modules")
+    environment = {key: value for key, value in os.environ.items() if key.casefold() != "psmodulepath"}
+    environment["PSMODULEPATH"] = str(powershell.parent / "Modules")
     environment["SHADAI_SPOOL_PRIVATE_PATH"] = str(path)
     environment["SHADAI_SPOOL_CREATE_PRIVATE"] = "1" if create else "0"
     try:
@@ -166,8 +166,8 @@ while ($null -ne $directory) {
 }
 exit 0
 """
-    environment = os.environ.copy()
-    environment["PSModulePath"] = str(powershell.parent / "Modules")
+    environment = {key: value for key, value in os.environ.items() if key.casefold() != "psmodulepath"}
+    environment["PSMODULEPATH"] = str(powershell.parent / "Modules")
     environment["SHADAI_SPOOL_PARENT_PATH"] = str(path.parent)
     try:
         result = subprocess.run([str(powershell), "-NoProfile", "-NonInteractive", "-Command", script],

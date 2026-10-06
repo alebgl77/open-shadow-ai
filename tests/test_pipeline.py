@@ -7,9 +7,10 @@ from shadai.engine.catalog_loader import build_catalog_index
 from shadai.engine.matcher import CatalogMatcher
 from shadai.models.catalog import CatalogItemRead
 from shadai.models.event import CanonicalEvent
+from shadai.utils.queue_admission import QUEUE_ADMIT
 from shadai.utils.queueing import PermanentMessageError
 from shadai.workers.ingest import EventProcessor
-from shadai.workers.streams import StreamConsumer
+from shadai.workers.streams import RECORD_RETRY, StreamConsumer
 
 
 class Transaction:
@@ -62,16 +63,16 @@ async def test_no_ack_on_failure_then_deadletter_before_ack():
     redis.hgetall.return_value = {}
     attempts = iter([[1, 1], [2, 2]])
     def evaluate(script, *args):
-        if "poison_attempts" in script:
+        if script == RECORD_RETRY:
             return next(attempts)
         calls.append("atomic_deadletter_ack")
         return 1
     redis.eval.side_effect = evaluate
-    consumer = StreamConsumer(redis, "g", "w", ["s"], max_attempts=2)
+    consumer = StreamConsumer(redis, "ingest_group", "w", ["events:dns"], max_attempts=2)
     handler = AsyncMock(side_effect=PermanentMessageError("secret-should-not-be-logged"))
-    assert not await consumer.process("s", "1", {}, handler)
+    assert not await consumer.process("events:dns", "1-0", {}, handler)
     assert calls == []
-    assert await consumer.process("s", "1", {}, handler)
+    assert await consumer.process("events:dns", "1-0", {}, handler)
     assert calls == ["atomic_deadletter_ack"]
     assert "secret" not in str(redis.eval.call_args)
 
@@ -81,7 +82,7 @@ async def test_deadletter_failure_keeps_pending():
     redis.hgetall.return_value = {}
     redis.eval.side_effect = [[5, 5], RuntimeError()]
     with pytest.raises(RuntimeError):
-        await StreamConsumer(redis, "g", "w", ["s"]).process("s", "1", {},
+        await StreamConsumer(redis, "ingest_group", "w", ["events:dns"]).process("events:dns", "1-0", {},
                                                              AsyncMock(side_effect=PermanentMessageError()))
     redis.xack.assert_not_called()
 
@@ -90,8 +91,13 @@ async def test_persist_enqueue_commit_ack_order_and_idempotency():
     calls = []
     redis = AsyncMock()
     redis.hgetall.return_value = {}
-    redis.xadd.side_effect = lambda *a, **k: calls.append("enqueue")
-    redis.eval.side_effect = lambda *a, **k: calls.append("ack")
+    def evaluate(script, *args):
+        if script == QUEUE_ADMIT:
+            calls.append("enqueue")
+            return ["ok", "3-0"]
+        calls.append("ack")
+        return 1
+    redis.eval.side_effect = evaluate
     session = Session()
     ch = SimpleNamespace(execute=lambda *args: calls.append("persist"))
     item = CatalogItemRead(
@@ -100,9 +106,9 @@ async def test_persist_enqueue_commit_ack_order_and_idempotency():
     processor = EventProcessor(redis, ch, lambda: session, CatalogMatcher(build_catalog_index([item])))
     event = CanonicalEvent(tenant_id="test-org", domain="openai.com")
     data = {"data": event.model_dump_json()}
-    consumer = StreamConsumer(redis, "g", "w", ["s"])
-    await consumer.process("s", "1", data, processor)
-    await consumer.process("s", "2", data, processor)
+    consumer = StreamConsumer(redis, "ingest_group", "w", ["events:dns"])
+    await consumer.process("events:dns", "1-0", data, processor)
+    await consumer.process("events:dns", "2-0", data, processor)
     assert calls == ["persist", "enqueue", "ack", "ack"]
     assert event.event_id in session.receipts
 
@@ -112,14 +118,15 @@ async def test_enqueue_failure_does_not_commit_receipt_or_ack():
     redis.hgetall.return_value = {}
     redis.incr.return_value = 1
     redis.eval.return_value = [1, 0]
-    redis.xadd.side_effect = RuntimeError()
+    redis.eval.side_effect = lambda script, *args: ["denied", "full"] if script == QUEUE_ADMIT else [1, 0]
     session = Session()
     item = CatalogItemRead(catalog_item_id="x", canonical_name="x", category="ai", domains=["ai.test"])
     processor = EventProcessor(
         redis, SimpleNamespace(execute=lambda *args: None), lambda: session, CatalogMatcher(build_catalog_index([item]))
     )
     event = CanonicalEvent(tenant_id="test-org", domain="ai.test")
-    await StreamConsumer(redis, "g", "w", ["s"]).process("s", "1", {"data": event.model_dump_json()}, processor)
+    consumer = StreamConsumer(redis, "ingest_group", "w", ["events:dns"])
+    await consumer.process("events:dns", "1-0", {"data": event.model_dump_json()}, processor)
     assert not session.receipts
     redis.xack.assert_not_called()
 
@@ -138,7 +145,8 @@ async def test_clickhouse_failure_never_enqueues_or_acks():
         redis, SimpleNamespace(execute=fail), lambda: session, CatalogMatcher(build_catalog_index([]))
     )
     event = CanonicalEvent(tenant_id="test-org")
-    await StreamConsumer(redis, "g", "w", ["s"]).process("s", "1", {"data": event.model_dump_json()}, processor)
+    consumer = StreamConsumer(redis, "ingest_group", "w", ["events:dns"])
+    await consumer.process("events:dns", "1-0", {"data": event.model_dump_json()}, processor)
     assert not session.receipts
     redis.xadd.assert_not_called()
     redis.xack.assert_not_called()
@@ -159,6 +167,11 @@ async def test_empty_catalog_never_consumes_queued_work(monkeypatch):
     monkeypatch.setattr("shadai.workers.ingest.init_clickhouse", lambda *a: ch)
     monkeypatch.setattr("shadai.workers.ingest.StreamConsumer", lambda *a, **k: consumer)
     monkeypatch.setattr("shadai.workers.ingest.load_database_catalog", AsyncMock(return_value=CatalogIndex()))
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def no_probe(*args):
+        yield SimpleNamespace(mark_initialized=lambda: None)
+    monkeypatch.setattr("shadai.workers.ingest.ProcessProbe", no_probe)
     with pytest.raises(RuntimeError, match="No active catalog"):
         await run_ingest_worker("test")
     consumer.read.assert_not_called()

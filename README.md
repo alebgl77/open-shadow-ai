@@ -10,7 +10,7 @@
 
 Understand which AI services and tools appear in your environment, where each signal came from, and what it can actually prove. Bring together network metadata, endpoint inventory and Microsoft directory signals in an interface built for investigation.
 
-[Get started](#get-started) · [Deployment](docs/deployment.md) · [Collector operations](docs/collector-operations.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Français](README.fr.md)
+[Get started](#get-started) · [Deployment](docs/deployment.md) · [Production qualification](docs/production-qualification.md) · [Collector operations](docs/collector-operations.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Français](README.fr.md)
 
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
 
@@ -54,10 +54,14 @@ cd open-shadow-ai
 bash scripts/bootstrap.sh
 docker compose config --quiet
 docker compose up -d --build
+docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
 On Windows, use `./scripts/bootstrap.ps1` in place of the Bash bootstrap. Both preserve existing secrets and configuration. Use `-DryRun` or `--dry-run` to preview.
+
+Wait for the new workers to initialize their actual Redis groups before reconciliation; retry if initialization is still in progress. On upgrades, stop all legacy writers/workers/replay clients before starting the indexed version. Readiness requires the reconciled retention schema. See [queue retention](docs/queue-retention.md) and [qualification](docs/production-qualification.md) for failure behavior and the isolated rehearsal.
 
 Open [localhost:3000](http://localhost:3000). PostgreSQL migrations run in the `migrate` service before the API starts; both ClickHouse schema files load on a fresh event-store volume. [Updating an existing installation](docs/deployment.md#updates) requires a separate ClickHouse migration.
 

@@ -30,6 +30,8 @@ docker compose logs --tail 100 api ingest-worker correlation-worker
 
 `/health` tests the API process; `/ready` checks its store dependencies. Worker process liveness is not proof of forward progress. Monitor stream backlog, pending work, dead-letter streams and the last event per collector. Do not treat a healthy UI as proof that every collector reports.
 
+The new per-process probes separate local liveness from dependency/progress readiness. Start new workers to initialize actual Redis groups, then reconcile the indexed retention graph before waiting for readiness or enabling collectors. See [production qualification](production-qualification.md) for the exact fresh/upgrade sequence, bounded isolated lab, physical monitoring, catalogue metrics and remaining live-target evidence.
+
 **Sources & coverage** separates collector contact/heartbeat/original observation timestamps from client-reported queue counters. Admin-only **Deployment pipeline** distinguishes pending acknowledgements, nullable undelivered lag and retained entries/replay sources. Unknown capture loss remains unknown. `/metrics` now requires an administrator or an independent read-only bearer credential; the [monitoring procedure](collector-operations.md#authenticate-monitoring) supplies a private optional Compose override and Prometheus `authorization.credentials_file`. Base bootstrap remains six secrets; monitoring adds a separately provisioned token and explicit private route.
 
 Use `docker compose run --rm api python -m shadai.cli create-admin` for administration: the image entrypoint resolves mounted database secrets before invoking the CLI. The catalog is synchronized on API startup; `sync-catalog` is also available through the CLI.
@@ -70,6 +72,8 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 # --no-deps avoids starting an API dependency graph before the migrations have completed.
 docker compose run --rm --no-deps api python -m shadai.cli init-db
 docker compose up -d
+docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 ```
 
 Stop optional collectors and quiesce remote producers as well. Wait for the stores to accept connections; if a store is still starting, retry its migration command before continuing. The ClickHouse `002` migration must run **before** any API command that starts dependencies or waits on ClickHouse health: the new probe selects `identity_sid`, which is absent on legacy volumes. An unhealthy ClickHouse status during this step is expected until the SQL completes. `exec` does not depend on that health status. Verify `docker compose ps` shows healthy stores before starting applications. Init scripts run only during first database initialization. Fresh installs mount both `docker/clickhouse-init/001_create_database.sql` and `migrations/clickhouse/002_event_metadata.sql`. There is no automatic schema rollback.

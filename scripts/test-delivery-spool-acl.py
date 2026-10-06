@@ -163,8 +163,8 @@ os._exit(77)
 
 def fixture_action(action: str, path: Path, root: Path) -> None:
     powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-    environment = os.environ.copy()
-    environment["PSModulePath"] = str(powershell.parent / "Modules")
+    environment = {key: value for key, value in os.environ.items() if key.casefold() != "psmodulepath"}
+    environment["PSMODULEPATH"] = str(powershell.parent / "Modules")
     environment["SHADAI_SPOOL_ACL_ROOT"] = str(root)
     environment["SHADAI_SPOOL_ACL_PATH"] = str(path)
     environment["SHADAI_SPOOL_ACL_ACTION"] = action
@@ -201,8 +201,8 @@ def rejected_file(path: Path) -> None:
 def ancestor_diagnostic(parent: Path) -> None:
     """Report bounded ACL facts only: no paths, account names, SIDs or secrets."""
     powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-    environment = os.environ.copy()
-    environment["PSModulePath"] = str(powershell.parent / "Modules")
+    environment = {key: value for key, value in os.environ.items() if key.casefold() != "psmodulepath"}
+    environment["PSMODULEPATH"] = str(powershell.parent / "Modules")
     environment["SHADAI_SPOOL_ACL_PARENT"] = str(parent)
     result = subprocess.run(
         [str(powershell), "-NoProfile", "-NonInteractive", "-Command", _ANCESTOR_DIAGNOSTIC],

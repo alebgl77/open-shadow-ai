@@ -1,7 +1,8 @@
 """Live dialect/transaction acceptance against disposable local/CI services.
 
 Run SHADAI_INTEGRATION=1 pytest -q -m integration after setting DATABASE_URL,
-REDIS_URL and CLICKHOUSE_HOST/PORT/DATABASE/USER/PASSWORD. Never use production.
+SHADAI_REDIS_QUEUE_TEST_URL to an initially empty disposable Redis DB 14 and
+CLICKHOUSE_HOST/PORT/DATABASE/USER/PASSWORD. Never use production.
 """
 
 import asyncio
@@ -12,7 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-import redis.asyncio as aioredis
+from queue_integration_fixtures import queue_redis as _queue_redis  # noqa: F401
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -26,6 +27,7 @@ from shadai.models.detection import DetectionORM
 from shadai.models.event import CanonicalEvent
 from shadai.models.receipts import CorrelationReceiptORM, IngestReceiptORM
 from shadai.workers.ingest import EventProcessor
+from shadai.workers.redis_lifecycle import reconcile
 from shadai.workers.streams import StreamConsumer
 
 pytestmark = [
@@ -37,13 +39,13 @@ pytestmark = [
 ]
 
 
-async def test_live_migration_catalog_ingestion_concurrency_and_reclaim():
+async def test_live_migration_catalog_ingestion_concurrency_and_reclaim(queue_redis):
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, capture_output=True, text=True)
     config = load_config()
     get_config.cache_clear()
     engine = create_async_engine(config.database.postgres_url, pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    redis = aioredis.from_url(config.database.redis_url, decode_responses=True)
+    redis = queue_redis
     ch = init_clickhouse(config.database)
     # Execute the same fresh-install schema files as container initialization.
     for path in ("docker/clickhouse-init/001_create_database.sql", "migrations/clickhouse/002_event_metadata.sql"):
@@ -52,8 +54,7 @@ async def test_live_migration_catalog_ingestion_concurrency_and_reclaim():
                 await asyncio.to_thread(ch.execute, statement)
     unique = uuid4().hex
     item_id, domain = "test-" + unique, unique + ".example.test"
-    stream = "test-events:" + unique
-    group = "test-ingest:" + unique
+    stream, group = "events:dns", "ingest_group"
     events = [
         CanonicalEvent(
             tenant_id=config.tenant_id,
@@ -86,6 +87,7 @@ async def test_live_migration_catalog_ingestion_concurrency_and_reclaim():
         processor = EventProcessor(redis, ch, sessions, CatalogMatcher(catalog))
         consumer = StreamConsumer(redis, group, "worker-a", [stream], reclaim_ms=0)
         await consumer.initialize()
+        await reconcile(redis, execute=True, legacy_writers_stopped=True)
         message_id = await redis.xadd(stream, {"data": events[0].model_dump_json()})
         await redis.xreadgroup(group, "crashed-worker", {stream: ">"}, count=1)
         recovered = await consumer.read()
@@ -155,9 +157,8 @@ async def test_live_migration_catalog_ingestion_concurrency_and_reclaim():
             "ALTER TABLE events DELETE WHERE catalog_match_id=%(item)s SETTINGS mutations_sync=1",
             {"item": item_id},
         )
-        # Match records may remain in the disposable test queue; no live workers run in this test.
+        # The explicit DB 14 fixture cleans only the owned allowlisted graph.
         ch.disconnect()
-        await redis.aclose()
         await engine.dispose()
 
 

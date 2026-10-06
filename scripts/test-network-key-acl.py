@@ -80,10 +80,10 @@ exit 0
 
 def fixture_action(action: str, root: Path) -> None:
     powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
-    environment = os.environ.copy()
+    environment = {key: value for key, value in os.environ.items() if key.casefold() != "psmodulepath"}
     # Fixture construction runs in native PS5 independently of the caller's PS7
     # module paths; the production guard itself receives its real environment.
-    environment["PSModulePath"] = str(powershell.parent / "Modules")
+    environment["PSMODULEPATH"] = str(powershell.parent / "Modules")
     environment["SHADAI_NETWORK_ACL_SMOKE_ROOT"] = str(root)
     environment["SHADAI_NETWORK_ACL_SMOKE_PARENT"] = str(root.parent)
     environment["SHADAI_NETWORK_ACL_SMOKE_ACTION"] = action

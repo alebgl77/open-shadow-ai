@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from queue_fakes import admission_fake
 
 from shadai.api import ingestion
 from shadai.api.ingestion import prepare_event
@@ -100,7 +101,8 @@ def test_ingest_api_enqueues_only_the_match(monkeypatch):
 
     pipe = SimpleNamespace(xadd=Mock(), execute=AsyncMock())
     monkeypatch.setattr(
-        "shadai.api.ingestion.get_redis", AsyncMock(return_value=SimpleNamespace(pipeline=Mock(return_value=pipe)))
+        "shadai.api.ingestion.get_redis",
+        AsyncMock(return_value=admission_fake(SimpleNamespace(pipeline=Mock(return_value=pipe)), pipe))
     )
     monkeypatch.setattr(ingestion, "boundary_catalog", CatalogCache())
     monkeypatch.setattr(ingestion, "load_boundary_catalog", AsyncMock(return_value=index()))
@@ -123,6 +125,7 @@ async def test_syslog_collector_matches_a_fortigate_line_before_discarding_its_p
     pipe.execute = AsyncMock()
     redis = MagicMock()
     redis.pipeline.return_value = pipe
+    admission_fake(redis, pipe)
     collector = SyslogCollector(
         "fortigate", FortiGateWebFilterParser(), redis, catalog_loader=AsyncMock(return_value=index())
     )
@@ -141,7 +144,7 @@ async def test_syslog_collector_matches_a_fortigate_line_before_discarding_its_p
 @pytest.mark.parametrize(("upstream", "expected"), [("huggingchat", "huggingchat"), ("retired-item", "huggingface")])
 async def test_worker_keeps_an_active_boundary_match_and_recomputes_a_stale_one(upstream, expected):
     rows = []
-    redis = AsyncMock()
+    redis = admission_fake(AsyncMock())
     session = Session()
     clickhouse = SimpleNamespace(execute=lambda query, values: rows.extend(values))
     processor = EventProcessor(redis, clickhouse, lambda: session, CatalogMatcher(index()))

@@ -1,0 +1,7 @@
+id: synthetic-a
+canonical_name: SYNTHETIC synthetic-a
+category: ai_platform
+signatures:
+  domains:
+  - a.example.test
+  - shared.example.test

@@ -1,0 +1,27 @@
+rule_files: [../rules.yaml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="shadai-host-physical"}'
+        values: '5+0x8'
+      - series: 'node_memory_MemTotal_bytes{job="shadai-host-physical"}'
+        values: '100+0x8'
+      - series: 'up{job="shadai-host-physical"}'
+        values: '1+0x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ShadaiHostMemoryPressure
+        exp_alerts:
+          - exp_labels: {job: shadai-host-physical, severity: warning}
+            exp_annotations: {summary: 'Mémoire disponible hôte inférieure à 10 %'}
+  - interval: 1m
+    input_series:
+      - series: 'up{job="shadai-host-physical"}'
+        values: '0+0x3'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ShadaiHostPhysicalUnknown
+        exp_alerts:
+          - exp_labels: {job: shadai-host-physical, severity: warning}
+            exp_annotations: {summary: 'Mesures physiques hôte indisponibles'}

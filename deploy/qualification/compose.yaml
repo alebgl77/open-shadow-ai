@@ -1,0 +1,145 @@
+x-runtime: &runtime
+  build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: docker/Dockerfile.worker}
+  init: true
+  user: '${SHADAI_QUAL_UID:?}:${SHADAI_QUAL_GID:?}'
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  networks: [lab]
+  labels: &labels
+    com.shadai.qualification.run: '${SHADAI_QUAL_RUN:?}'
+    com.shadai.qualification.role: '${SHADAI_QUAL_ROLE:?}'
+  environment: &environment
+    PG_PASSWORD_FILE: /run/secrets/pg_password
+    REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    CLICKHOUSE_HOST: clickhouse
+    CLICKHOUSE_USER: shadai
+    CLICKHOUSE_DATABASE: shadai
+    CLICKHOUSE_PASSWORD_FILE: /run/secrets/ch_password
+    JWT_SECRET_FILE: /run/secrets/jwt_secret
+    ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
+    SHADAI_TENANT_ID: '${SHADAI_QUAL_TENANT:?}'
+    ALLOW_LEGACY_AGENT_KEY: 'false'
+    SESSION_COOKIE_SECURE: 'false'
+  secrets: [pg_password, redis_password, ch_password, jwt_secret, encryption_key]
+  volumes:
+    - '${SHADAI_QUAL_REPO:?}/config:/app/config:ro'
+    - '${SHADAI_QUAL_REPO:?}/catalog:/app/catalog:ro'
+services:
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
+    profiles: [tools]
+    labels: *labels
+    user: '65534:65534'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [lab]
+    command: [--path.procfs=/host/proc, --path.sysfs=/host/sys, --path.rootfs=/host/root, --collector.disable-defaults, --collector.meminfo, --collector.filesystem, '--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker|var/lib/containers)($|/)']
+    volumes: [/proc:/host/proc:ro, /sys:/host/sys:ro, '/:/host/root:ro,rslave']
+  postgres:
+    image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    labels: *labels
+    environment: {POSTGRES_USER: shadai, POSTGRES_DB: shadai, POSTGRES_PASSWORD_FILE: /run/secrets/pg_password}
+    secrets: [pg_password]
+    volumes: [pg_data:/var/lib/postgresql/data]
+    networks: [lab]
+    healthcheck: {test: [CMD-SHELL, 'pg_isready -U shadai -d shadai'], interval: 2s, timeout: 2s, retries: 60}
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8.33.6-alpine@sha256:87e0a5b72f5465b18eacca7c76850e7ff551c9795c50e451f5646299e5e24146
+    labels: *labels
+    environment: {CLICKHOUSE_DB: shadai, CLICKHOUSE_USER: shadai, CLICKHOUSE_PASSWORD_FILE: /run/secrets/ch_password, CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'}
+    secrets: [ch_password]
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - '${SHADAI_QUAL_REPO:?}/docker/clickhouse-init/001_create_database.sql:/docker-entrypoint-initdb.d/001_create_database.sql:ro'
+      - '${SHADAI_QUAL_REPO:?}/migrations/clickhouse/002_event_metadata.sql:/docker-entrypoint-initdb.d/002_event_metadata.sql:ro'
+    networks: [lab]
+    ulimits: {nofile: {soft: 262144, hard: 262144}}
+    healthcheck: {test: [CMD-SHELL, 'clickhouse-client --user shadai --password "$$(cat /run/secrets/ch_password)" --query "SELECT 1"'], interval: 2s, timeout: 3s, retries: 60}
+  redis:
+    image: redis:7.4.11-alpine3.21@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    labels: *labels
+    secrets: [redis_password]
+    volumes: [redis_data:/data]
+    networks: [lab]
+    command: [sh, -c, 'exec redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction --requirepass "$$(cat /run/secrets/redis_password)"']
+    healthcheck: {test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping'], interval: 2s, timeout: 2s, retries: 60}
+  labredis-pressure:
+    image: redis:7.4.11-alpine3.21@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    labels: {com.shadai.qualification.run: '${SHADAI_QUAL_RUN:?}', com.shadai.qualification.role: pressure}
+    secrets: [redis_pressure_password]
+    volumes: [pressure_data:/data]
+    networks: [lab]
+    command: [sh, -c, 'exec redis-server --appendonly yes --maxmemory 32mb --maxmemory-policy noeviction --requirepass "$$(cat /run/secrets/redis_pressure_password)"']
+    healthcheck: {test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /run/secrets/redis_pressure_password)" redis-cli ping'], interval: 2s, timeout: 2s, retries: 60}
+  migrate:
+    <<: *runtime
+    build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: docker/Dockerfile.api}
+    command: [sh, -c, 'python -m shadai.cli init-db && python -m shadai.cli sync-catalog']
+    depends_on: {postgres: {condition: service_healthy}}
+  api:
+    <<: *runtime
+    build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: docker/Dockerfile.api}
+    ports: ['127.0.0.1::8443']
+    depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}, clickhouse: {condition: service_healthy}}
+  ingest-worker:
+    <<: *runtime
+    command: [python, -m, shadai.workers.ingest]
+    depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}, clickhouse: {condition: service_healthy}}
+  correlation-worker:
+    <<: *runtime
+    command: [python, -m, shadai.workers.correlate]
+    depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}}
+  probe-ingest-peer:
+    <<: *runtime
+    profiles: [tools]
+    command: [python, -m, shadai.workers.ingest]
+    depends_on: {migrate: {condition: service_completed_successfully}, redis: {condition: service_healthy}, clickhouse: {condition: service_healthy}}
+  purge-worker:
+    <<: *runtime
+    command: [python, -m, shadai.workers.purge]
+    depends_on: {migrate: {condition: service_completed_successfully}, clickhouse: {condition: service_healthy}}
+  inspector:
+    <<: *runtime
+    profiles: [tools]
+    command: [python, -m, shadai.qualification, fixture]
+    volumes:
+      - '${SHADAI_QUAL_REPO:?}/config:/app/config:ro'
+      - '${SHADAI_QUAL_REPO:?}/catalog:/app/catalog:ro'
+      - '${SHADAI_QUAL_DIR:?}:/qualification'
+  pressure-test: &pressure-runtime
+    <<: *runtime
+    profiles: [tools]
+    build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: docker/Dockerfile.test}
+    labels: {com.shadai.qualification.run: '${SHADAI_QUAL_RUN:?}', com.shadai.qualification.role: pressure}
+    environment:
+      SHADAI_REQUIRE_REDIS_PRESSURE: '1'
+      SHADAI_REDIS_PRESSURE_LAB: '1'
+      SHADAI_REDIS_PRESSURE_HOST: labredis-pressure
+      SHADAI_REDIS_PRESSURE_PORT: '6379'
+      SHADAI_REDIS_PRESSURE_PASSWORD_FILE: /run/secrets/redis_pressure_password
+      SHADAI_REDIS_PRESSURE_MANIFEST: /qualification/pressure-manifest.json
+    secrets: [redis_pressure_password]
+    volumes: ['${SHADAI_QUAL_DIR:?}/pressure-artifacts:/qualification']
+    command: [python, -m, pytest, -q, -m, redis_pressure, -p, 'no:cacheprovider']
+  pressure-assert:
+    <<: *pressure-runtime
+    volumes:
+      - '${SHADAI_QUAL_DIR:?}/pressure-artifacts:/qualification:ro'
+      - '${SHADAI_QUAL_DIR:?}/pressure-reports:/reports'
+volumes:
+  pg_data: {labels: *labels}
+  ch_data: {labels: *labels}
+  redis_data: {labels: *labels}
+  pressure_data: {labels: {com.shadai.qualification.run: '${SHADAI_QUAL_RUN:?}', com.shadai.qualification.role: pressure}}
+networks:
+  lab: {labels: *labels, internal: false}
+secrets:
+  pg_password: {file: '${SHADAI_QUAL_DIR:?}/secrets/pg_password'}
+  redis_password: {file: '${SHADAI_QUAL_DIR:?}/secrets/redis_password'}
+  redis_pressure_password: {file: '${SHADAI_QUAL_DIR:?}/secrets/redis_pressure_password'}
+  ch_password: {file: '${SHADAI_QUAL_DIR:?}/secrets/ch_password'}
+  jwt_secret: {file: '${SHADAI_QUAL_DIR:?}/secrets/jwt_secret'}
+  encryption_key: {file: '${SHADAI_QUAL_DIR:?}/secrets/encryption_key'}

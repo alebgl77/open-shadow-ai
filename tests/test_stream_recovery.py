@@ -1,5 +1,6 @@
 """Stateful outage/backoff and controlled replay tests with a disposable Redis model."""
 
+import json
 from collections import defaultdict
 from unittest.mock import AsyncMock
 
@@ -20,6 +21,8 @@ class MemoryRedis:
         self.sequence = 100
         self.expiry = {}
         self.fresh = []
+        self.refs = defaultdict(dict)
+        self.schema = "1"
 
     async def hgetall(self, key):
         return dict(self.state.get(key, {}))
@@ -42,11 +45,14 @@ class MemoryRedis:
             self.expiry[key] = 604800
             return [attempts, poison]
         if script == DEADLETTER:
-            stream, dlq, retry_key, group, message_id, error_type, attempts = values
+            stream, dlq, retry_key, refkey, schema, group, message_id, error_type, attempts, cap = values
             if (stream, message_id) not in self.pending:
                 return 0
             if dlq in self.markers:  # Wrong type simulates Redis atomic-script failure.
                 raise RuntimeError("WRONGTYPE")
+            if len(self.streams[dlq]) >= int(cap):
+                return -1
+            self.refs[refkey][message_id] = self.refs[refkey].get(message_id, 0) + 1
             self.sequence += 1
             self.streams[dlq][f"{self.sequence}-0"] = {
                 "stream": stream, "message_id": message_id, "error_type": error_type, "attempts": attempts,
@@ -55,19 +61,26 @@ class MemoryRedis:
             self.state.pop(retry_key, None)
             return 1
         if script == ACK_SUCCESS:
-            stream, group, message_id = values
+            stream, refkey, schema, group, message_id = values
             if (stream, message_id) not in self.pending:
                 return 0
             self.pending.remove((stream, message_id))
-            if len(self.groups.get(stream, [])) == 1:
+            if len(self.groups.get(stream, [])) == 1 and self.schema == "1" and not self.refs[refkey].get(message_id):
                 self.streams[stream].pop(message_id, None)
             return 1
         if script == REPLAY:
-            stream, dlq, marker, message_id = values
+            stream, dlq, marker, refkey, schema, pointer_id, message_id, cap, maxbytes, expected = values
+            pointer = self.streams[dlq].get(pointer_id)
+            if pointer is None:
+                return ["missing_pointer", ""]
+            if [item for pair in pointer.items() for item in pair] != json.loads(expected):
+                return ["changed_pointer", ""]
             if marker in self.markers:
                 return ["already_replayed", self.markers[marker]]
             if message_id not in self.streams[stream]:
                 return ["missing_source", ""]
+            if len(self.streams[stream]) >= int(cap):
+                return ["full", ""]
             self.sequence += 1
             replay_id = f"{self.sequence}-0"
             self.streams[stream][replay_id] = dict(self.streams[stream][message_id])
