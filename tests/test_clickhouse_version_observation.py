@@ -1,5 +1,6 @@
 """Source-backed Docker inspection controls; real native version collection is mandatory CI."""
 
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -320,8 +321,17 @@ def integrated(tmp_path, monkeypatch):
     archive_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
     model = DockerModel()
     state = SimpleNamespace(model=model, root=root, output=output, archive=archive, layout_cleanup_error=None,
-                            post_layout_drift=False, source_drift=False, published=[])
+                            post_layout_drift=False, source_drift=False, published=[], clients=[], events=[])
+    # SYNTHETIC current recipe/source graph for the modeled OCI transport.
+    # Historical native capture bytes and their original claims remain untouched.
     current = copy.deepcopy(CAPTURE)
+    recipe = (root / "deploy/service-builds/Dockerfile.clickhouse").read_bytes()
+    binding = load(root / "scripts/component_source.py", "synthetic_clickhouse_fixture_source")
+    predicate = current["provenance"][0]["statement"]["predicate"]
+    predicate["runDetails"]["metadata"]["buildkit_metadata"]["source"]["infos"][0]["data"] = \
+        base64.b64encode(recipe).decode()
+    predicate["buildDefinition"]["internalParameters"]["buildConfig"]["llbDefinition"] = \
+        binding.expected_clickhouse_graph(recipe, "linux/amd64")
     monkeypatch.setattr(OBSERVER, "ROOT", root)
     monkeypatch.setattr(OBSERVER, "native_platform", lambda: "linux/amd64")
     # Only the host-specific filesystem/syscall boundary is modeled here;
@@ -333,6 +343,7 @@ def integrated(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_JOB", "derived-service-builds")
 
     def client(command, **kwargs):
+        state.clients.append(command)
         if command[0] == "git":
             return 0, (current["capture"]["merge"] + "\n").encode() if command[1] == "rev-parse" else b"", b""
         return model.run(command, **kwargs)
@@ -340,18 +351,24 @@ def integrated(tmp_path, monkeypatch):
 
     @contextmanager
     def prepared_layout(*args, **kwargs):
+        state.events.append("layout-enter")
         def unchanged():
+            state.events.append("layout-check")
             if state.post_layout_drift:
                 raise ValueError("synthetic OCI drift")
             if state.source_drift:
                 (root / "scripts/component_principal.py").write_bytes(b"changed")
             return {}
-        yield SimpleNamespace(evidence={"archive_sha256": archive_hash,
-            "image_manifests": [current["capture"]["image_manifest"].removeprefix("sha256:")],
-            "image_configs": {current["capture"]["image_manifest"].removeprefix("sha256:"): SUBJECT["image_config"]}},
-            assert_unchanged=unchanged)
-        if state.layout_cleanup_error:
-            raise state.layout_cleanup_error
+        try:
+            yield SimpleNamespace(evidence={"archive_sha256": archive_hash,
+                "image_manifests": [current["capture"]["image_manifest"].removeprefix("sha256:")],
+                "image_configs": {current["capture"]["image_manifest"].removeprefix("sha256:"):
+                                  SUBJECT["image_config"]}},
+                assert_unchanged=unchanged)
+        finally:
+            state.events.append("layout-cleanup")
+            if state.layout_cleanup_error:
+                raise state.layout_cleanup_error
     original = OBSERVER.script
 
     def script(name):
@@ -366,8 +383,10 @@ def integrated(tmp_path, monkeypatch):
     monkeypatch.setattr(OBSERVER, "archive_sha", lambda *args: hashlib.sha256(archive.read_bytes()).hexdigest())
 
     def publish(path, data, **kwargs):
-        assert not model.exists
+        assert not model.exists and state.events[-1] == "layout-cleanup"
+        state.events.append("publish-precommit")
         kwargs["precommit"]()
+        state.events.append("publish")
         state.published.append(data)
         path.write_bytes(data)
     monkeypatch.setattr(OBSERVER, "atomic_receipt", publish)
@@ -381,6 +400,10 @@ def test_full_collector_publishes_bound_receipt_only_after_both_owned_cleanups(i
     assert json.loads(integrated.output.read_bytes()) == receipt
     assert receipt["subject"]["archive_sha256"] == hashlib.sha256(integrated.archive.read_bytes()).hexdigest()
     assert receipt["authentication"] == {"builder_provenance": "unverified", "publisher_signature": "unverified"}
+    assert receipt["cleanup"] == {"container_removed": True, "absence_verified": True}
+    assert integrated.events == ["layout-enter", "layout-check", "layout-cleanup", "publish-precommit", "publish"]
+    assert sum(args[0] == "rm" for args, _ in integrated.model.calls) == 1
+    assert integrated.model.calls[-1][0][:2] == ["container", "ls"]
 
 
 @pytest.mark.parametrize("kind", [
@@ -399,12 +422,29 @@ def test_full_collector_refusal_never_leaves_stale_or_new_receipt(integrated, ki
         integrated.model.start_stdout = b"wrong version"
     else:
         monkeypatch.setenv("GITHUB_RUN_ID", "0")
-    with pytest.raises(ValueError):
+    reason = {"container-cleanup": "owned_cleanup_failed", "layout-cleanup": "owned_cleanup_failed",
+              "layout-drift": "synthetic OCI drift", "source-drift": "source_or_archive_drift",
+              "output": "cli_version_output", "ci": "Principal observation requires current numeric CI identity"}
+    with pytest.raises(ValueError, match="^" + reason[kind] + "$") as raised:
         OBSERVER.collect(integrated.args)
     assert integrated.published == []
     # Invalid CI preflight is before any owned stale-file deletion; it must not
     # create a new receipt. Other refusals clear a previously owned stale receipt.
     assert integrated.output.exists() is (kind == "ci")
+    if kind == "ci":
+        assert not integrated.clients and not integrated.events and not integrated.model.calls
+    else:
+        assert type(raised.value) is (ValueError if kind in {"layout-cleanup", "layout-drift"}
+                                      else OBSERVER.ObservationError)
+        assert sum(args[0] == "create" for args, _ in integrated.model.calls) == 1
+        assert sum(args[0] == "start" for args, _ in integrated.model.calls) == 1
+        assert sum(args[0] == "rm" for args, _ in integrated.model.calls) == 1
+        assert integrated.model.exists is (kind == "container-cleanup")
+        assert integrated.events[:1] == ["layout-enter"] and "layout-cleanup" in integrated.events
+        assert ("layout-check" in integrated.events) is (kind in {"layout-cleanup", "layout-drift", "source-drift"})
+        assert ("publish-precommit" in integrated.events) is (kind == "source-drift")
+        if kind == "layout-cleanup":
+            assert raised.value is integrated.layout_cleanup_error
 
 
 def test_primary_and_cancel_survive_secondary_container_cleanup_refusal(integrated):
@@ -415,6 +455,8 @@ def test_primary_and_cancel_survive_secondary_container_cleanup_refusal(integrat
         OBSERVER.collect(integrated.args)
     assert raised.value is primary and raised.value.__notes__ == ["owned_cleanup_failed"]
     assert integrated.published == [] and not integrated.output.exists()
+    assert integrated.model.exists and integrated.model.calls[-1][0] == ["rm", "--force", CID]
+    assert integrated.events == ["layout-enter", "layout-cleanup"]
 
 
 @pytest.mark.parametrize("kind", ["code", "note"])
@@ -444,6 +486,8 @@ def test_full_collector_lifecycle_refusal_aborts_with_no_new_clients_or_receipt(
         OBSERVER.collect(integrated.args)
     assert raised.value is primary and raised.value.__notes__ == ["owned_cleanup_failed"]
     assert integrated.model.calls[-1][0] == ["start", "--attach", CID]
+    assert integrated.clients[-1] == ["docker", "--context", "default", "start", "--attach", CID]
+    assert integrated.model.exists and integrated.events == ["layout-enter", "layout-cleanup"]
     assert not integrated.published and not integrated.output.exists()
 
 
