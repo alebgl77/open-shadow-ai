@@ -1,5 +1,6 @@
 """Exercise scanner orchestration with real inventory gates and bounded fake I/O."""
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -157,6 +158,18 @@ def harness(tmp_path, monkeypatch):
 
     def subject_documents(handle, image_manifest):
         result = MODELS.documents(component_fixture(), {'commit': COMMIT, 'repository': REPOSITORY})
+        if state.component in {'postgres', 'node-exporter', 'clickhouse'}:
+            # This layout/runtime is synthetic: use a synthetic CURRENT recipe graph.
+            # The preserved historical native capture is never relabelled or rewritten.
+            manifest = json.loads((root / 'requirements/service-builds/manifest.json').read_bytes())
+            recipe = (root / manifest['services'][state.component]['dockerfile']).read_bytes()
+            predicate = result['provenance']['statement']['predicate']
+            metadata = predicate['runDetails']['metadata']['buildkit_metadata']
+            metadata['source']['infos'][0]['data'] = base64.b64encode(recipe).decode()
+            graph = SOURCE.expected_clickhouse_graph(recipe, 'linux/amd64') if state.component == 'clickhouse' else \
+                SOURCE.expected_graph(recipe, (root / '.dockerignore').read_bytes(), 'linux/amd64',
+                                      'gosu' if state.component == 'postgres' else 'node-exporter')
+            predicate['buildDefinition']['internalParameters']['buildConfig']['llbDefinition'] = graph
         if state.source_mutate:
             state.source_mutate(result)
         return result

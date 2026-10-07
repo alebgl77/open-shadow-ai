@@ -50,6 +50,17 @@
           "signature_members": [
             ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
           ]
+        },
+        {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/zlib-1.3.2-r1.apk",
+          "sha256": "63aeea03c15a2f9018f81805cfc8aa926bdf5cd68921f22149c2fbb5d0ee9f47",
+          "bytes": 56210,
+          "architecture": "x86_64",
+          "version": "1.3.2-r1",
+          "package": "zlib",
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
+          ]
         }
       ],
       "aarch64": [
@@ -71,6 +82,17 @@
           "architecture": "aarch64",
           "version": "3.5.9-r0",
           "package": "libssl3",
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
+          ]
+        },
+        {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/zlib-1.3.2-r1.apk",
+          "sha256": "1f77a542ac6634761b9fe38d8bdca19b154071dcfa25432e73f2bc8a0740a33f",
+          "bytes": 54334,
+          "architecture": "aarch64",
+          "version": "1.3.2-r1",
+          "package": "zlib",
           "signature_members": [
             ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
           ]
@@ -100,6 +122,17 @@
           "signature_members": [
             ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
           ]
+        },
+        {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/x86_64/zlib-1.3.2-r1.apk",
+          "sha256": "52ed3729bec11d63313f38ade503d40650bb57a36ec72a0050619391fb6bfd5e",
+          "bytes": 55400,
+          "architecture": "x86_64",
+          "version": "1.3.2-r1",
+          "package": "zlib",
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
+          ]
         }
       ],
       "aarch64": [
@@ -121,6 +154,45 @@
           "architecture": "aarch64",
           "version": "3.3.7-r2",
           "package": "libssl3",
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
+          ]
+        },
+        {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64/zlib-1.3.2-r1.apk",
+          "sha256": "47bdb66edfddca8b64438369affabd9debc05159aa1bff5c26027270cb28b3f7",
+          "bytes": 54390,
+          "architecture": "aarch64",
+          "version": "1.3.2-r1",
+          "package": "zlib",
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
+          ]
+        }
+      ]
+    },
+    "postgres": {
+      "x86_64": [
+        {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/zlib-1.3.2-r1.apk",
+          "sha256": "63aeea03c15a2f9018f81805cfc8aa926bdf5cd68921f22149c2fbb5d0ee9f47",
+          "bytes": 56210,
+          "architecture": "x86_64",
+          "version": "1.3.2-r1",
+          "package": "zlib",
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
+          ]
+        }
+      ],
+      "aarch64": [
+        {
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/zlib-1.3.2-r1.apk",
+          "sha256": "1f77a542ac6634761b9fe38d8bdca19b154071dcfa25432e73f2bc8a0740a33f",
+          "bytes": 54334,
+          "architecture": "aarch64",
+          "version": "1.3.2-r1",
+          "package": "zlib",
           "signature_members": [
             ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
           ]
@@ -169,12 +241,12 @@
     "requirements/service-builds/node-exporter/modules.txt": "45df7e15ac5939a832aa9bfcc3e488ca8cbb69c8c28b2fc766e2d0ef59e16d54",
     "requirements/service-builds/node-exporter/upstream.go.mod": "0e4614c617f16e308698ed1afdd0f0f055b119d4cdf015b336c095eb35fa34ed",
     "requirements/service-builds/node-exporter/upstream.go.sum": "e9457fad10a31b707ebfb68dc8378ec71f3271d04faf84f7ec8f9d231d81ea57",
-    "deploy/service-builds/Dockerfile.clickhouse": "bea27924d25f818407944a0d77931478a1440d18643a93d9f59afcb21296d93d",
+    "deploy/service-builds/Dockerfile.clickhouse": "b6c5f01ecd85c4bc13ef758c560db0a421472c05cecda376dd8dd1b7e83d92fe",
     "deploy/service-builds/Dockerfile.node-exporter": "821d523de49e3b31148e6ed2c6fb2813330077c662d993850e60ad486525b095",
-    "deploy/service-builds/Dockerfile.postgres": "9448efc06b0ecc77ae0ad0167cff1a3ab239e2bf1acddd5bed3807d1d56d2ead",
-    "deploy/service-builds/Dockerfile.redis": "fbdfd201d5868278af33d9e1075631426465ee2928ee9506ee4e47f969782459",
+    "deploy/service-builds/Dockerfile.postgres": "3d2a542de470bf5fc8d2558475b628efae539c69fd15acf83bc5db99cbbeb6a7",
+    "deploy/service-builds/Dockerfile.redis": "623979a8b0b880316e66f2620a12ae62e2458f6fb32963608e4fb66af314458c",
     "requirements/service-builds/.gitattributes": "2804281a76c3635e66dabadffc7212e07184a22816f277a03591b3297539fc64",
     "deploy/service-builds/.gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    "requirements/service-builds/NOTICE.md": "58f6705d6bbac65573efa144638f5bcd2f90595e1bdb236cfcfb46266891d12d"
+    "requirements/service-builds/NOTICE.md": "43f0578bf3d88f50b1cecf1954bab8551bcb4117a91eee7bc884191f9fe1a7bb"
   }
 }

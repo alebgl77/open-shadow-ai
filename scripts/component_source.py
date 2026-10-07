@@ -97,9 +97,20 @@ def expected_graph(recipe, dockerignore, platform, component):
     add({"file": {"actions": [copy("/usr/local/go/LICENSE", licenses + "GO-LICENSE")]}}, ["step9:0", "step7:0"])
     add({"file": {"actions": [copy("/out/GO-MODULES.txt", licenses, output_port=-1),
          copy("/out/THIRD-PARTY-NOTICES.txt", licenses, input_port=2)]}}, ["step10:0", "step7:0"])
-    add(run(runs[2], PG_ENV if component == "gosu" else
-            ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"], cwd="/",
-            user=None if component == "gosu" else "nobody"), ["step11:0"], native=True)
+    final_command = runs[2]
+    final_inputs = ["step11:0"]
+    final_run = run(final_command, PG_ENV if component == "gosu" else
+                    ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"], cwd="/",
+                    user=None if component == "gosu" else "nobody")
+    if component == "gosu" and final_command.startswith("--mount="):
+        mount, command = final_command.split(None, 1)
+        if mount != "--mount=type=bind,from=build,source=/packages,target=/packages,ro":
+            raise ValueError("Unsupported maintained PostgreSQL package mount")
+        final_run["exec"]["meta"]["args"][-1] = command
+        final_run["exec"]["mounts"].append(
+            {"dest": "/packages", "input": 1, "output": -1, "readonly": True, "selector": "/packages"})
+        final_inputs.append("step7:0")
+    add(final_run, final_inputs, native=True)
     add({}, ["step12:0"], terminal=True)
     return graph
 

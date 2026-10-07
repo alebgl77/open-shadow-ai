@@ -27,6 +27,23 @@ SERVICE_BASES = {"postgres-base": "postgres:16.15-alpine3.24",
                  "clickhouse-base": "clickhouse/clickhouse-server:25.8.33.6-alpine",
                  "redis-base": "redis:7.4.11-alpine3.21",
                  "node-exporter-base": "quay.io/prometheus/node-exporter:v1.12.1"}
+APK_VERSIONS = {"postgres": ("v3.24", {"zlib": "1.3.2-r1"}),
+                "clickhouse": ("v3.24", {"libcrypto3": "3.5.9-r0", "libssl3": "3.5.9-r0", "zlib": "1.3.2-r1"}),
+                "redis": ("v3.21", {"libcrypto3": "3.3.7-r2", "libssl3": "3.3.7-r2", "zlib": "1.3.2-r1"})}
+APK_BYTES = {
+    ("v3.21", "x86_64", "libcrypto3"): ("3c6fb1c90a974ef0fc83687868712340ca3df3ef5206cfc79fd81ff16f22596a", 1830965),
+    ("v3.21", "x86_64", "libssl3"): ("00e674d00a80c9808580546dd388093c1c67f21628a9d70e27628bddc86a31e8", 358256),
+    ("v3.21", "aarch64", "libcrypto3"): ("2303cca13dc8bba5798744a68abd07530abb35ab339d9cc4640fc53276049af0", 2149751),
+    ("v3.21", "aarch64", "libssl3"): ("d494a0a211dd78a8055c24885fc06375eabb79c82ae797f7f694cefbf3653b79", 349337),
+    ("v3.24", "x86_64", "libcrypto3"): ("6632d758d8f5e9ea3b650fe966f23bbf9a202f8b8dceecac93da135dec5e3689", 1980198),
+    ("v3.24", "x86_64", "libssl3"): ("05e3393fb95aa5751ca2f9d242f659f6cff82c1cc7767cc2df4a086f7ad01877", 381860),
+    ("v3.24", "aarch64", "libcrypto3"): ("2676a2b0b6e23ea2edccf3ee982b9842a665d52603d047de3d0a185dc316d983", 2286800),
+    ("v3.24", "aarch64", "libssl3"): ("20ac252b276d73f2c69c1d25f84537c7fba81caefc026c6be1094b394af2082e", 373023),
+    ("v3.21", "x86_64", "zlib"): ("52ed3729bec11d63313f38ade503d40650bb57a36ec72a0050619391fb6bfd5e", 55400),
+    ("v3.21", "aarch64", "zlib"): ("47bdb66edfddca8b64438369affabd9debc05159aa1bff5c26027270cb28b3f7", 54390),
+    ("v3.24", "x86_64", "zlib"): ("63aeea03c15a2f9018f81805cfc8aa926bdf5cd68921f22149c2fbb5d0ee9f47", 56210),
+    ("v3.24", "aarch64", "zlib"): ("1f77a542ac6634761b9fe38d8bdca19b154071dcfa25432e73f2bc8a0740a33f", 54334),
+}
 
 
 def validate_inventory(images: dict) -> None:
@@ -46,9 +63,18 @@ def validate_inventory(images: dict) -> None:
             raise ValueError(f"Unknown maintained runtime recipe for {name}")
 
 
+def _unique_service_manifest_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("Duplicate maintained service manifest key")
+        value[key] = item
+    return value
+
+
 def check_service_builds(root: Path, images: dict) -> dict:
     path = root / "requirements/service-builds/manifest.json"
-    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_service_manifest_object)
     if not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or \
             type(manifest.get("recipe_version")) is not int or \
             manifest.get("schema") != 1 or manifest.get("recipe_version") != 1 or \
@@ -114,24 +140,43 @@ def check_service_builds(root: Path, images: dict) -> dict:
                     for filename in ("go.mod", "go.sum", "modules.txt")):
             raise ValueError("Maintained recipe is not bound to its exact source and module locks")
     packages = manifest.get("packages", {})
-    if set(packages) != {"clickhouse", "redis"}:
+    if type(packages) is not dict or any(type(key) is not str for key in packages) or \
+            set(packages) != set(APK_VERSIONS):
         raise ValueError("Missing maintained APK runtime inventory")
-    for name, alpine, version in (("clickhouse", "v3.24", "3.5.9-r0"), ("redis", "v3.21", "3.3.7-r2")):
-        if set(packages[name]) != {"x86_64", "aarch64"}:
+    for name, (alpine, versions) in APK_VERSIONS.items():
+        if type(packages[name]) is not dict or any(type(key) is not str for key in packages[name]) or \
+                set(packages[name]) != {"x86_64", "aarch64"}:
             raise ValueError("Maintained APKs require both native architectures")
+        recipe = recipes[name].replace("\\\n", "")
+        stage = "build" if name == "postgres" else "packages"
+        mount = f"--mount=type=bind,from={stage},source=/packages,target=/packages,ro"
+        apk_paths = " ".join(f"/packages/{package}.apk" for package in versions)
+        checks = " ".join(f"'{package}={version}'" for package, version in versions.items())
+        if "--allow-untrusted" in recipe or "apk upgrade" in recipe or \
+                not re.search(r"(?m)^RUN " + re.escape(mount) + r"\s+apk add --no-network " +
+                              re.escape(apk_paths) + r"\s+&& apk info -e " + re.escape(checks) +
+                              r"(?:\s+&&|\n)", recipe):
+            raise ValueError("Maintained APK installation must retain its exact read-only offline "
+                             "signature/version checks")
         for arch, values in packages[name].items():
-            if not isinstance(values, list) or len(values) != 2 or \
-                    {value.get("package") for value in values} != {"libcrypto3", "libssl3"}:
-                raise ValueError("Maintained APKs require exact OpenSSL library coverage")
+            fields = {"url", "sha256", "bytes", "architecture", "version", "package", "signature_members"}
+            if type(values) is not list or len(values) != len(versions) or any(
+                    type(value) is not dict or any(type(key) is not str for key in value) or set(value) != fields or
+                    any(type(value[field]) is not str for field in fields - {"bytes", "signature_members"}) or
+                    type(value["bytes"]) is not int or type(value["signature_members"]) is not list or
+                    any(type(signature) is not str for signature in value["signature_members"])
+                    for value in values) or \
+                    {value["package"] for value in values} != set(versions):
+                raise ValueError("Maintained APKs require the exact typed seven-field package coverage")
             key = "6165ee59" if arch == "x86_64" else "616ae350"
             for value in values:
                 package = value["package"]
+                version = versions[package]
                 url = f"https://dl-cdn.alpinelinux.org/alpine/{alpine}/main/{arch}/{package}-{version}.apk"
                 signature = f".SIGN.RSA.alpine-devel@lists.alpinelinux.org-{key}.rsa.pub"
-                if value.get("architecture") != arch or value.get("version") != version or \
-                        value.get("url") != url or \
-                        not re.fullmatch(r"[a-f0-9]{64}", value.get("sha256", "")) or \
-                        value.get("signature_members") != [signature]:
+                digest, size = APK_BYTES[alpine, arch, package]
+                if value != {"architecture": arch, "version": version, "package": package, "url": url,
+                             "sha256": digest, "bytes": size, "signature_members": [signature]}:
                     raise ValueError("Maintained APK publisher, architecture, hash or signature mismatch")
                 if value["sha256"] not in recipes[name] or \
                         f"/{alpine}/main/$arch/{package}-{version}.apk" not in recipes[name]:

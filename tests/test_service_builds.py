@@ -1,6 +1,7 @@
 """Maintained runtime inputs and mandatory coverage fail closed on drift."""
 
 import copy
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -117,6 +118,181 @@ def test_recipe_bytes_tampering_is_detected(service_tree):
         PINS.check_references(service_tree)
 
 
+@pytest.mark.parametrize("service", ["postgres", "clickhouse", "redis"])
+@pytest.mark.parametrize("arch", ["x86_64", "aarch64"])
+def test_zlib_native_matrix_is_exact_and_other_patch_versions_are_retained(service, arch):
+    manifest = PINS.check_service_builds(ROOT, PINS.inventory())
+    entries = manifest["packages"][service][arch]
+    zlib, = [entry for entry in entries if entry["package"] == "zlib"]
+    assert zlib["version"] == "1.3.2-r1" and type(zlib["bytes"]) is int
+    branch = "v3.21" if service == "redis" else "v3.24"
+    assert zlib["url"] == f"https://dl-cdn.alpinelinux.org/alpine/{branch}/main/{arch}/zlib-1.3.2-r1.apk"
+    assert {entry["package"] for entry in entries} == (
+        {"zlib"} if service == "postgres" else {"libcrypto3", "libssl3", "zlib"})
+    for entry in entries:
+        if entry["package"] != "zlib":
+            assert entry["version"] == ("3.3.7-r2" if service == "redis" else "3.5.9-r0")
+
+
+@pytest.mark.parametrize("duplicate", ["schema", "apk-field", "service", "architecture", "opaque"])
+def test_raw_service_manifest_rejects_duplicate_object_keys_at_any_depth(service_tree, duplicate):
+    path = service_tree / "requirements/service-builds/manifest.json"
+    manifest = json.loads(path.read_text())
+    if duplicate == "schema":
+        target, key, first = manifest, "schema", 0
+    elif duplicate == "apk-field":
+        target, key, first = manifest["packages"]["postgres"]["x86_64"][0], "version", "0.0.0-r0"
+    elif duplicate == "service":
+        target, key, first = manifest["services"], "redis", {}
+    elif duplicate == "architecture":
+        target, key, first = manifest["packages"]["postgres"], "x86_64", []
+    else:
+        manifest["opaque"] = {"nested": {"version": "opaque"}}
+        target, key, first = manifest["opaque"]["nested"], "version", "discarded"
+    raw = json.dumps(manifest, separators=(",", ":"))
+    original = json.dumps(target, separators=(",", ":"))
+    replacement = "{" + json.dumps(key) + ":" + json.dumps(first) + "," + original[1:]
+    assert original in raw
+    raw = raw.replace(original, replacement, 1)
+    assert json.loads(raw) == manifest  # Ordinary decoding hides the duplicate's first value.
+    path.write_text(raw)
+    with pytest.raises(ValueError, match="Duplicate maintained service manifest key"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+def test_service_manifest_preserves_valid_data_and_case_distinct_opaque_keys(service_tree):
+    path = service_tree / "requirements/service-builds/manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["opaque"] = {"nested": {"Version": "upper", "version": "lower"}}
+    path.write_text(json.dumps(manifest))
+    assert PINS.check_service_builds(service_tree, PINS.inventory(service_tree)) == manifest
+
+
+@pytest.mark.parametrize("service", ["postgres", "clickhouse", "redis"])
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "unknown", "extra-key", "version", "branch",
+    "hash", "signature", "signature-type", "architecture", "bytes", "bool-bytes", "float-bytes",
+    "missing-architecture", "unexpected-architecture", "missing-service", "unknown-service"])
+def test_zlib_publisher_matrix_refuses_missing_extra_or_typed_alias_entries(service_tree, service, mutation):
+    def mutate(manifest):
+        packages = manifest["packages"]
+        entries = packages[service]["aarch64"]
+        entry = next(value for value in entries if value["package"] == "zlib")
+        if mutation == "missing":
+            entries.remove(entry)
+        elif mutation == "duplicate":
+            entries.append(copy.deepcopy(entry))
+        elif mutation == "unknown":
+            entry["package"] = "zlib-dev"
+        elif mutation == "extra-key":
+            entry["allow_untrusted"] = False
+        elif mutation == "version":
+            entry["version"] = "1.3.2-r0"
+        elif mutation == "branch":
+            entry["url"] = entry["url"].replace("v3.21" if service == "redis" else "v3.24", "v3.22")
+        elif mutation == "hash":
+            entry["sha256"] = "a" * 64
+        elif mutation == "signature":
+            entry["signature_members"] = [".SIGN.RSA.foreign.rsa.pub"]
+        elif mutation == "signature-type":
+            entry["signature_members"] = {"name": entry["signature_members"][0]}
+        elif mutation == "architecture":
+            entry["architecture"] = "x86_64"
+        elif mutation in {"bytes", "bool-bytes", "float-bytes"}:
+            entry["bytes"] = {"bytes": entry["bytes"] + 1, "bool-bytes": True,
+                              "float-bytes": float(entry["bytes"])}[mutation]
+        elif mutation == "missing-architecture":
+            del packages[service]["x86_64"]
+        elif mutation == "unexpected-architecture":
+            packages[service]["armv7"] = copy.deepcopy(entries)
+        elif mutation == "missing-service":
+            del packages[service]
+        else:
+            packages["unknown"] = copy.deepcopy(packages[service])
+    edit_manifest(service_tree, mutate)
+    with pytest.raises(ValueError):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+@pytest.mark.parametrize("service", ["postgres", "clickhouse", "redis"])
+@pytest.mark.parametrize("mutation", ["online", "untrusted", "upgrade", "missing-zlib", "stale-version", "write-mount"])
+def test_refreshed_hash_cannot_authorize_an_unsafe_apk_install(service_tree, service, mutation):
+    name = f"deploy/service-builds/Dockerfile.{service}"
+    path = service_tree / name
+    recipe = path.read_text()
+    changes = {"online": ("apk add --no-network", "apk add"),
+               "untrusted": ("apk add --no-network", "apk add --no-network --allow-untrusted"),
+               "upgrade": ("apk add --no-network", "apk upgrade --no-network"),
+               "missing-zlib": (" /packages/zlib.apk \\\n", " \\\n"),
+               "stale-version": ("'zlib=1.3.2-r1'", "'zlib=1.3.2-r0'"),
+               "write-mount": ("target=/packages,ro", "target=/packages,rw")}
+    before, after = changes[mutation]
+    assert before in recipe
+    path.write_text(recipe.replace(before, after))
+    edit_manifest(service_tree, lambda manifest: manifest["files"].update(
+        {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
+    with pytest.raises(ValueError, match="offline signature/version checks"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+def test_zlib_hash_cannot_be_replaced_by_rehashing_recipe_and_manifest(service_tree):
+    path = service_tree / "deploy/service-builds/Dockerfile.postgres"
+    old = "63aeea03c15a2f9018f81805cfc8aa926bdf5cd68921f22149c2fbb5d0ee9f47"
+    path.write_bytes(path.read_bytes().replace(old.encode(), b"a" * 64))
+    def mutate(manifest):
+        manifest["packages"]["postgres"]["x86_64"][0]["sha256"] = "a" * 64
+        manifest["files"]["deploy/service-builds/Dockerfile.postgres"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    edit_manifest(service_tree, mutate)
+    with pytest.raises(ValueError, match="publisher"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+@pytest.mark.parametrize("mutation", ["packages", "architectures", "entries", "entry", "key", "string",
+                                      "size", "signatures", "signature"])
+def test_apk_matrix_rejects_nonbuiltin_containers_and_scalar_subclasses(monkeypatch, mutation):
+    class Mapping(dict):
+        pass
+
+    class Sequence(list):
+        pass
+
+    class Text(str):
+        pass
+
+    class Number(int):
+        pass
+
+    images = PINS.inventory()
+    manifest = json.loads((ROOT / "requirements/service-builds/manifest.json").read_bytes())
+    architectures = manifest["packages"]["postgres"]
+    entries = architectures["x86_64"]
+    entry = entries[0]
+    if mutation == "packages":
+        manifest["packages"] = Mapping(manifest["packages"])
+    elif mutation == "architectures":
+        manifest["packages"]["postgres"] = Mapping(architectures)
+    elif mutation == "entries":
+        architectures["x86_64"] = Sequence(entries)
+    elif mutation == "entry":
+        entries[0] = Mapping(entry)
+    elif mutation == "key":
+        entry[Text("bytes")] = entry.pop("bytes")
+    elif mutation == "string":
+        entry["package"] = Text(entry["package"])
+    elif mutation == "size":
+        entry["bytes"] = Number(entry["bytes"])
+    elif mutation == "signatures":
+        entry["signature_members"] = Sequence(entry["signature_members"])
+    else:
+        entry["signature_members"][0] = Text(entry["signature_members"][0])
+    def loads(raw, *, object_pairs_hook):
+        assert object_pairs_hook is PINS._unique_service_manifest_object
+        return manifest
+
+    monkeypatch.setattr(PINS.json, "loads", loads)
+    with pytest.raises(ValueError):
+        PINS.check_service_builds(ROOT, images)
+
+
 @pytest.mark.parametrize("replacement", ["build_only", "wrong_recipe", "missing_build_policy"])
 def test_compose_cannot_deploy_a_base_or_unbound_local_tag(service_tree, replacement):
     path = service_tree / "docker-compose.yml"
@@ -191,6 +367,11 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
                           "go mod verify", "go list -m all | cmp", "go build -trimpath -buildvcs=false"):
                 assert guard in recipe
             assert "USER " not in recipe  # The exact official runtime user/entrypoint is inherited.
+        if service == "postgres":
+            assert 'case "$(apk --print-arch)" in' in recipe and "ARG TARGETARCH" not in recipe
+            assert "apk add --no-network /packages/zlib.apk" in recipe and "apk info -e 'zlib=1.3.2-r1'" in recipe
+            assert "--mount=type=bind,from=build,source=/packages,target=/packages,ro" in recipe
+            assert 'gosu --version | grep -F "1.19 (go1.26.6 " && test "$(gosu nobody id -u)" = 65534' in recipe
 
 
 @pytest.mark.parametrize("version", ["go1.26.6", "1.26.6", "v1.26.6"])

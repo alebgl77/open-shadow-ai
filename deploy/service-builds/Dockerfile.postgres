@@ -6,7 +6,15 @@ RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.6 \
     && wget -O /tmp/source.tar.gz https://codeload.github.com/tianon/gosu/tar.gz/6456aaa0f3c854d199d0f037f068eb97515b7513 \
     && echo '33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b  /tmp/source.tar.gz' | sha256sum -c - \
     && tar -xzf /tmp/source.tar.gz --strip-components=1 -C /src \
-    && rm /tmp/source.tar.gz
+    && rm /tmp/source.tar.gz \
+    && case "$(apk --print-arch)" in \
+         x86_64) arch=x86_64; zlib=63aeea03c15a2f9018f81805cfc8aa926bdf5cd68921f22149c2fbb5d0ee9f47 ;; \
+         aarch64) arch=aarch64; zlib=1f77a542ac6634761b9fe38d8bdca19b154071dcfa25432e73f2bc8a0740a33f ;; \
+         *) exit 2 ;; \
+       esac \
+    && mkdir /packages \
+    && wget -O /packages/zlib.apk https://dl-cdn.alpinelinux.org/alpine/v3.24/main/$arch/zlib-1.3.2-r1.apk \
+    && printf '%s\n' "$zlib  /packages/zlib.apk" | sha256sum -c -
 COPY requirements/service-builds/gosu/go.mod requirements/service-builds/gosu/go.sum ./
 COPY requirements/service-builds/gosu/modules.txt /locked-modules.txt
 RUN printf '%s\n' 'c29d3a92f3cae2a45faab57ad6656fb54e8d77cd26248b3f859dcef6bbcc6e2a  go.mod' 'fe68cfefef81c6e10bce5a8fc1e1ff6852ff878fff639346ff955515af73057b  go.sum' '368c1cf68f4dd744f9e452e66b49b446f292564aef9f4261e8a50f0493595893  /locked-modules.txt' | sha256sum -c - \
@@ -27,5 +35,9 @@ LABEL io.shadai.maintenance.recipe="1" \
       io.shadai.maintenance.component="gosu" \
       io.shadai.maintenance.version="1.19-shadai.1" \
       io.shadai.maintenance.source="6456aaa0f3c854d199d0f037f068eb97515b7513" \
-      io.shadai.maintenance.toolchain="go1.26.6"
-RUN gosu --version | grep -F "1.19 (go1.26.6 " && test "$(gosu nobody id -u)" = 65534
+      io.shadai.maintenance.toolchain="go1.26.6" \
+      io.shadai.maintenance.zlib="1.3.2-r1"
+RUN --mount=type=bind,from=build,source=/packages,target=/packages,ro \
+    apk add --no-network /packages/zlib.apk \
+    && apk info -e 'zlib=1.3.2-r1' \
+    && gosu --version | grep -F "1.19 (go1.26.6 " && test "$(gosu nobody id -u)" = 65534

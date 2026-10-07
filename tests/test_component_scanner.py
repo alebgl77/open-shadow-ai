@@ -1,5 +1,6 @@
 """Native captured observations and adversarial complementary coverage contracts."""
 
+import base64
 import copy
 import importlib.util
 import json
@@ -166,12 +167,13 @@ def test_actual_old_source_cannot_project_current_recipe(service):
 
 
 @pytest.mark.parametrize("service", ["postgres", "node-exporter"])
-def test_actual_fresh_native_current_recipe_and_locks_bind_selected_rootfs(service):
+def test_actual_captured_native_recipe_and_locks_bind_matching_source_rootfs(service, tmp_path):
     fixture = capture(service, "current-amd64")
-    proof = bind(fixture, ROOT)
+    source_inputs(fixture, tmp_path)
+    proof = bind(fixture, tmp_path)
     partition = plan(fixture)
     documents = {"manifest": fixture["manifest"], "provenance": fixture["provenance"][0]}
-    components.bind_components(partition, documents=documents, service=service, platform="linux/amd64", root=ROOT,
+    components.bind_components(partition, documents=documents, service=service, platform="linux/amd64", root=tmp_path,
                                service_manifest=fixture["service_manifest"], binder=source.bind,
                                expected_source={"commit": fixture["capture"]["merge"],
                                                 "repository": "alebgl77/open-shadow-ai"})
@@ -180,6 +182,78 @@ def test_actual_fresh_native_current_recipe_and_locks_bind_selected_rootfs(servi
                      image_id=fixture["capture"]["image_config"], platform="linux/amd64") == []
     for claim in partition["components"]:
         assert claim["source_proof_sha256"] == components.digest(claim["source_proof"])
+
+
+def zlib_pg_model():
+    """Synthetic updated graph over historical layer descriptors; not a native rebuild capture."""
+    fixture = capture("postgres", "current-amd64")
+    recipe = (ROOT / "deploy/service-builds/Dockerfile.postgres").read_bytes()
+    fixture["service_manifest"] = json.loads((ROOT / "requirements/service-builds/manifest.json").read_bytes())
+    predicate = fixture["provenance"][0]["statement"]["predicate"]
+    metadata = predicate["runDetails"]["metadata"]["buildkit_metadata"]
+    metadata["source"]["infos"][0]["data"] = base64.b64encode(recipe).decode()
+    runs = [line[4:] for line in recipe.decode().replace("\\\n", "").splitlines() if line.startswith("RUN ")]
+    graph = predicate["buildDefinition"]["internalParameters"]["buildConfig"]["llbDefinition"]
+    graph[3]["op"]["Op"]["exec"]["meta"]["args"][-1] = runs[0]
+    graph[12]["op"]["Op"]["exec"]["meta"]["args"][-1] = runs[2].split(None, 1)[1]
+    graph[12]["inputs"].append("step7:0")
+    graph[12]["op"]["Op"]["exec"]["mounts"].append(
+        {"dest": "/packages", "input": 1, "output": -1, "readonly": True, "selector": "/packages"})
+    return fixture
+
+
+def test_updated_postgres_zlib_graph_has_exact_readonly_build_edge_and_unchanged_gosu_smoke():
+    fixture = zlib_pg_model()
+    proof = bind(fixture, ROOT)
+    graph = fixture["provenance"][0]["statement"]["predicate"]["buildDefinition"]["internalParameters"][
+        "buildConfig"]["llbDefinition"]
+    assert len(graph) == 14 and graph[12]["inputs"] == ["step11:0", "step7:0"]
+    assert graph[12]["op"]["Op"]["exec"]["meta"]["env"] == source.PG_ENV
+    assert graph[3]["op"]["Op"]["exec"]["meta"]["env"] == source.GO_ENV
+    assert proof["rootfs_output"] == "step12:0" and proof["binary_version_claim"] is None
+
+
+@pytest.mark.parametrize("mutation", ["missing-edge", "wrong-edge", "missing-mount", "write-mount", "selector",
+    "input-bool", "input-float", "output-float", "readonly-int", "extra-mount", "command", "env", "source"])
+def test_postgres_zlib_graph_refuses_missing_or_changed_package_flow(mutation):
+    fixture = zlib_pg_model()
+    predicate = fixture["provenance"][0]["statement"]["predicate"]
+    graph = predicate["buildDefinition"]["internalParameters"]["buildConfig"]["llbDefinition"]
+    final = graph[12]["op"]["Op"]["exec"]
+    mount = final["mounts"][1]
+    if mutation == "missing-edge":
+        graph[12]["inputs"].pop()
+    elif mutation == "wrong-edge":
+        graph[12]["inputs"][1] = "step3:0"
+    elif mutation == "missing-mount":
+        final["mounts"].pop()
+    elif mutation == "write-mount":
+        mount["readonly"] = False
+    elif mutation == "selector":
+        mount["selector"] = "/foreign"
+    elif mutation in {"input-bool", "input-float"}:
+        mount["input"] = True if mutation == "input-bool" else 1.0
+    elif mutation == "output-float":
+        mount["output"] = -1.0
+    elif mutation == "readonly-int":
+        mount["readonly"] = 1
+    elif mutation == "extra-mount":
+        final["mounts"].append({"dest": "/foreign"})
+    elif mutation == "command":
+        final["meta"]["args"][-1] = final["meta"]["args"][-1].replace("--no-network", "--allow-untrusted")
+    elif mutation == "env":
+        final["meta"]["env"].append("UNREVIEWED=1")
+    else:
+        predicate["runDetails"]["metadata"]["buildkit_metadata"]["source"]["infos"][0]["data"] = ""
+    with pytest.raises(ValueError):
+        bind(fixture, ROOT)
+
+
+def test_pre_zlib_postgres_capture_cannot_bind_the_updated_checkout():
+    fixture = capture("postgres", "current-amd64")
+    fixture["service_manifest"] = json.loads((ROOT / "requirements/service-builds/manifest.json").read_bytes())
+    with pytest.raises(ValueError, match="stale or different"):
+        bind(fixture, ROOT)
 
 
 @pytest.mark.parametrize("mutation", ["decoy", "port", "output", "copy", "command", "environment", "mount",

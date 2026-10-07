@@ -56,15 +56,26 @@ def receipt(arguments):
             "authentication": {"builder_provenance": "unverified", "publisher_signature": "unverified"}}
 
 
-def bind(fixture):
+def matching_source_inputs(fixture, directory):
+    for name, text in fixture["source_inputs"].items():
+        path = directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text.encode())
+    images = directory / "requirements/images.json"
+    images.parent.mkdir(parents=True, exist_ok=True)
+    images.write_bytes((ROOT / "requirements/images.json").read_bytes())
+
+
+def bind(fixture, directory):
     arguments = inputs(fixture)
     return SOURCE.bind_clickhouse(fixture["provenance"][0]["statement"]["predicate"], platform="linux/amd64",
-        selected_manifest=fixture["manifest"], root=ROOT, service_manifest=fixture["service_manifest"],
+        selected_manifest=fixture["manifest"], root=directory, service_manifest=fixture["service_manifest"],
         expected_source=arguments["expected_source"], expected_ci=arguments["expected_ci"])
 
 
-def test_actual_absent_principal_stays_absent_and_declaration_has_separate_cli_version():
+def test_actual_absent_principal_stays_absent_and_declaration_has_separate_cli_version(tmp_path):
     fixture = capture()
+    matching_source_inputs(fixture, tmp_path)
     original = copy.deepcopy(fixture["sbom"])
     plan = COMPONENTS.partition(fixture["sbom"], service="clickhouse", package_key=SCAN.package_key)
     assert len(original["packages"]) == 22 and len(plan["native"]) == 21 and plan["components"] == []
@@ -73,7 +84,7 @@ def test_actual_absent_principal_stays_absent_and_declaration_has_separate_cli_v
     arguments = inputs(fixture)
     value = receipt(arguments)
     assert PRINCIPAL.validate_receipt(value, **arguments) == value
-    COMPONENTS.declare_clickhouse(plan, receipt=value, receipt_sha256="e" * 64, source_proof=bind(fixture))
+    COMPONENTS.declare_clickhouse(plan, receipt=value, receipt_sha256="e" * 64, source_proof=bind(fixture, tmp_path))
     claim, = plan["components"]
     assert claim["original_spdx_ids"] == [] and claim["original_package"] is None
     assert claim["original_inventory_observation"] == "absent" and claim["binary_version_claim"] is None
@@ -150,8 +161,9 @@ def test_signer_identity_reuses_same_run_and_native_build_job_without_pretending
 @pytest.mark.parametrize("mutation", ["decoy", "port", "mount", "write-mount", "command", "environment", "terminal",
     "platform", "base", "base-dependency", "layer-digest", "layer-size", "layer-order", "layer-media", "base-stack",
     "ambiguous", "recipe", "ci-run", "ci-job"])
-def test_actual_five_node_graph_and_final_subject_binding_refuse_every_changed_boundary(mutation):
+def test_actual_five_node_graph_and_final_subject_binding_refuse_every_changed_boundary(mutation, tmp_path):
     fixture = capture()
+    matching_source_inputs(fixture, tmp_path)
     predicate = fixture["provenance"][0]["statement"]["predicate"]
     internal = predicate["buildDefinition"]["internalParameters"]
     graph = internal["buildConfig"]["llbDefinition"]
@@ -190,7 +202,7 @@ def test_actual_five_node_graph_and_final_subject_binding_refuse_every_changed_b
     else:
         internal["github_run_id" if mutation == "ci-run" else "github_job"] = "foreign"
     with pytest.raises(ValueError):
-        bind(fixture)
+        bind(fixture, tmp_path)
 
 
 def test_every_real_planned_query_control_and_declared_principal_pass_actual_tool_identifier_boundary():
@@ -217,11 +229,11 @@ def test_only_canonical_sibling_filename_is_accepted(name):
         PRINCIPAL.RECEIPT_NAME
 
 
-def source_fixture_bind(fixture, service):
+def source_fixture_bind(fixture, service, directory):
     predicate = fixture["provenance"][0]["statement"]["predicate"]
     definition = predicate["buildDefinition"]
     args = definition["externalParameters"]["request"]["root"]["request"]["args"]
-    keywords = {"platform": "linux/amd64", "selected_manifest": fixture["manifest"], "root": ROOT,
+    keywords = {"platform": "linux/amd64", "selected_manifest": fixture["manifest"], "root": directory,
                 "service_manifest": fixture["service_manifest"], "expected_source": {
                 "commit": args["vcs:revision"], "repository": args["vcs:source"].removeprefix("https://github.com/")}}
     if service == "clickhouse":
@@ -232,11 +244,12 @@ def source_fixture_bind(fixture, service):
 
 
 @pytest.mark.parametrize("service", ["postgres", "node-exporter", "clickhouse"])
-def test_three_actual_current_graphs_remain_valid_with_exact_observed_hash(service):
+def test_three_actual_captured_graphs_remain_valid_with_exact_observed_hash(service, tmp_path):
     fixture = json.loads((ROOT / f"tests/fixtures/component-scanner/{service}-current-amd64.json").read_bytes())
+    matching_source_inputs(fixture, tmp_path)
     graph = fixture["provenance"][0]["statement"]["predicate"]["buildDefinition"]["internalParameters"][
         "buildConfig"]["llbDefinition"]
-    proof = source_fixture_bind(fixture, service)
+    proof = source_fixture_bind(fixture, service, tmp_path)
     assert proof["build_graph_sha256"] == hashlib.sha256(
         json.dumps(graph, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -244,8 +257,9 @@ def test_three_actual_current_graphs_remain_valid_with_exact_observed_hash(servi
 @pytest.mark.parametrize("service", ["postgres", "node-exporter", "clickhouse"])
 @pytest.mark.parametrize("mutation", ["input-bool", "input-float", "output-float", "flag-int", "flag-float",
                                       "compatibility-float", "layer-size-float"])
-def test_current_source_graph_invocation_and_layer_numeric_aliases_are_refused(service, mutation):
+def test_captured_source_graph_invocation_and_layer_numeric_aliases_are_refused(service, mutation, tmp_path):
     fixture = json.loads((ROOT / f"tests/fixtures/component-scanner/{service}-current-amd64.json").read_bytes())
+    matching_source_inputs(fixture, tmp_path)
     predicate = fixture["provenance"][0]["statement"]["predicate"]
     definition = predicate["buildDefinition"]
     graph = definition["internalParameters"]["buildConfig"]["llbDefinition"]
@@ -267,4 +281,13 @@ def test_current_source_graph_invocation_and_layer_numeric_aliases_are_refused(s
         else:
             action["Action"]["mkdir"]["makeParents"] = 1 if mutation == "flag-int" else 1.0
     with pytest.raises(ValueError):
-        source_fixture_bind(fixture, service)
+        source_fixture_bind(fixture, service, tmp_path)
+
+
+def test_pre_zlib_clickhouse_capture_refuses_updated_recipe_and_leaves_observations_untouched():
+    fixture = capture()
+    original = copy.deepcopy(fixture)
+    fixture["service_manifest"] = json.loads((ROOT / "requirements/service-builds/manifest.json").read_bytes())
+    with pytest.raises(ValueError, match="stale"):
+        bind(fixture, ROOT)
+    assert fixture["sbom"] == original["sbom"] and fixture["provenance"] == original["provenance"]
