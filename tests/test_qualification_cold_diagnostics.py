@@ -777,3 +777,328 @@ def test_inventory_primary_is_frozen_before_optional_summary_failure(tmp_path, m
     with pytest.raises(AssertionError) as caught:
         compare_in_lab(lab, source, restored)
     assert caught.value is observed[0] and "inventory_comparison" not in lab.failure
+
+
+def group_inventory():
+    value = private_inventory()
+    value["redis"][CANARY + "stream"]["groups"] = [{
+        "name": CANARY, "consumers": 1, "pending": 1, "last-delivered-id": CANARY,
+        "entries-read": 2, "lag": None, "private_future_field": CANARY,
+    }]
+    return value
+
+
+def changed_group_inventory():
+    source = group_inventory()
+    restored = copy.deepcopy(source)
+    restored["redis"][CANARY + "stream"]["groups"][0]["pending"] = 2
+    return source, restored
+
+
+@pytest.mark.parametrize("field", lab_module.INVENTORY_REDIS_GROUP_FIELDS)
+def test_group_refinement_each_field_keeps_counts_private_values_and_original_bytes(field):
+    source = group_inventory()
+    restored = copy.deepcopy(source)
+    group = restored["redis"][CANARY + "stream"]["groups"][0]
+    group[field] = "different" if field in {"name", "last-delivered-id"} else 3
+    before = [json.dumps(item) for item in (source, restored)]
+    summary = lab_module.cold_inventory_comparison(source, restored)
+    assert summary["redis"]["stream_groups"] == [False, 1, 1]
+    assert summary["redis_group_fields"] == {
+        "aligned": True, "fields": {name: name != field for name in lab_module.INVENTORY_REDIS_GROUP_FIELDS},
+        "unknown_fields": [True, True],
+    }
+    assert lab_module.closed_inventory_comparison(summary)
+    assert CANARY not in json.dumps(summary)
+    assert before == [json.dumps(item) for item in (source, restored)]
+
+
+@pytest.mark.parametrize("field", ["entries-read", "lag"])
+@pytest.mark.parametrize("left,right", [(None, None), (None, 0), (0, None), (-1, -1), (-1, 0)])
+def test_group_refinement_nullable_counters_without_new_range_policy(field, left, right):
+    source, restored = changed_group_inventory()
+    source["redis"][CANARY + "stream"]["groups"][0][field] = left
+    restored["redis"][CANARY + "stream"]["groups"][0][field] = right
+    detail = lab_module.cold_inventory_comparison(source, restored)["redis_group_fields"]
+    assert detail["fields"][field] is (left == right)
+
+
+@pytest.mark.parametrize("side", [0, 1])
+@pytest.mark.parametrize("kind", ["missing", "null", "bool", "float", "list"])
+@pytest.mark.parametrize("field", lab_module.INVENTORY_REDIS_GROUP_FIELDS)
+def test_group_refinement_invalid_known_fields_omit_only_detail(side, kind, field):
+    source, restored = changed_group_inventory()
+    # Keep an actual private mismatch even when Python's original equality treats 1 == True == 1.0.
+    restored["redis"][CANARY + "stream"]["groups"][0]["private_future_field"] = "different"
+    group = (source, restored)[side]["redis"][CANARY + "stream"]["groups"][0]
+    if kind == "missing":
+        del group[field]
+    else:
+        group[field] = {"null": None, "bool": True, "float": 1.0, "list": []}[kind]
+    summary = lab_module.cold_inventory_comparison(source, restored)
+    assert summary is not None and summary["redis"]["stream_groups"][0] is False
+    if kind == "null" and field in {"entries-read", "lag"}:
+        assert "redis_group_fields" in summary
+    else:
+        assert "redis_group_fields" not in summary
+
+
+@pytest.mark.parametrize("kind", ["order", "key", "length", "empty-side", "both-empty", "no-streams"])
+def test_group_refinement_alignment_uses_original_keys_and_positions(kind):
+    source = group_inventory()
+    group = copy.deepcopy(source["redis"][CANARY + "stream"]["groups"][0])
+    group.update({"name": "different", "consumers": 2})
+    source["redis"][CANARY + "stream"]["groups"].append(group)
+    restored = copy.deepcopy(source)
+    if kind == "order":
+        restored["redis"][CANARY + "stream"]["groups"].reverse()
+    elif kind == "key":
+        restored["redis"]["different-private-key"] = restored["redis"].pop(CANARY + "stream")
+    elif kind == "length":
+        for value in (source, restored):
+            value["redis"]["second-private-stream"] = {"type": "stream", "entries": [], "groups": [],
+                                                       "pending": {}}
+        restored["redis"]["second-private-stream"]["groups"].append(
+            restored["redis"][CANARY + "stream"]["groups"].pop())
+    elif kind == "empty-side":
+        restored["redis"][CANARY + "stream"]["groups"].clear()
+    elif kind == "both-empty":
+        for value in (source, restored):
+            value["redis"][CANARY + "stream"]["groups"].clear()
+    else:
+        for value in (source, restored):
+            del value["redis"][CANARY + "stream"]
+    summary = lab_module.cold_inventory_comparison(source, restored)
+    if kind in {"both-empty", "no-streams"}:
+        assert summary["redis"]["stream_groups"][0] is True and "redis_group_fields" not in summary
+    else:
+        detail = summary["redis_group_fields"]
+        assert detail["aligned"] is (kind == "order")
+        expected = {field: kind == "order" and field not in {"name", "consumers"}
+                    for field in lab_module.INVENTORY_REDIS_GROUP_FIELDS}
+        assert detail["fields"] == expected
+        if kind == "length":
+            assert summary["redis"]["stream_groups"] == [False, 2, 2]
+
+
+@pytest.mark.parametrize("left,right", [(False, False), (True, False), (False, True), (True, True)])
+def test_group_refinement_unknown_presence_does_not_drop_unknown_values(left, right):
+    source, restored = changed_group_inventory()
+    for value, present in ((source, left), (restored, right)):
+        group = value["redis"][CANARY + "stream"]["groups"][0]
+        del group["private_future_field"]
+        if present:
+            group[CANARY + "unknown"] = {CANARY: [CANARY, None]}
+    summary = lab_module.cold_inventory_comparison(source, restored)
+    assert summary["redis_group_fields"]["unknown_fields"] == [left, right]
+    assert CANARY not in json.dumps(summary)
+    if left and right:
+        restored["redis"][CANARY + "stream"]["groups"][0]["pending"] = 1
+        restored["redis"][CANARY + "stream"]["groups"][0][CANARY + "unknown"][CANARY][0] = "different"
+        summary = lab_module.cold_inventory_comparison(source, restored)
+        assert summary["redis"]["stream_groups"][0] is False
+        assert all(summary["redis_group_fields"]["fields"].values())
+
+
+@pytest.mark.parametrize("side", [0, 1])
+@pytest.mark.parametrize("base,value", [(str, CANARY), (int, 1), (dict, {}), (list, []), (object, None)])
+def test_group_refinement_poison_known_and_unknown_fields_calls_no_protocol(side, base, value):
+    calls = []
+
+    def poison(*args):
+        calls.append(True)
+        raise KeyboardInterrupt()
+    alias = type("GroupPoison", (base,), {name: poison for name in
+                 ("__eq__", "__ne__", "__iter__", "__len__", "__str__", "__repr__", "__hash__")})
+    item = alias() if base is object else alias(value)
+    source, restored = changed_group_inventory()
+    target = (source, restored)[side]["redis"][CANARY + "stream"]["groups"][0]
+    target["pending" if base is int else "private_future_field"] = item
+    assert lab_module.cold_inventory_comparison(source, restored) is None and calls == []
+
+
+@pytest.mark.parametrize("location", ["aligned", "fields", "field", "unknown_fields", "unknown_flag", "redis"])
+@pytest.mark.parametrize("order", list(permutations(("redis_group_fields", "redis", "schema"))))
+def test_group_refinement_public_types_precede_context_without_callbacks(location, order):
+    calls = []
+
+    class Poison:
+        def __eq__(self, other):
+            calls.append(True)
+            raise KeyboardInterrupt()
+    summary = lab_module.cold_inventory_comparison(*changed_group_inventory())
+    detail = summary["redis_group_fields"]
+    if location == "field":
+        detail["fields"]["name"] = Poison()
+    elif location == "unknown_flag":
+        detail["unknown_fields"][0] = Poison()
+    elif location == "redis":
+        summary["redis"]["stream_groups"][0] = Poison()
+    else:
+        detail[location] = Poison()
+    ordered = {key: summary[key] for key in order}
+    ordered.update({key: item for key, item in summary.items() if key not in order})
+    assert lab_module.closed_inventory_comparison(ordered) is False and calls == []
+
+
+@pytest.mark.parametrize("change", ["equal", "extra", "missing", "aligned-int", "fields-extra", "fields-missing",
+                                    "field-int", "unknown-tuple", "unknown-short", "unknown-int", "dict-alias",
+                                    "unaligned-true"])
+def test_group_refinement_public_schema_and_context_are_closed(change):
+    summary = lab_module.cold_inventory_comparison(*changed_group_inventory())
+    detail = summary["redis_group_fields"]
+    if change == "equal":
+        summary["redis"]["stream_groups"][0] = True
+    elif change == "extra":
+        detail["private"] = CANARY
+    elif change == "missing":
+        del detail["aligned"]
+    elif change == "aligned-int":
+        detail["aligned"] = 1
+    elif change == "fields-extra":
+        detail["fields"]["private"] = True
+    elif change == "fields-missing":
+        del detail["fields"]["name"]
+    elif change == "field-int":
+        detail["fields"]["name"] = 1
+    elif change == "unknown-tuple":
+        detail["unknown_fields"] = (True, True)
+    elif change == "unknown-short":
+        detail["unknown_fields"].pop()
+    elif change == "unknown-int":
+        detail["unknown_fields"][0] = 1
+    elif change == "unaligned-true":
+        detail["aligned"] = False
+    else:
+        summary["redis_group_fields"] = DictAlias(detail)
+    assert not lab_module.closed_inventory_comparison(summary)
+
+
+def test_group_refinement_all_metadata_orders_and_legacy_schema_remain_valid():
+    summary = lab_module.cold_inventory_comparison(*changed_group_inventory())
+    for order in permutations(summary):
+        assert lab_module.closed_inventory_comparison({key: summary[key] for key in order})
+    value = cold_failure_evidence(AssertionError(), "cold_restore_inventory_compare_compare", "unknown", None, None)
+    value["inventory_comparison"] = summary
+    for order in permutations(("inventory_comparison", "checkpoint", "error_type")):
+        ordered = {key: value[key] for key in order}
+        ordered.update({key: item for key, item in value.items() if key not in order})
+        assert closed_cold_evidence(ordered)
+    del summary["redis_group_fields"]
+    assert lab_module.closed_inventory_comparison(summary) and closed_cold_evidence(value)
+
+
+@pytest.mark.parametrize("phase", ["primary", "secondary"])
+def test_group_refinement_envelope_omits_only_detail_and_preserves_secondary(tmp_path, monkeypatch, phase):
+    lab = bare_lab(tmp_path)
+    original = lab_module.canonical_bytes
+    source, restored = changed_group_inventory()
+
+    def measured(value):
+        raw = original(value)
+        if ("redis_group_fields" in value.get("inventory_comparison", {})
+                and (phase == "primary" or "secondary" in value)):
+            return b"x" * 2049
+        return raw
+    monkeypatch.setattr(lab_module, "canonical_bytes", measured)
+    with pytest.raises(AssertionError) as caught:
+        compare_in_lab(lab, source, restored)
+    assert str(caught.value) == "Exact cold source/restore inventories differ before worker startup"
+    lab.cold_failure(KeyboardInterrupt(), secondary=True)
+    primary = {key: item for key, item in lab.failure.items() if key != "secondary"}
+    assert closed_cold_evidence(primary)
+    assert lab.failure["inventory_comparison"]["redis"]["stream_groups"] == [False, 1, 1]
+    assert "redis_group_fields" not in lab.failure["inventory_comparison"]
+    assert len(lab.failure["secondary"]) == 1 and lab.failure["secondary"][0]["error_type"] == "KeyboardInterrupt"
+    assert len(original(lab.failure)) <= 2048 and CANARY not in original(lab.failure).decode()
+
+
+def test_group_refinement_actual_full_envelope_and_first_primary(tmp_path):
+    lab = bare_lab(tmp_path)
+    with pytest.raises(AssertionError):
+        compare_in_lab(lab, *changed_group_inventory())
+    first = lab.failure
+    assert "redis_group_fields" in first["inventory_comparison"]
+    lab.cold_inventory_failure(AssertionError(), *changed_group_inventory())
+    assert lab.failure is first
+    lab.cold_failure(KeyboardInterrupt(), secondary=True)
+    second = lab.failure
+    lab.cold_failure(SystemExit(), secondary=True)
+    assert lab.failure is second and len(second["secondary"]) == 1
+    assert len(lab_module.canonical_bytes(second)) <= 2048
+    assert CANARY not in lab_module.canonical_bytes(second).decode()
+
+
+@pytest.mark.parametrize("value", [True, 1.0])
+def test_group_refinement_preserves_original_numeric_alias_equality(value):
+    source = group_inventory()
+    restored = copy.deepcopy(source)
+    restored["redis"][CANARY + "stream"]["groups"][0]["pending"] = value
+    summary = lab_module.cold_inventory_comparison(source, restored)
+    assert summary["stores"]["redis"] is True and summary["redis"]["stream_groups"][0] is True
+    assert "redis_group_fields" not in summary
+
+
+@pytest.mark.parametrize("side", [0, 1])
+@pytest.mark.parametrize("kind", ["cycle", "alias-budget", "depth", "characters", "integer", "nonfinite"])
+def test_group_refinement_complete_private_unknown_values_validated_before_comparisons(side, kind):
+    source, restored = changed_group_inventory()
+    target = (source, restored)[side]
+    group = target["redis"][CANARY + "stream"]["groups"][0]
+    if kind == "cycle":
+        value = target
+    elif kind == "alias-budget":
+        shared = [None] * 50000
+        value = [shared, shared]
+    elif kind == "depth":
+        value = None
+        for _ in range(33):
+            value = [value]
+    elif kind == "characters":
+        value = "x" * 1048576
+    elif kind == "integer":
+        value = 1 << 4096
+    else:
+        value = float("nan")
+    group["private_future_field"] = value
+    assert lab_module.cold_inventory_comparison(source, restored) is None
+
+
+@pytest.mark.parametrize("side", [0, 1])
+def test_group_refinement_validates_even_later_unchanged_stream_groups(side):
+    source, restored = changed_group_inventory()
+    for value in (source, restored):
+        value["redis"]["second-private-stream"] = copy.deepcopy(value["redis"][CANARY + "stream"])
+    del (source, restored)[side]["redis"]["second-private-stream"]["groups"][0]["lag"]
+    summary = lab_module.cold_inventory_comparison(source, restored)
+    assert summary["redis"]["stream_groups"][0] is False and "redis_group_fields" not in summary
+
+
+@pytest.mark.parametrize("field", ["checkpoint", "error_type"])
+@pytest.mark.parametrize("order", list(permutations(("inventory_comparison", "checkpoint", "error_type"))))
+def test_group_refinement_cold_context_validates_scalar_types_before_cross_fields(field, order):
+    calls = []
+
+    class Poison:
+        def __eq__(self, other):
+            calls.append(True)
+            raise KeyboardInterrupt()
+    value = cold_failure_evidence(AssertionError(), "cold_restore_inventory_compare_compare", "unknown", None, None)
+    value["inventory_comparison"] = lab_module.cold_inventory_comparison(*changed_group_inventory())
+    value[field] = Poison()
+    ordered = {key: value[key] for key in order}
+    ordered.update({key: item for key, item in value.items() if key not in order})
+    assert not closed_cold_evidence(ordered) and calls == []
+
+
+def test_group_refinement_real_envelope_maximum_closed_context_and_secondary(tmp_path):
+    lab = bare_lab(tmp_path)
+    source, restored = changed_group_inventory()
+    lab.cold_phase("inventory_compare", "compare", service=max(COLD_SERVICES, key=len))
+    lab.docker.last_completed = max(COLD_CHECKPOINTS, key=len)
+    lab.cold_inventory_failure(AssertionError(), source, restored)
+    lab.cold_phase("inventory_restore", "remove", service=max(COLD_SERVICES, key=len))
+    lab.cold_failure(DockerOperationError("docker_output_budget", -255), secondary=True)
+    assert len(lab.failure["secondary"]) == 1
+    assert "redis_group_fields" in lab.failure["inventory_comparison"]
+    assert len(lab_module.canonical_bytes(lab.failure)) <= 2048

@@ -305,6 +305,9 @@ INVENTORY_TABLE_WIDTHS = {
 INVENTORY_REDIS_COMPONENTS = {
     "keys", "strings", "hashes", "zsets", "stream_entries", "stream_groups", "stream_pending",
 }
+INVENTORY_REDIS_GROUP_FIELDS = (
+    "name", "consumers", "pending", "last-delivered-id", "entries-read", "lag",
+)
 
 
 def closed_inventory_comparison(value):
@@ -316,7 +319,9 @@ def closed_inventory_comparison(value):
         return (type(item) is list and len(item) == 3 and type(item[0]) is bool
                 and all(type(count) is int and minimum <= count <= 100000 for count in item[1:]))
 
-    return (keys(value, {"schema", "stores", "postgres", "clickhouse", "redis"})
+    required = {"schema", "stores", "postgres", "clickhouse", "redis"}
+    if not (type(value) is dict and all(type(key) is str for key in value)
+            and required <= value.keys() <= required | {"redis_group_fields"}
             and type(value["schema"]) is int and value["schema"] == 1
             and keys(value["stores"], {"postgres", "clickhouse", "redis"})
             and all(type(flag) is bool for flag in value["stores"].values())
@@ -324,7 +329,21 @@ def closed_inventory_comparison(value):
             and all(counts(item, -1) for item in value["postgres"].values())
             and counts(value["clickhouse"])
             and keys(value["redis"], INVENTORY_REDIS_COMPONENTS)
-            and all(counts(item) for item in value["redis"].values()))
+            and all(counts(item) for item in value["redis"].values())):
+        return False
+    if "redis_group_fields" not in value:
+        return True
+    detail = value["redis_group_fields"]
+    # Validate every nested type before inspecting its dependent comparison flag.
+    if not (keys(detail, {"aligned", "fields", "unknown_fields"})
+            and type(detail["aligned"]) is bool
+            and keys(detail["fields"], set(INVENTORY_REDIS_GROUP_FIELDS))
+            and all(type(flag) is bool for flag in detail["fields"].values())
+            and type(detail["unknown_fields"]) is list and len(detail["unknown_fields"]) == 2
+            and all(type(flag) is bool for flag in detail["unknown_fields"])):
+        return False
+    return (value["redis"]["stream_groups"][0] is False
+            and (detail["aligned"] or not any(detail["fields"].values())))
 
 
 def cold_inventory_comparison(source, restored):
@@ -451,6 +470,29 @@ def cold_inventory_comparison(source, restored):
         "redis": source["redis"] == restored["redis"]}, "postgres": postgres,
         "clickhouse": [source["clickhouse_events"] == restored["clickhouse_events"],
                        len(source["clickhouse_events"]), len(restored["clickhouse_events"])], "redis": redis}
+    if redis["stream_groups"][0] is False:
+        groups = (left["stream_groups"], right["stream_groups"])
+        valid = True
+        unknown = [False, False]
+        for side, streams in enumerate(groups):
+            for items in streams.values():
+                for group in items:
+                    if (not set(INVENTORY_REDIS_GROUP_FIELDS) <= group.keys()
+                            or any(type(group[field]) is not str for field in ("name", "last-delivered-id"))
+                            or any(type(group[field]) is not int for field in ("consumers", "pending"))
+                            or any(group[field] is not None and type(group[field]) is not int
+                                   for field in ("entries-read", "lag"))):
+                        valid = False
+                    unknown[side] |= any(field not in INVENTORY_REDIS_GROUP_FIELDS for field in group)
+        if valid:
+            a, b = groups
+            aligned = a.keys() == b.keys() and all(len(items) == len(b[key]) for key, items in a.items())
+            fields = dict.fromkeys(INVENTORY_REDIS_GROUP_FIELDS, False)
+            if aligned:
+                for field in fields:
+                    fields[field] = all(group[field] == b[key][index][field]
+                                        for key, items in a.items() for index, group in enumerate(items))
+            summary["redis_group_fields"] = {"aligned": aligned, "fields": fields, "unknown_fields": unknown}
     return summary if closed_inventory_comparison(summary) else None
 
 
@@ -554,6 +596,11 @@ class Laboratory:
             elif (secondary and self.failure is self.cold_primary and closed_cold_evidence(self.failure)
                   and "secondary" not in self.failure):
                 candidate = {**self.failure, "secondary": [value]}
+                if (len(canonical_bytes(candidate)) > 2048
+                        and "redis_group_fields" in candidate.get("inventory_comparison", {})):
+                    candidate["inventory_comparison"] = {
+                        key: item for key, item in candidate["inventory_comparison"].items()
+                        if key != "redis_group_fields"}
                 if len(canonical_bytes(candidate)) <= 2048:
                     self.failure = self.cold_primary = candidate
         except BaseException:
@@ -599,7 +646,12 @@ class Laboratory:
         summary = cold_inventory_comparison(source, restored)
         if summary is not None:
             candidate = {**self.failure, "inventory_comparison": summary}
-            if closed_cold_evidence(candidate) and len(canonical_bytes(candidate)) <= 2048:
+            if not closed_cold_evidence(candidate):
+                return
+            if len(canonical_bytes(candidate)) > 2048 and "redis_group_fields" in summary:
+                candidate["inventory_comparison"] = {
+                    key: item for key, item in summary.items() if key != "redis_group_fields"}
+            if len(canonical_bytes(candidate)) <= 2048:
                 self.failure = self.cold_primary = candidate
 
     @contextmanager
