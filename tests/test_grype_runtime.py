@@ -2112,6 +2112,25 @@ def live_tree(tmp_path):
         handle.root.close()
 
 
+def patch_live_tree_entry_observation(monkeypatch, live_tree, path, observing):
+    original_stat = runtime.os.stat
+
+    def entry_stat(name, *args, **kwargs):
+        if (type(name) is str and name == "changing" and not args
+                and set(kwargs) == {"dir_fd", "follow_symlinks"}
+                and type(kwargs["dir_fd"]) is int and kwargs["follow_symlinks"] is False):
+            try:
+                parent_identity = runtime.identity(runtime.os.fstat(kwargs["dir_fd"]))
+            except OSError:
+                return original_stat(name, *args, **kwargs)
+            if parent_identity == live_tree.root.chain[-1][1]:
+                return observing(path)
+        return original_stat(name, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", observing)
+    monkeypatch.setattr(runtime.os, "stat", entry_stat)
+
+
 @pytest.mark.parametrize("transient", [False, True])
 @pytest.mark.parametrize("kind", ["leaf", "queued_child"])
 def test_live_tree_only_update_monitor_tolerates_enumeration_disappearance(live_tree, monkeypatch, transient, kind):
@@ -2128,7 +2147,7 @@ def test_live_tree_only_update_monitor_tolerates_enumeration_disappearance(live_
                 raise primary
         return original(current, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "lstat", observing)
+    patch_live_tree_entry_observation(monkeypatch, live_tree, path, observing)
     if transient:
         live_tree.budget_tree(transient=True)
     else:
@@ -2215,7 +2234,7 @@ def test_live_tree_queued_directory_identity_and_type_never_relaxed(live_tree, m
                                st_ino=value.st_ino + (replacement == "inode"),
                                st_mode={"symlink": stat.S_IFLNK, "file": stat.S_IFREG}.get(replacement, value.st_mode))
 
-    monkeypatch.setattr(Path, "lstat", observing)
+    patch_live_tree_entry_observation(monkeypatch, live_tree, child, observing)
     with pytest.raises(runtime.GrypeRuntimeError) as caught:
         live_tree.budget_tree(transient=transient)
     assert caught.value.code == ("identity_changed" if replacement in {"inode", "device"} else "filesystem")
