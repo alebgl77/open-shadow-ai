@@ -7,7 +7,150 @@ explicit claim about build inputs, never a version observed in an UNKNOWN binary
 import copy
 import hashlib
 import json
+import os
 import re
+import stat
+import subprocess
+from contextlib import contextmanager
+from pathlib import Path
+from uuid import uuid4
+
+FAILURE_STAGES = frozenset({
+    "source_guard", "layout_prepare", "layout_check", "trivy_inventory", "trivy_scan", "trivy_report",
+    "inventory_partition", "source_binding", "principal_receipt", "principal_source", "native_gate",
+    "grype_prepare", "sentinel_query", "sentinel_report", "component_query", "component_report",
+    "grype_postcheck", "spdx_postcheck", "layout_postcheck", "source_postcheck", "metadata_prepare",
+    "cleanup", "evidence_postcheck", "metadata_publish", "advisory_gate",
+})
+FAILURE_CODES = frozenset({
+    "validation_refused", "filesystem", "nonzero", "timeout", "interrupted", "advisory_failed", "unclassified",
+    "platform", "manifest", "config", "identity_changed", "byte_budget", "deadline", "download", "archive",
+    "version", "json", "database", "identifier", "query_budget", "output_budget", "owned_cleanup_failed",
+    "configuration_unobserved",
+})
+FAILURE_TYPES = {
+    ValueError: "ValueError", OSError: "OSError", PermissionError: "PermissionError",
+    FileNotFoundError: "FileNotFoundError", FileExistsError: "FileExistsError", TimeoutError: "TimeoutError",
+    subprocess.CalledProcessError: "CalledProcessError", subprocess.TimeoutExpired: "TimeoutExpired",
+    KeyboardInterrupt: "KeyboardInterrupt", SystemExit: "SystemExit",
+}
+
+
+def validate_failure_diagnostic(value):
+    """Failure diagnostics are a closed, unsigned schema with no exception payload."""
+    if type(value) is not dict or any(type(key) is not str for key in value) or \
+            set(value) != {"schema", "kind", "status", "accepted", "stage", "error_type",
+                                               "code", "secondary"} or \
+            type(value["schema"]) is not int or type(value["accepted"]) is not bool or \
+            any(type(value[key]) is not str for key in ("kind", "status", "stage", "error_type", "code")) or \
+            type(value["secondary"]) is not list or \
+            any(type(note) is not str for note in value["secondary"]):
+        raise ValueError("Invalid unsigned scanner failure diagnostic")
+    if value["schema"] != 1 or value["kind"] != "image-scan-failure" or value["status"] != "diagnostic-only" or \
+            value["accepted"] or \
+            value["stage"] not in FAILURE_STAGES or value["code"] not in FAILURE_CODES or \
+            value["error_type"] not in {*FAILURE_TYPES.values(), "GrypeRuntimeError", "unclassified"} or \
+            any(note != "owned_cleanup_failed" for note in value["secondary"]) or \
+            len(value["secondary"]) > 1:
+        raise ValueError("Invalid unsigned scanner failure diagnostic")
+    if len(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")) > 2048:
+        raise ValueError("Unsigned scanner failure diagnostic exceeds budget")
+
+
+class FailureDiagnostic:
+    """Capture the first refusal before disposal; never inspect arbitrary exception strings."""
+
+    def __init__(self):
+        self.stage = "source_guard"
+        self.first = None
+        self.secondary = set()
+        self.grype_error_type = None
+
+    def at(self, stage):
+        if type(stage) is not str or stage not in FAILURE_STAGES:
+            raise ValueError("Unknown scanner diagnostic stage")
+        self.stage = stage
+
+    def capture(self, error):
+        error_type = type(error)
+        kind = next((name for known, name in FAILURE_TYPES.items() if error_type is known), "unclassified")
+        code = "unclassified"
+        trusted = kind != "unclassified" or error_type is self.grype_error_type
+        if error_type is self.grype_error_type:
+            kind = "GrypeRuntimeError"
+            candidate = error.code
+            code = candidate if type(candidate) is str and candidate in FAILURE_CODES else "unclassified"
+        elif error_type is ValueError:
+            code = "validation_refused"
+        elif any(error_type is known for known in (OSError, PermissionError, FileNotFoundError, FileExistsError)):
+            code = "filesystem"
+        elif error_type is subprocess.CalledProcessError:
+            code = "nonzero"
+        elif error_type is TimeoutError or error_type is subprocess.TimeoutExpired:
+            code = "timeout"
+        elif error_type is KeyboardInterrupt or error_type is SystemExit:
+            code = "advisory_failed" if self.stage == "advisory_gate" else "interrupted"
+        if trusted:
+            notes = error.__dict__.get("__notes__", [])
+            if type(notes) is list and any(type(note) is str and note == "owned_cleanup_failed" for note in notes):
+                self.secondary.add("owned_cleanup_failed")
+        if self.first is None:
+            self.first = {"stage": self.stage, "error_type": kind, "code": code}
+
+    @contextmanager
+    def context(self, context):
+        try:
+            with context as handle:
+                try:
+                    yield handle
+                except BaseException as primary:
+                    self.capture(primary)
+                    raise
+        except BaseException as primary:
+            self.capture(primary)
+            raise
+
+    def emit(self, output, primary):
+        self.capture(primary)
+        value = {"schema": 1, "kind": "image-scan-failure", "status": "diagnostic-only", "accepted": False,
+                 **self.first, "secondary": sorted(self.secondary)}
+        validate_failure_diagnostic(value)
+        data = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+        parent = Path(output)
+        before = parent.lstat()
+        if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode) or \
+                getattr(parent, "is_junction", lambda: False)():
+            raise ValueError("Unsigned diagnostic output parent refused")
+        name = "image-scan." + uuid4().hex + ".failure.json"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        directory_fd = file_fd = None
+        try:
+            anchored = os.open in os.supports_dir_fd and hasattr(os, "O_DIRECTORY")
+            if anchored:
+                directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+                opened = os.fstat(directory_fd)
+                if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                    raise ValueError("Unsigned diagnostic output parent changed")
+            file_fd = os.open(name if anchored else parent / name, flags, 0o600,
+                              **({"dir_fd": directory_fd} if anchored else {}))
+            after = parent.lstat()
+            if (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode)) != \
+                    (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)):
+                raise ValueError("Unsigned diagnostic output parent changed")
+            while data:
+                written = os.write(file_fd, data)
+                if written <= 0:
+                    raise OSError("Unsigned diagnostic write refused")
+                data = data[written:]
+        finally:
+            try:
+                if file_fd is not None:
+                    closing, file_fd = file_fd, None
+                    os.close(closing)
+            finally:
+                if directory_fd is not None:
+                    closing, directory_fd = directory_fd, None
+                    os.close(closing)
 
 DOCUMENT_ROOT = "SPDXRef-DocumentRoot-Directory-sbom"
 EVIDENT_BY = "evident-by: indicates the package's existence is evident by the given file"

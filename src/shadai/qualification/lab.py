@@ -69,7 +69,23 @@ PHYSICAL_STEPS = {
 }
 PHYSICAL_CHECKPOINTS = {"physical_" + section + "_" + step
                         for section, steps in PHYSICAL_STEPS.items() for step in steps}
-DIAGNOSTIC_CHECKPOINTS = PRESSURE_CHECKPOINTS | PHYSICAL_CHECKPOINTS
+PROBE_STEPS = {
+    "baseline": {"registry", "startup_identity", "startup", "liveness_identity", "liveness", "restart"},
+    "outage": {"registry", "inspect", "stop", "start", "reinspect", "wait", "liveness_identity", "liveness",
+               "readiness_identity", "readiness", "restart"},
+    "dependencies": {"registry", "unique", "budget", "inspect", "identity", "state", "health", "wait",
+                     "readiness_identity", "readiness", "launch_budget"},
+    "peer": {"guard_inspect", "launch", "discover_list", "discover_inspect", "discover_identity", "discover_save",
+             "registry", "budget", "startup_identity", "startup", "wait", "liveness_identity", "liveness"},
+    "suspend": {"identity", "signal", "wait", "liveness_identity", "liveness"},
+    "resume": {"identity", "signal", "registry", "inspect", "stop", "reinspect"},
+    "witness": {"launch", "worker_registry", "worker_inspect", "create", "capture", "inspect", "start", "wait",
+                "logs", "result", "remove_inspect", "remove", "report", "record"},
+}
+PROBE_CHECKPOINTS = {"probes_" + section + "_" + step
+                     for section, steps in PROBE_STEPS.items() for step in steps}
+PROBE_SERVICES = {"ingest-worker", "probe-ingest-peer", "migrate", "redis", "clickhouse"}
+DIAGNOSTIC_CHECKPOINTS = PRESSURE_CHECKPOINTS | PHYSICAL_CHECKPOINTS | PROBE_CHECKPOINTS
 EXPORT_ARCHIVE_LIMIT = 1073741824
 EXPORT_METADATA_MARGIN = 10485760
 EXPORT_SNAPSHOT_CODE = """import resource,runpy,sys
@@ -83,7 +99,7 @@ FAILURE_STAGES |= DIAGNOSTIC_CHECKPOINTS
 DOCKER_OPERATIONS = {
     (kind, command): kind + "_" + command
     for kind, commands in {
-        "container": {"inspect", "create", "start", "stop", "wait", "logs", "cp", "rm"},
+        "container": {"inspect", "create", "start", "stop", "wait", "logs", "cp", "rm", "exec"},
         "volume": {"inspect", "create", "ls", "rm"}, "network": {"inspect", "ls", "rm"},
         "compose": {"run", "up"},
     }.items() for command in commands
@@ -123,7 +139,7 @@ def safe_exception_type(exc):
     for kind in (
         DockerOperationError, QualificationError, AssertionError, ValueError, TypeError, KeyError,
         json.JSONDecodeError, PermissionError, FileNotFoundError, OSError, RuntimeError,
-        KeyboardInterrupt, SystemExit,
+        KeyboardInterrupt, SystemExit, subprocess.TimeoutExpired,
     ):
         if type(exc) is kind:
             return kind.__name__
@@ -152,6 +168,23 @@ def failure_evidence(exc, phase, stage):
                                   exc.operation in DOCKER_OPERATION_NAMES else "unknown")
             if type(exc.last_completed) is str and exc.last_completed in DIAGNOSTIC_CHECKPOINTS:
                 value["last_completed"] = exc.last_completed
+    return value
+
+
+def probe_failure_evidence(exc, checkpoint, operation, service, last_completed):
+    value = failure_evidence(exc, "probes", checkpoint)
+    if type(checkpoint) is str and checkpoint in PROBE_CHECKPOINTS:
+        value["stage"] = value["checkpoint"] = checkpoint
+        actual_operation = operation
+        if (type(exc) is DockerOperationError and type(exc.operation) is str and
+                exc.operation in DOCKER_OPERATION_NAMES and exc.operation != "unknown"):
+            actual_operation = exc.operation
+        value["operation"] = (actual_operation if type(actual_operation) is str and
+                              actual_operation in DOCKER_OPERATION_NAMES else "unknown")
+        if type(service) is str and service in PROBE_SERVICES:
+            value["service"] = service
+        if type(last_completed) is str and last_completed in PROBE_CHECKPOINTS:
+            value["last_completed"] = last_completed
     return value
 
 
@@ -216,8 +249,53 @@ class Laboratory:
         self.stage = "scenario"
         self.pressure_section = None
         self.physical_section = None
+        self.probe_section = None
+        self.probe_operation = "unknown"
+        self.probe_service = None
+
+    def probe_checkpoint(self, step, *, operation="unknown", service=None):
+        section = self.probe_section
+        if type(section) is str and section in PROBE_STEPS and type(step) is str and step in PROBE_STEPS[section]:
+            self.stage = "probes_" + section + "_" + step
+            self.docker.checkpoint = self.stage
+            self.probe_operation = (operation if type(operation) is str and operation in DOCKER_OPERATION_NAMES
+                                    else "unknown")
+            self.probe_service = service if type(service) is str and service in PROBE_SERVICES else None
+
+    def probe_completed(self):
+        if type(self.stage) is str and self.stage in PROBE_CHECKPOINTS:
+            self.docker.last_completed = self.stage
+
+    def probe_failure(self, exc, *, secondary=False):
+        value = probe_failure_evidence(exc, self.stage, self.probe_operation, self.probe_service,
+                                       getattr(self.docker, "last_completed", None))
+        if self.failure is None:
+            self.failure = value
+        elif secondary:
+            self.failure["secondary"] = [value]
+
+    @contextmanager
+    def probe_diagnostics(self, *, secondary=False):
+        previous = (self.probe_section, self.stage, getattr(self.docker, "checkpoint", None),
+                    self.probe_operation, self.probe_service)
+        if self.probe_section is None:
+            self.probe_section = "baseline"
+        try:
+            yield
+        except BaseException as exc:
+            self.probe_failure(exc, secondary=secondary)
+            raise
+        finally:
+            (self.probe_section, self.stage, self.docker.checkpoint,
+             self.probe_operation, self.probe_service) = previous
 
     def pressure_checkpoint(self, step):
+        if self.probe_section == "witness":
+            operation = {"worker_inspect": "container_inspect", "capture": "container_inspect",
+                         "inspect": "container_inspect", "create": "container_create", "start": "container_start",
+                         "wait": "container_wait", "logs": "container_logs", "remove_inspect": "container_inspect",
+                         "remove": "container_rm"}.get(step, "unknown") if type(step) is str else "unknown"
+            self.probe_checkpoint(step, operation=operation)
         section = self.pressure_section
         if type(section) is str and section in PRESSURE_STEPS and type(step) is str and step in PRESSURE_STEPS[section]:
             self.stage = "pressure_" + section + "_" + step
@@ -401,6 +479,7 @@ class Laboratory:
         project = self.journal.value["projects"][role]
         if args:
             self.physical_checkpoint(args[0])
+        self.probe_checkpoint("launch", operation="compose_up", service="probe-ingest-peer")
         return self.docker.call(
             "compose",
             "--project-name",
@@ -420,23 +499,32 @@ class Laboratory:
         for kind, command in (("container", "ps"), ("network", "network"), ("volume", "volume")):
             args = [command, "-aq"] if kind == "container" else [command, "ls", "-q"]
             self.pressure_checkpoint("discover_list")
+            self.probe_checkpoint("discover_list", operation=docker_operation(args))
             identifiers = self.docker.call(*args, "--filter", "label=com.docker.compose.project=" + project)
             for identifier in identifiers.splitlines():
                 self.pressure_checkpoint("discover_inspect")
+                self.probe_checkpoint("discover_inspect", operation=docker_operation((kind, "inspect")))
                 inspected = self.docker.inspect(kind, identifier)
+                self.probe_checkpoint("discover_identity")
                 labels = inspected.get("Config", {}).get("Labels", {}) if kind == "container" else inspected["Labels"]
                 actual_role = labels.get(LABEL + "role")
                 if actual_role not in {role, "pressure"}:
                     raise QualificationError("Foreign resource shares the lab project name")
                 records.append(resource_identity(kind, inspected, self.journal.value["run_id"], actual_role, project))
+                self.probe_completed()
+        self.probe_checkpoint("discover_save")
         self.journal.add_resources(records)
+        self.probe_completed()
 
     def guard_all(self):
         if self.journal:
             for record in self.journal.value["resources"]:
                 self.physical_checkpoint("guard_inspect")
+                self.probe_checkpoint("guard_inspect", operation=docker_operation((record["kind"], "inspect")),
+                                      service=record.get("service"))
                 inspected = self.docker.inspect(record["kind"], record["id"])
                 verify_resource(record, inspected)
+                self.probe_completed()
 
     def containers(self, services, role="source"):
         if not set(services) <= SERVICES | TOOLS:
@@ -453,16 +541,23 @@ class Laboratory:
         return records
 
     def change(self, operation, services, role="source"):
+        self.probe_checkpoint("registry")
         for record in self.containers(services, role):
             self.pressure_checkpoint("inspect")
+            self.probe_checkpoint("inspect", operation="container_inspect", service=record["service"])
             inspected = self.docker.inspect("container", record["id"])
             verify_resource(record, inspected)
+            self.probe_completed()
             self.pressure_checkpoint("stop")
+            self.probe_checkpoint(operation, operation=docker_operation(("container", operation)),
+                                  service=record["service"])
             self.docker.call("container", operation, record["id"])
             self.pressure_checkpoint("reinspect")
+            self.probe_checkpoint("reinspect", operation="container_inspect", service=record["service"])
             state = self.docker.inspect("container", record["id"])["State"]
             if operation == "stop" and state["Running"]:
                 raise QualificationError("Container did not stop")
+            self.probe_completed()
 
     def inspector(self, action, *, case="baseline", role="source"):
         name = self.journal.value["projects"][role] + "-inspector-" + uuid4().hex[:12]
@@ -798,6 +893,7 @@ class Laboratory:
 
     def run_owned(self, command, *, role="source", volumes=(), root=False, caps=(), archive=None, export_name=None):
         project = self.journal.value["projects"][role]
+        self.probe_checkpoint("worker_registry", service="ingest-worker")
         worker = self.containers({"ingest-worker"})[0]
         self.pressure_checkpoint("worker_inspect")
         inspected = self.docker.inspect("container", worker["id"])
@@ -870,7 +966,9 @@ class Laboratory:
         output = self.docker.call("container", "logs", record["id"])
         if code != 0:
             raise QualificationError("Archive helper failed")
+        self.probe_checkpoint("result")
         result = json.loads(output.splitlines()[-1])
+        self.probe_completed()
         if copy_archive:
             self.pressure_checkpoint("copy_inspect")
             verify_resource(record, self.docker.inspect("container", record["id"]))
@@ -1207,29 +1305,43 @@ class Laboratory:
         )
 
     def probe_status(self, record, mode):
+        self.probe_checkpoint(mode + "_identity", operation="container_inspect", service=record["service"])
         verify_resource(record, self.docker.inspect("container", record["id"]))
+        self.probe_completed()
         command = ["python", "-m", "shadai.workers.probe", mode, "--stage", "ingest"]
         if mode == "readiness":
             command = ["python", "/app/entrypoint.py", *command]
+        self.probe_checkpoint(mode, operation="container_exec", service=record["service"])
         result = self.docker.runner(
             ["docker", "--context", self.context, "container", "exec", record["id"], *command],
             capture_output=True,
             text=True,
             timeout=min(8, self.remaining()),
         )
+        self.probe_completed()
         return result.returncode == 0
 
     def wait_probe_dependencies(self, worker):
         services = {"migrate", "redis", "clickhouse"}
+        self.probe_checkpoint("registry")
         records = self.containers(services)
+        self.probe_completed()
+        self.probe_checkpoint("unique")
         if len(records) != len(services):
             raise QualificationError("Probe dependency identity is not unique")
+        self.probe_completed()
         while True:
+            self.probe_checkpoint("budget")
             self.remaining()
+            self.probe_completed()
             starting = False
             for record in records:
+                self.probe_checkpoint("inspect", operation="container_inspect", service=record["service"])
                 inspected = self.docker.inspect("container", record["id"])
+                self.probe_checkpoint("identity", service=record["service"])
                 verify_resource(record, inspected)
+                self.probe_completed()
+                self.probe_checkpoint("state", service=record["service"])
                 state = inspected.get("State")
                 if type(state) is not dict:
                     raise QualificationError("Probe dependency state is invalid")
@@ -1238,27 +1350,47 @@ class Laboratory:
                             type(state.get("ExitCode")) is not int or state["ExitCode"] != 0):
                         raise QualificationError("Probe migration has not completed successfully")
                 else:
+                    self.probe_completed()
+                    self.probe_checkpoint("health", service=record["service"])
                     health = state.get("Health")
                     if (state.get("Running") is not True or type(health) is not dict or
                             type(health.get("Status")) is not str or
                             health.get("Status") not in {"healthy", "starting"}):
                         raise QualificationError("Probe store health is invalid")
                     starting = starting or health["Status"] == "starting"
+                self.probe_completed()
             if not starting:
                 break
+            self.probe_checkpoint("wait")
             self.sleep(min(1, self.remaining()))
+            self.probe_completed()
         if not self.probe_status(worker, "readiness"):
             raise QualificationError("Probe worker is not ready after dependency recovery")
 
     def experiment_probes(self, url):
+        with self.probe_diagnostics():
+            return self._experiment_probes(url)
+
+    def _experiment_probes(self, url):
+        self.probe_checkpoint("registry", service="ingest-worker")
         worker = self.containers({"ingest-worker"})[0]
+        self.probe_completed()
         assert self.probe_status(worker, "startup") and self.probe_status(worker, "liveness")
+        self.probe_checkpoint("restart", operation="container_inspect", service="ingest-worker")
         before = self.docker.inspect("container", worker["id"])["RestartCount"]
+        self.probe_completed()
+        self.probe_section = "outage"
         self.change("stop", {"redis"})
+        self.probe_checkpoint("wait")
         self.sleep(10)
+        self.probe_completed()
         assert self.probe_status(worker, "liveness") and not self.probe_status(worker, "readiness")
+        self.probe_checkpoint("restart", operation="container_inspect", service="ingest-worker")
         assert self.docker.inspect("container", worker["id"])["RestartCount"] == before
+        self.probe_completed()
         self.change("start", {"redis"})
+        self.probe_section = "dependencies"
+        self.probe_checkpoint("budget")
         previous_deadlines = self.deadline, self.docker.deadline
         deadline = self.local_deadline(120)
         if self.docker.deadline is not None:
@@ -1266,47 +1398,79 @@ class Laboratory:
         self.deadline = self.docker.deadline = deadline
         try:
             self.wait_probe_dependencies(worker)
+            self.probe_checkpoint("launch_budget")
             self.remaining()
+            self.probe_completed()
+            self.probe_section = "peer"
             try:
                 self.compose("up", "-d", "--no-deps", "probe-ingest-peer")
+            except BaseException as exc:
+                self.probe_failure(exc)
+                raise
             finally:
                 self.deadline, self.docker.deadline = previous_deadlines
-                self.discover()
+                with self.probe_diagnostics(secondary=True):
+                    self.discover()
         finally:
             self.deadline, self.docker.deadline = previous_deadlines
+        self.probe_checkpoint("registry", service="probe-ingest-peer")
         peer = self.containers({"probe-ingest-peer"})[0]
+        self.probe_completed()
+        self.probe_checkpoint("budget")
         deadline = self.local_deadline(30)
         while time.monotonic() < deadline and not self.probe_status(peer, "startup"):
+            self.probe_checkpoint("wait")
             self.sleep(min(1, max(0, deadline - time.monotonic())))
+            self.probe_completed()
         assert self.probe_status(peer, "liveness")
+        self.probe_section = "suspend"
+        self.probe_checkpoint("identity", operation="container_inspect", service="ingest-worker")
         verify_resource(worker, self.docker.inspect("container", worker["id"]))
+        self.probe_completed()
         signal_command = (
             "from shadai.workers.probe import read_probe; import os,signal; "
             "v,_=read_probe('ingest'); os.kill(v['pid'],signal.SIGSTOP)"
         )
+        self.probe_checkpoint("signal", operation="container_exec", service="ingest-worker")
         self.docker.call("container", "exec", worker["id"], "python", "-c", signal_command)
         try:
+            self.probe_checkpoint("wait")
             self.sleep(32)
+            self.probe_completed()
             assert not self.probe_status(worker, "liveness") and self.probe_status(peer, "liveness")
+        except BaseException as exc:
+            self.probe_failure(exc)
+            raise
         finally:
             budget_deadline = self.docker.deadline
             self.docker.deadline = time.monotonic() + 10
             try:
-                verify_resource(worker, self.docker.inspect("container", worker["id"]))
-                self.docker.call(
-                    "container",
-                    "exec",
-                    worker["id"],
-                    "python",
-                    "-c",
-                    "from shadai.workers.probe import read_probe; import os,signal; "
-                    "v,_=read_probe('ingest'); os.kill(v['pid'],signal.SIGCONT)",
-                )
-                self.change("stop", {"probe-ingest-peer"})
+                self.probe_section = "resume"
+                with self.probe_diagnostics(secondary=True):
+                    self.probe_checkpoint("identity", operation="container_inspect", service="ingest-worker")
+                    verify_resource(worker, self.docker.inspect("container", worker["id"]))
+                    self.probe_completed()
+                    self.probe_checkpoint("signal", operation="container_exec", service="ingest-worker")
+                    self.docker.call(
+                        "container",
+                        "exec",
+                        worker["id"],
+                        "python",
+                        "-c",
+                        "from shadai.workers.probe import read_probe; import os,signal; "
+                        "v,_=read_probe('ingest'); os.kill(v['pid'],signal.SIGCONT)",
+                    )
+                    self.change("stop", {"probe-ingest-peer"})
             finally:
                 self.docker.deadline = budget_deadline
+        self.probe_section = "witness"
+        self.probe_checkpoint("launch")
         witness = self.run_owned(["-m", "shadai.qualification.probe_witness"])
+        self.probe_completed()
+        self.probe_checkpoint("report")
         suspended = self.helper_result(witness)
+        self.probe_completed()
+        self.probe_checkpoint("record")
         self.record(
             "probes",
             dependency_outage_liveness=True,
@@ -1315,6 +1479,7 @@ class Laboratory:
             sigstop_stale_not_masked_by_peer=True,
             suspended_async_io=suspended,
         )
+        self.probe_completed()
 
     def experiment_physical(self, url):
         from shadai.qualification.physical import host_exporter_proof

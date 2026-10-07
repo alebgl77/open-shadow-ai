@@ -224,10 +224,16 @@ def test_every_derived_runtime_architecture_is_gated_and_then_signed():
     assert set(matrix["service"]) == set(PINS.SERVICES)
     assert set(matrix["os"]) == {"ubuntu-latest", "ubuntu-24.04-arm"}
     assert job["strategy"]["fail-fast"] is False and "if" not in job
-    build, = [step["with"] for step in job["steps"] if step.get("uses", "").startswith("docker/build-push-action@")]
+    archive, local = [step for step in job["steps"] if step.get("uses", "").startswith("docker/build-push-action@")]
+    build = archive["with"]
+    assert "if" not in archive and build["load"] is False
     assert build["outputs"] == "type=oci,dest=artifacts/runtime.oci.tar"
     assert build["provenance"] == "mode=max" and "generator=" in build["sbom"]
     assert build.get("push", False) is False
+    assert local["if"] == "matrix.service == 'clickhouse'" and local["timeout-minutes"] == 5
+    assert local["uses"] == archive["uses"] and job["steps"].index(local) == job["steps"].index(archive) + 1
+    shared = {key: build[key] for key in ("builder", "context", "file", "tags", "push", "platforms")}
+    assert local["with"] == {**shared, "load": True, "provenance": False, "sbom": False}
     scanner, = [step["run"] for step in job["steps"] if "scripts/scan-images.py" in step.get("run", "")]
     assert "verify-oci-evidence.py" in scanner and "--image '${{ matrix.service }}'" in scanner
     signed = jobs["signed-image-evidence"]

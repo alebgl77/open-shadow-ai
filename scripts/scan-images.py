@@ -210,6 +210,21 @@ def main() -> None:
     args = parser.parse_args()
     if bool(args.input) == args.infrastructure or bool(args.image) != bool(args.input):
         parser.error("Choose --input with --image, or --infrastructure")
+    diagnostic = script("component_scanner").FailureDiagnostic()
+    try:
+        scan(args, pins, diagnostic)
+    except BaseException as primary:
+        try:
+            diagnostic.emit(args.output, primary)
+        except BaseException:
+            try:
+                BaseException.add_note(primary, "scanner_diagnostic_failed")
+            except BaseException:
+                pass
+        raise
+
+
+def scan(args, pins, diagnostic):
     args.output.mkdir(parents=True, exist_ok=True)
     early_targets = [args.image] if args.image else [name for name, role in pins.ROLES.items() if role == "runtime"]
     for name in early_targets:
@@ -252,7 +267,8 @@ def main() -> None:
         args.input, platform=args.platform, scratch_parent=cache.parent,
         expected_source={"commit": source_commit, "repository": repository}, expected_component=args.image,
     ) if args.input else nullcontext(None)
-    with context as layout, ExitStack() as component_contexts:
+    diagnostic.at("layout_prepare")
+    with diagnostic.context(context) as layout, diagnostic.context(ExitStack()) as component_contexts:
         for name, reference in targets.items():
             maintained = name in pins.SERVICES
             python_runtime = name in pins.APP_IMAGES and name != "frontend"
@@ -262,6 +278,7 @@ def main() -> None:
             artifact = reference
             if args.input:
                 evidence = layout.evidence
+                diagnostic.at("layout_check")
                 layout.assert_unchanged()
                 if len(evidence["image_manifests"]) != 1:
                     raise ValueError("Image gate requires one native runtime manifest")
@@ -287,6 +304,7 @@ def main() -> None:
                        "--image-src", "remote",
                        "--platform", args.platform, "--scanners", "vuln", "--list-all-pkgs"]
             if reference:
+                diagnostic.at("trivy_inventory")
                 inventory_output = args.output / f"{name}.inventory.json"
                 inventory_output.unlink(missing_ok=True)
                 subprocess.run([*command, "--format", "cyclonedx", "--output",
@@ -300,9 +318,12 @@ def main() -> None:
             output.unlink(missing_ok=True)
             output.with_suffix(".metadata.json").unlink(missing_ok=True)
             scan_command = [*command, "--format", "json", "--output", f"/output/{output.name}", *source]
+            diagnostic.at("trivy_scan")
             subprocess.run(scan_command, check=True)
+            diagnostic.at("trivy_report")
             report = script("verify-scan-evidence").decode(script("verify-scan-evidence").read(output))
             report_hash = capture_report(output, report)
+            diagnostic.at("layout_postcheck")
             layout_metadata = layout.assert_unchanged() if layout else None
             complement = None
             complement_evidence = None
@@ -312,13 +333,16 @@ def main() -> None:
                     components = script("component_scanner")
                     source_binding = script("component_source")
                     documents = source_binding.subject_documents(layout, image_digest)
+                    diagnostic.at("inventory_partition")
                     complement = components.partition(evidence["sboms"][image_digest], service=name,
                                                       package_key=package_key)
                     expected_source = {"commit": source_commit, "repository": repository}
+                    diagnostic.at("source_binding")
                     components.bind_components(complement, documents=documents, service=name, platform=args.platform,
                                                root=ROOT, service_manifest=service_manifest,
                                                expected_source=expected_source, binder=source_binding.bind)
                     if name == "clickhouse":
+                        diagnostic.at("principal_receipt")
                         principal = script("component_principal")
                         expected_ci = principal.ci_identity(os.environ)
                         principal_path = principal.canonical_receipt_path(args.output / principal.RECEIPT_NAME,
@@ -333,6 +357,7 @@ def main() -> None:
                             config=documents["config"], expected_source=expected_source, expected_ci=expected_ci,
                             collector_sha256=source_hashes["scripts/observe-clickhouse-version.py"],
                             process_module_sha256=source_hashes["scripts/grype_runtime.py"])
+                        diagnostic.at("principal_source")
                         proof = source_binding.bind_clickhouse(documents["provenance"]["statement"]["predicate"],
                             platform=args.platform, selected_manifest=documents["manifest"], root=ROOT,
                             service_manifest=service_manifest, expected_source=expected_source, expected_ci=expected_ci)
@@ -350,11 +375,15 @@ def main() -> None:
                     raise ValueError("Image SBOM does not include the complete native runtime hash-lock closure")
             ecosystems = None if reference or maintained else \
                 {"deb", "apk"} if name == "frontend" else {"deb", "apk", "pypi"}
+            diagnostic.at("native_gate")
             target_failures = gate(report, expected=expected, image_id=image_id, artifact=artifact,
                                    platform=args.platform, reference=reference, ecosystems=ecosystems,
                                    complement=complement)
             if maintained:
-                runtime = component_contexts.enter_context(script("grype_runtime").prepared_grype(
+                runtime_module = script("grype_runtime")
+                diagnostic.grype_error_type = getattr(runtime_module, "GrypeRuntimeError", None)
+                diagnostic.at("grype_prepare")
+                runtime = component_contexts.enter_context(runtime_module.prepared_grype(
                     scratch_parent=cache.parent, manifest_path=ROOT / "requirements/component-scanner.json",
                     config_path=ROOT / "requirements/grype.yaml", platform=args.platform))
                 query_directory = args.output / f"{name}.complement-{invocation}"
@@ -367,7 +396,9 @@ def main() -> None:
                                                             "GO-2023-2402"}),
                 )):
                     path = query_directory / f"sentinel-{index}.json"
+                    diagnostic.at("sentinel_query")
                     sentinel = runtime.run_query(query, path)
+                    diagnostic.at("sentinel_report")
                     components.validate_report(sentinel, query=query, configuration=runtime.configuration,
                                                database_status=runtime.database_status)
                     current_providers = sentinel["descriptor"]["db"]["providers"]
@@ -383,7 +414,9 @@ def main() -> None:
                 for claim in complement["components"]:
                     for query in claim["queries"]:
                         path = query_directory / f"query-{len(reports):02d}.json"
+                        diagnostic.at("component_query")
                         raw_report = runtime.run_query(query, path)
+                        diagnostic.at("component_report")
                         if raw_report.get("descriptor", {}).get("db", {}).get("providers") != providers:
                             raise ValueError("Complement database provider metadata changed")
                         target_failures.extend(components.validate_report(
@@ -391,7 +424,9 @@ def main() -> None:
                             database_status=runtime.database_status))
                         reports.append((claim, query, str(path.relative_to(args.output)).replace("\\", "/"),
                                         capture_report(path, raw_report)))
+                diagnostic.at("grype_postcheck")
                 runtime_receipt = runtime.assert_unchanged()
+                diagnostic.at("spdx_postcheck")
                 if components.digest(evidence["sboms"][image_digest]) != complement["spdx_sha256"]:
                     raise ValueError("Original SPDX observations changed during complement scan")
                 complement_evidence = {"schema": 1, "spdx_sha256": complement["spdx_sha256"],
@@ -403,8 +438,10 @@ def main() -> None:
                     subject=subject, platform=args.platform, expected_source=expected_source,
                     sbom_blob=documents["sbom"]["blob"], provenance_blob=documents["provenance"]["blob"],
                     runtime_receipt=runtime_receipt) for claim, query, path, report_hash in reports]}
+                diagnostic.at("layout_postcheck")
                 layout_metadata = layout.assert_unchanged()
             failures.extend(target_failures)
+            diagnostic.at("source_postcheck")
             if args.input:
                 with args.input.open("rb") as source_file:
                     if hashlib.file_digest(source_file, "sha256").hexdigest() != subject["archive_sha256"]:
@@ -416,6 +453,7 @@ def main() -> None:
             if service_manifest_path.read_bytes() != service_manifest_bytes:
                 raise ValueError("Maintained service manifest changed during image scan")
             pins.check_service_builds(ROOT, images)
+            diagnostic.at("metadata_prepare")
             metadata = {"invocation": invocation, "platform": args.platform, "subject": subject,
                         "verdict": "failed" if target_failures else "passed", "findings": target_failures,
                         "command": scan_command,
@@ -438,15 +476,19 @@ def main() -> None:
                 metadata["lock_sha256"] = hashlib.sha256(lock.read_bytes()).hexdigest()
                 metadata["expected_dependencies"] = closure
             pending_metadata.append((output.with_suffix(".metadata.json"), metadata))
+        diagnostic.at("cleanup")
     # Successful disposal is part of the proof; a refused cleanup cannot publish success metadata.
+    diagnostic.at("evidence_postcheck")
     if source_fingerprints(ROOT, args.image in pins.SERVICES, args.image == "clickhouse") != source_hashes:
         raise ValueError("Scanner source inputs changed during image scan")
     for path, fingerprint in report_inputs.items():
         if hashlib.sha256(script("verify-scan-evidence").read(path)).hexdigest() != fingerprint:
             raise ValueError("Raw scanner evidence changed during image scan")
     for path, metadata in pending_metadata:
+        diagnostic.at("metadata_publish")
         path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     if failures:
+        diagnostic.at("advisory_gate")
         raise SystemExit("Fixable severe image advisories:\n" + "\n".join(failures))
     print("PASS: complete subject-bound image reports; no fixable high/critical findings")
 
