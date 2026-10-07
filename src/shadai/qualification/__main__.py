@@ -17,7 +17,8 @@ def main(argv=None):
     quality.add_argument("--output", required=True)
     fixture = commands.add_parser("fixture")
     fixture.add_argument(
-        "action", choices=("initialize", "pipeline", "enroll", "inventory", "verify_load", "seed_pending", "physical")
+        "action", choices=("initialize", "pipeline", "enroll", "inventory", "verify_load", "seed_pending", "physical",
+                           "redis_persistence")
     )
     fixture.add_argument("--directory", default="/qualification")
     fixture.add_argument("--run-id", required=True)

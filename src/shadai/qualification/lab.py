@@ -94,6 +94,7 @@ COLD_STEPS = {
     "entry": {"budget"},
     "writers_stop": {"registry", "inspect", "stop", "reinspect"},
     "seed_pending": COLD_INSPECTOR_STEPS | {"pel"},
+    "redis_persistence": COLD_INSPECTOR_STEPS | {"budget", "complete"},
     "inventory_source": COLD_INSPECTOR_STEPS,
     "stores_stop": {"registry", "inspect", "stop", "reinspect"},
     "export": PRESSURE_STEPS["export"] | {"budget", "registry", "capability", "archive", "name", "result",
@@ -1582,6 +1583,16 @@ class Laboratory:
         fixture = self.inspector("seed_pending")
         self.cold_checkpoint("pel", operation="unknown")
         assert fixture["pel_witnessed"]
+        self.cold_phase("redis_persistence", "budget", service="inspector")
+        self.remaining()
+        self.cold_checkpoint("run", service="inspector")
+        persistence = self.inspector("redis_persistence")
+        self.cold_checkpoint("complete", operation="unknown", service="inspector")
+        self.remaining()
+        if (type(persistence) is not dict or any(type(key) is not str for key in persistence)
+                or persistence.keys() != {"redis_persistence_complete"}
+                or persistence["redis_persistence_complete"] is not True):
+            raise QualificationError("Redis persistence completion proof refused")
         self.cold_phase("inventory_source", "run", service="inspector")
         self.inspector("inventory", case="source")
         self.cold_phase("stores_stop", "registry")

@@ -60,6 +60,10 @@ async def fixture(action, directory, run_id, *, case="baseline"):
             return {"initialized": True, "retention": result}
         if action == "pipeline":
             return {"pipeline": await pipeline_snapshot(redis)}
+        if action == "redis_persistence":
+            from shadai.qualification.redis_persistence import redis_persistence
+
+            return await redis_persistence(redis)
         if action == "enroll":
             async with sessions.begin() as session:
                 if await session.get(CollectorORM, collector_id):

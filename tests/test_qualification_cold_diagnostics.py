@@ -82,6 +82,8 @@ class ColdCli(PhysicalCliModel):
             action, case = self.actions[args[2]]
             if action == "seed_pending":
                 result = {"pel_witnessed": True, "pending_event_id": "synthetic-pending"}
+            elif action == "redis_persistence":
+                result = {"redis_persistence_complete": True}
             elif action == "inventory":
                 atomic_json(self.lab.directory / (case + "-inventory.json"), {"synthetic_inventory": [1, 2, 3]})
                 result = {"logical_events": 1}
@@ -149,6 +151,63 @@ def test_healthy_cold_retains_owned_archives_and_eleven_receipts(tmp_path, monke
     assert any(checkpoint.startswith("cold_restore_export_") for checkpoint, _ in cli.pairs)
     assert any(checkpoint.startswith("cold_restore_import_") for checkpoint, _ in cli.pairs)
     assert all(call["kwargs"]["timeout"] <= 180 for call in cli.invocations)
+
+
+def test_persistence_runs_between_pending_and_inventory_with_writers_stopped(tmp_path, monkeypatch):
+    lab, cli = create_cold_lab(tmp_path, monkeypatch)
+    original, observed = lab.inspector, []
+    deadline = lab.deadline
+
+    def inspector(action, *args, **kwargs):
+        observed.append(action)
+        if action in {"redis_persistence", "inventory"} and kwargs.get("role", "source") == "source":
+            assert all(not item["State"]["Running"] for item in cli.containers.values()
+                       if item["Config"]["Labels"].get("com.docker.compose.service") in lab_module.WRITERS)
+        assert lab.deadline == lab.docker.deadline == deadline
+        return original(action, *args, **kwargs)
+
+    monkeypatch.setattr(lab, "inspector", inspector)
+    lab.experiment_cold_restore("unused")
+    assert observed[:3] == ["seed_pending", "redis_persistence", "inventory"]
+    assert any(checkpoint == "cold_restore_redis_persistence_wait" for checkpoint, _ in cli.pairs)
+
+
+@pytest.mark.parametrize("result", [None, True, [], {}, {"redis_persistence_complete": 1},
+                                     {"redis_persistence_complete": False},
+                                     {"redis_persistence_complete": True, "private": CANARY}])
+def test_persistence_result_closed_before_source_inventory(tmp_path, monkeypatch, result):
+    lab, cli = create_cold_lab(tmp_path, monkeypatch)
+    original, actions = lab.inspector, []
+
+    def inspector(action, *args, **kwargs):
+        actions.append(action)
+        return result if action == "redis_persistence" else original(action, *args, **kwargs)
+
+    monkeypatch.setattr(lab, "inspector", inspector)
+    with pytest.raises(QualificationError, match="completion proof"):
+        lab.experiment_cold_restore("unused")
+    assert actions == ["seed_pending", "redis_persistence"]
+    assert_closed_failure(lab, "cold_restore_redis_persistence_complete")
+
+
+@pytest.mark.parametrize("late", ["before", "after"])
+def test_persistence_parent_budget_checked_before_launch_and_after_result(tmp_path, monkeypatch, late):
+    lab, cli = create_cold_lab(tmp_path, monkeypatch)
+    original, actions = lab.inspector, []
+
+    def inspector(action, *args, **kwargs):
+        actions.append(action)
+        result = original(action, *args, **kwargs)
+        if action == ("seed_pending" if late == "before" else "redis_persistence"):
+            monkeypatch.setattr(lab_module.time, "monotonic", lambda: 1000)
+        return result
+
+    monkeypatch.setattr(lab, "inspector", inspector)
+    with pytest.raises(QualificationError, match="wall budget"):
+        lab.experiment_cold_restore("unused")
+    assert actions == (["seed_pending"] if late == "before" else ["seed_pending", "redis_persistence"])
+    assert lab.deadline == lab.docker.deadline == 1000
+    assert_closed_failure(lab, "cold_restore_redis_persistence_" + ("budget" if late == "before" else "complete"))
 
 
 @pytest.mark.parametrize("section,step", CHECKPOINT_CASES)

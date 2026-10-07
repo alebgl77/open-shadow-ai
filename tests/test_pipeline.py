@@ -49,6 +49,7 @@ class Session:
 
 async def test_reclaims_pending_before_reading_new():
     redis = AsyncMock()
+    redis.xgroup_createconsumer.return_value = 1
     redis.xautoclaim.return_value = ["12-0", [("1-0", {"data": "x"})], []]
     redis.xreadgroup.return_value = []
     consumer = StreamConsumer(redis, "group", "worker", ["events:dns"])

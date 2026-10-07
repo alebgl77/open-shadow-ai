@@ -27,6 +27,8 @@ jobs:
           python -m pip install --no-deps --no-build-isolation . ./agent
       - run: python -m ruff check src tests agent/shadai_agent migrations scripts
       - run: python -m pytest -q --junitxml artifacts/python-tests-${{ matrix.python-version }}.xml -o junit_logging=no
+        env:
+          SHADAI_REQUIRE_REDIS_PERSISTENCE: "1"
       - name: Retain bounded Python test outcomes without captured output
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

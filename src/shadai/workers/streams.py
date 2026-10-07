@@ -49,6 +49,7 @@ class StreamConsumer:
         self.redis, self.group, self.consumer, self.streams = redis, group, consumer, streams
         self.max_attempts, self.reclaim_ms = max_attempts, reclaim_ms
         self.cursors = {stream: "0-0" for stream in streams}
+        self.registered_streams = set()
         self.clock = clock
         self.counters = Counter()
         self.settings, self.probe = queue_settings(settings), probe
@@ -72,6 +73,11 @@ class StreamConsumer:
     async def _read(self):
         recovered = []
         for stream in self.streams:
+            if stream not in self.registered_streams:
+                registered = await self.redis.xgroup_createconsumer(stream, self.group, self.consumer)
+                if type(registered) is not int or registered not in (0, 1):
+                    raise ValueError("Invalid consumer registration result")
+                self.registered_streams.add(stream)
             response = await self.redis.xautoclaim(
                 stream,
                 self.group,

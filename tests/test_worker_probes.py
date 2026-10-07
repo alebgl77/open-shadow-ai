@@ -200,6 +200,7 @@ class DelayedEmptyRedis:
         self.connection = client.connection_pool.make_connection()
         assert self.connection.socket_timeout == 5
         self.error = error
+        self.xgroup_createconsumer = AsyncMock(return_value=1)
         self.xautoclaim = AsyncMock(return_value=["0-0", [], []])
 
     async def xreadgroup(self, *args, block, **kwargs):
