@@ -115,6 +115,8 @@ def synthetic(tmp_path, monkeypatch):
             if state.update_mutate:
                 state.update_mutate(database)
             state.actual_status = value
+            if kwargs.get("post_reap_monitor") is not None:
+                kwargs["post_reap_monitor"](min(kwargs["deadline"], time.monotonic() + kwargs["timeout"]))
             return b"update complete"
         elif "status" in command:
             value = state.actual_status
@@ -353,8 +355,8 @@ def test_update_tree_refusal_identifies_exact_stat_branch_and_preserves_primary(
         with monkeypatch.context() as scoped:
             entry = runtime.Directory.entry
 
-            def observing(directory, name):
-                value = entry(directory, name)
+            def observing(directory, name, **entry_options):
+                value = entry(directory, name, **entry_options)
                 if directory.path == kwargs["cwd"] and name == "grype":
                     return SimpleNamespace(st_mode=mode, st_nlink=links, st_size=size)
                 return value
@@ -398,8 +400,8 @@ def test_tree_regular_file_at_exact_size_limit_remains_accepted(synthetic, monke
 def reported_tree_stats(monkeypatch, changes):
     previous = runtime.Directory.entry
 
-    def observing(directory, name):
-        value = previous(directory, name)
+    def observing(directory, name, **entry_options):
+        value = previous(directory, name, **entry_options)
         change = changes.get(directory.path / name)
         if change is None:
             return value
@@ -2095,3 +2097,756 @@ def test_filesystem_exception_category_after_prepare_does_not_fabricate_phase(sy
     assert caught.value.prepare_phase is None
     assert caught.value.filesystem_exception == {"family": "os_error", "errno": "not_found"}
     assert not list(synthetic.scratch.iterdir())
+
+
+@pytest.fixture
+def live_tree(tmp_path):
+    path = tmp_path / "owned-tree"
+    path.mkdir()
+    handle = runtime.Runtime(tmp_path, tmp_path / "unused-manifest", tmp_path / "unused-config", "linux/amd64")
+    handle.path = path
+    handle.root = runtime.Directory(path)
+    try:
+        yield handle
+    finally:
+        handle.root.close()
+
+
+@pytest.mark.parametrize("transient", [False, True])
+@pytest.mark.parametrize("kind", ["leaf", "queued_child"])
+def test_live_tree_only_update_monitor_tolerates_enumeration_disappearance(live_tree, monkeypatch, transient, kind):
+    path = live_tree.path / "changing"
+    path.write_bytes(b"temporary") if kind == "leaf" else path.mkdir()
+    original = Path.lstat
+    observations = []
+    primary = FileNotFoundError(errno.ENOENT, "private injection")
+
+    def observing(current, *args, **kwargs):
+        if current == path:
+            observations.append(current)
+            if kind == "leaf" or len(observations) > 1:
+                raise primary
+        return original(current, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", observing)
+    if transient:
+        live_tree.budget_tree(transient=True)
+    else:
+        with pytest.raises(FileNotFoundError) as caught:
+            live_tree.budget_tree()
+        assert caught.value is primary
+    assert len(observations) == (1 if kind == "leaf" else 2)
+
+
+@pytest.mark.parametrize("anchored", [False, True])
+def test_live_tree_entry_missing_rechecks_held_directory_and_ancestors(live_tree, monkeypatch, anchored):
+    missing = FileNotFoundError(errno.ENOENT, "private terminal")
+    ancestor = FileNotFoundError(errno.ENOENT, "private ancestor")
+    original = Path.lstat
+    original_stat = os.stat
+    state = SimpleNamespace(terminal=False)
+
+    def observing(current, *args, **kwargs):
+        if current == live_tree.path / "changing":
+            state.terminal = True
+            raise missing
+        if current == live_tree.path and state.terminal:
+            raise ancestor
+        return original(current, *args, **kwargs)
+
+    def entry_stat(name, *args, **kwargs):
+        if name != "changing":
+            return original_stat(name, *args, **kwargs)
+        assert name == "changing" and kwargs == {"dir_fd": live_tree.root.fd, "follow_symlinks": False}
+        state.terminal = True
+        raise missing
+
+    monkeypatch.setattr(Path, "lstat", observing)
+    monkeypatch.setattr(runtime, "ANCHORED", anchored)
+    if anchored:
+        monkeypatch.setattr(runtime.os, "stat", entry_stat)
+    with pytest.raises(FileNotFoundError) as caught:
+        live_tree.root.entry("changing", transient=True)
+    assert caught.value is ancestor
+
+
+@pytest.mark.parametrize("fault", ["missing", "identity"])
+def test_live_tree_queued_missing_rechecks_retained_ancestors(live_tree, monkeypatch, fault):
+    child = live_tree.path / "changing"
+    child.mkdir()
+    expected = runtime.identity(child.lstat())
+    original = Path.lstat
+    state = SimpleNamespace(terminal=False)
+    primary = FileNotFoundError(errno.ENOENT, "private ancestor")
+
+    def observing(current, *args, **kwargs):
+        if current == child:
+            state.terminal = True
+            raise FileNotFoundError(errno.ENOENT, "private terminal")
+        value = original(current, *args, **kwargs)
+        if current == live_tree.path and state.terminal:
+            if fault == "missing":
+                raise primary
+            return SimpleNamespace(st_mode=value.st_mode, st_dev=value.st_dev, st_ino=value.st_ino + 1)
+        return value
+
+    monkeypatch.setattr(Path, "lstat", observing)
+    with pytest.raises(FileNotFoundError if fault == "missing" else runtime.GrypeRuntimeError) as caught:
+        runtime.Directory(child, expected=expected, transient=True)
+    assert caught.value is primary if fault == "missing" else caught.value.code == "identity_changed"
+
+
+@pytest.mark.parametrize("transient", [False, True])
+@pytest.mark.parametrize("replacement", ["inode", "device", "symlink", "file"])
+def test_live_tree_queued_directory_identity_and_type_never_relaxed(live_tree, monkeypatch, transient, replacement):
+    child = live_tree.path / "changing"
+    child.mkdir()
+    original = Path.lstat
+    observed = []
+
+    def observing(current, *args, **kwargs):
+        value = original(current, *args, **kwargs)
+        if current != child:
+            return value
+        observed.append(value)
+        if len(observed) == 1:
+            return value
+        return SimpleNamespace(st_dev=value.st_dev + (replacement == "device"),
+                               st_ino=value.st_ino + (replacement == "inode"),
+                               st_mode={"symlink": stat.S_IFLNK, "file": stat.S_IFREG}.get(replacement, value.st_mode))
+
+    monkeypatch.setattr(Path, "lstat", observing)
+    with pytest.raises(runtime.GrypeRuntimeError) as caught:
+        live_tree.budget_tree(transient=transient)
+    assert caught.value.code == ("identity_changed" if replacement in {"inode", "device"} else "filesystem")
+    assert len(observed) == 2
+
+
+def live_tree_exception(case):
+    callbacks = []
+
+    class HostileMeta(type):
+        def __eq__(cls, other):
+            callbacks.append("metaclass equality")
+            raise AssertionError("untrusted metaclass")
+
+    class HostileMissingError(FileNotFoundError, metaclass=HostileMeta):
+        @property
+        def errno(self):
+            callbacks.append("subclass errno")
+            raise AssertionError("untrusted property")
+
+    class HostileNumber(int):
+        def __eq__(self, other):
+            callbacks.append("integer equality")
+            raise AssertionError("untrusted integer")
+
+    class HostileValue:
+        def __eq__(self, other):
+            callbacks.append("value equality")
+            raise AssertionError("untrusted value")
+
+    if case == "exact_missing":
+        primary = FileNotFoundError(errno.ENOENT, "private injection")
+    elif case == "exact_oserror":
+        primary = OSError()
+        primary.errno = errno.ENOENT
+    elif case == "permission":
+        primary = PermissionError(errno.EACCES, "private injection")
+    elif case == "other_errno":
+        primary = OSError(errno.EIO, "private injection")
+    elif case == "missing_permission":
+        primary = FileNotFoundError(errno.EACCES, "private injection")
+    elif case == "subclass":
+        primary = HostileMissingError(errno.ENOENT, "private injection")
+    elif case == "cancel":
+        primary = KeyboardInterrupt("private cancellation")
+    elif case == "exit":
+        primary = SystemExit("private cancellation")
+    elif case == "value_error":
+        primary = ValueError("private injection")
+    else:
+        primary = FileNotFoundError()
+        primary.errno = {"no_errno": None, "bool_errno": True, "integer_subclass": HostileNumber(errno.ENOENT),
+                         "hostile_errno": HostileValue(), "text_errno": "2"}[case]
+    return primary, callbacks
+
+
+LIVE_TREE_EXCEPTIONS = ["exact_missing", "exact_oserror", "permission", "other_errno", "missing_permission",
+                        "subclass", "cancel", "exit", "value_error", "no_errno", "bool_errno",
+                        "integer_subclass", "hostile_errno", "text_errno"]
+
+
+@pytest.mark.parametrize("case", LIVE_TREE_EXCEPTIONS)
+@pytest.mark.parametrize("anchored", [False, True])
+def test_live_tree_entry_catches_only_exact_builtin_native_enoent(live_tree, monkeypatch, case, anchored):
+    primary, callbacks = live_tree_exception(case)
+    original = Path.lstat
+    original_stat = os.stat
+
+    def observing(current, *args, **kwargs):
+        if current == live_tree.path / "changing":
+            raise primary
+        return original(current, *args, **kwargs)
+
+    def entry_stat(name, *args, **kwargs):
+        if name != "changing":
+            return original_stat(name, *args, **kwargs)
+        assert name == "changing" and kwargs == {"dir_fd": live_tree.root.fd, "follow_symlinks": False}
+        raise primary
+
+    monkeypatch.setattr(Path, "lstat", observing)
+    monkeypatch.setattr(runtime, "ANCHORED", anchored)
+    if anchored:
+        monkeypatch.setattr(runtime.os, "stat", entry_stat)
+    if case in {"exact_missing", "exact_oserror"}:
+        assert live_tree.root.entry("changing", transient=True) is None
+    else:
+        with pytest.raises(BaseException) as caught:
+            live_tree.root.entry("changing", transient=True)
+        assert caught.value is primary
+    assert callbacks == []
+
+
+@pytest.mark.parametrize("case", LIVE_TREE_EXCEPTIONS)
+def test_live_tree_queued_lstat_catches_only_exact_builtin_native_enoent(live_tree, monkeypatch, case):
+    child = live_tree.path / "changing"
+    child.mkdir()
+    expected = runtime.identity(child.lstat())
+    original = Path.lstat
+    primary, callbacks = live_tree_exception(case)
+
+    def observing(current, *args, **kwargs):
+        if current == child:
+            raise primary
+        return original(current, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", observing)
+    if case in {"exact_missing", "exact_oserror"}:
+        directory = runtime.Directory(child, expected=expected, transient=True)
+        try:
+            assert directory.missing and directory.path == child
+            assert directory.chain[-1][0] == live_tree.path
+        finally:
+            directory.close()
+    else:
+        with pytest.raises(BaseException) as caught:
+            runtime.Directory(child, expected=expected, transient=True)
+        assert caught.value is primary
+    assert callbacks == []
+
+
+@pytest.mark.parametrize("case", [*LIVE_TREE_EXCEPTIONS, "fstat_identity", "fstat_missing",
+                                  "fstat_missing_close_failure", "ancestor_missing"])
+@pytest.mark.parametrize("transient", [False, True])
+def test_live_tree_queued_open_only_terminal_enoent_and_no_descriptor_leak(live_tree, monkeypatch, case, transient):
+    child = live_tree.path / "changing"
+    child.mkdir()
+    expected = runtime.identity(child.lstat())
+    original = Path.lstat
+    original_fstat, original_close = os.fstat, os.close
+    primary, callbacks = live_tree_exception(case if case in LIVE_TREE_EXCEPTIONS else "exact_missing")
+    descriptors, closed = {}, []
+    state = SimpleNamespace(terminal=False)
+
+    def opening(name, flags, *, dir_fd=None):
+        path = Path(name) if dir_fd is None else descriptors[dir_fd][0] / name
+        if path == child:
+            state.terminal = True
+            if case not in {"fstat_identity", "fstat_missing", "fstat_missing_close_failure"}:
+                raise primary
+        fd = 100000 + len(descriptors)
+        descriptors[fd] = (path, original(path))
+        return fd
+
+    def inspecting(fd):
+        if fd not in descriptors:
+            return original_fstat(fd)
+        path, value = descriptors[fd]
+        if path == child:
+            if case in {"fstat_missing", "fstat_missing_close_failure"}:
+                raise primary
+            if case == "fstat_identity":
+                return SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino + 1, st_mode=value.st_mode)
+        return value
+
+    def closing(fd):
+        if fd in descriptors:
+            closed.append(fd)
+            if case == "fstat_missing_close_failure" and descriptors[fd][0] == child:
+                raise OSError(errno.EIO, "private close refusal")
+        else:
+            original_close(fd)
+
+    def observing(current, *args, **kwargs):
+        if current == live_tree.path and state.terminal and case == "ancestor_missing":
+            raise primary
+        return original(current, *args, **kwargs)
+
+    monkeypatch.setattr(runtime, "ANCHORED", True)
+    monkeypatch.setattr(runtime.os, "O_DIRECTORY", getattr(os, "O_DIRECTORY", 0), raising=False)
+    monkeypatch.setattr(runtime.os, "open", opening)
+    monkeypatch.setattr(runtime.os, "fstat", inspecting)
+    monkeypatch.setattr(runtime.os, "close", closing)
+    monkeypatch.setattr(Path, "lstat", observing)
+    if transient and case in {"exact_missing", "exact_oserror"}:
+        directory = runtime.Directory(child, expected=expected, transient=True)
+        assert directory.missing
+        directory.close()
+    else:
+        with pytest.raises(BaseException) as caught:
+            runtime.Directory(child, expected=expected, transient=transient)
+        if case == "fstat_identity":
+            assert type(caught.value) is runtime.GrypeRuntimeError and caught.value.code == "identity_changed"
+        else:
+            assert caught.value is primary
+    assert callbacks == [] and len(closed) == len(set(closed)) == len(descriptors)
+    assert set(closed) == set(descriptors)
+    if case == "fstat_missing_close_failure":
+        assert primary.__notes__ == ["owned_cleanup_failed"]
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "../outside", "/outside", "child/name", "child\\name",
+                                  "\\outside", "bad\0name", 123, None])
+def test_live_tree_names_are_single_components_before_access(live_tree, monkeypatch, name):
+    checks = []
+    monkeypatch.setattr(live_tree.root, "check", lambda: checks.append("ancestor check"))
+    monkeypatch.setattr(runtime, "safe_stat", lambda *args, **kwargs: pytest.fail("invalid name accessed"))
+    with pytest.raises(runtime.GrypeRuntimeError, match="filesystem"):
+        live_tree.root.entry(name, transient=True)
+    assert checks == ["ancestor check"]
+    monkeypatch.setattr(runtime.os, "scandir", lambda path: nullcontext([SimpleNamespace(name=name)]))
+    with pytest.raises(runtime.GrypeRuntimeError, match="filesystem"):
+        live_tree.root.names(enumerated=True)
+
+
+@pytest.mark.parametrize("count", [128, 129])
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_live_tree_every_enumerated_vanished_name_counts_toward_cap(live_tree, monkeypatch, count, duplicate):
+    names = ["vanished" if duplicate else str(ordinal) for ordinal in range(count)]
+    monkeypatch.setattr(runtime.os, "scandir", lambda path: nullcontext([SimpleNamespace(name=name) for name in names]))
+    if count == 128:
+        live_tree.budget_tree(transient=True)
+    else:
+        with pytest.raises(runtime.GrypeRuntimeError, match="byte_budget"):
+            live_tree.budget_tree(transient=True)
+
+
+@pytest.mark.parametrize("count", [127, 128])
+def test_live_tree_entry_cap_also_counts_queued_directories_and_missing_children(live_tree, monkeypatch, count):
+    child = live_tree.path / "changing"
+    child.mkdir()
+    monkeypatch.setattr(runtime.Directory, "names", lambda directory, **kwargs: ["changing"]
+                        if directory.path == live_tree.path else [str(ordinal) for ordinal in range(count)])
+    if count == 127:
+        live_tree.budget_tree(transient=True)
+    else:
+        with pytest.raises(runtime.GrypeRuntimeError, match="byte_budget"):
+            live_tree.budget_tree(transient=True)
+
+
+@pytest.mark.parametrize("transient", [False, True])
+@pytest.mark.parametrize("sqlite,other,error", [(runtime.MAX_WORKSPACE, 0, None),
+                                              (runtime.MAX_WORKSPACE + 1, 0, "filesystem"),
+                                              (runtime.MAX_WORKSPACE // 2, runtime.MAX_DB_FILE, None),
+                                              (runtime.MAX_WORKSPACE // 2, runtime.MAX_DB_FILE + 1, "filesystem"),
+                                              (runtime.MAX_WORKSPACE // 2 + 1, runtime.MAX_DB_FILE, "byte_budget")])
+def test_live_tree_exact_byte_caps_remain_authoritative(live_tree, monkeypatch, transient, sqlite, other, error):
+    (live_tree.path / "vulnerability.db").touch()
+    (live_tree.path / "download").touch()
+    original = runtime.Directory.entry
+
+    def observing(directory, name, **kwargs):
+        value = original(directory, name, **kwargs)
+        return SimpleNamespace(st_mode=value.st_mode, st_nlink=value.st_nlink,
+                               st_size=sqlite if name == "vulnerability.db" else other)
+
+    monkeypatch.setattr(runtime.Directory, "entry", observing)
+    if error is None:
+        live_tree.budget_tree(transient=transient)
+    else:
+        with pytest.raises(runtime.GrypeRuntimeError, match=error):
+            live_tree.budget_tree(transient=transient)
+
+
+def test_live_tree_post_reap_scan_catches_aggregate_growth_hidden_from_live_observation(live_tree, monkeypatch):
+    (live_tree.path / "vulnerability.db").touch()
+    (live_tree.path / "download").touch()
+    original = runtime.Directory.entry
+    state = SimpleNamespace(final=False)
+
+    def observing(directory, name, **kwargs):
+        value = original(directory, name, **kwargs)
+        if not state.final:
+            assert kwargs == {"transient": True}
+            return None
+        assert kwargs == {}
+        return SimpleNamespace(st_mode=value.st_mode, st_nlink=value.st_nlink,
+                               st_size=3 * 1024 * runtime.CHUNK if name == "vulnerability.db"
+                               else 1024 * runtime.CHUNK + 1)
+
+    monkeypatch.setattr(runtime.Directory, "entry", observing)
+    live_tree.budget_tree(transient=True)
+    state.final = True
+    with pytest.raises(runtime.GrypeRuntimeError, match="byte_budget"):
+        live_tree.post_update_monitor(time.monotonic() + 5)
+
+
+def test_live_tree_post_reap_hook_runs_after_wait_reader_and_descriptor_cleanup(
+        owned_process_boundary, monkeypatch, tmp_path):
+    boundary = owned_process_boundary
+    original = runtime.ReaderDescriptors.close
+    leases = []
+    calls = []
+
+    def closing(lease):
+        leases.append(lease)
+        original(lease)
+        calls.append("private descriptors closed")
+
+    def post_reap(command_deadline):
+        assert command_deadline <= started + 30
+        assert boundary.child.returncode == 0 and boundary.child.stdout.closed
+        assert boundary.calls[-2:] == ["kill", "wait"]
+        assert len(leases) == 1 and leases[0].read_fd is None and leases[0].output_fd is None
+        assert not any(thread.name == "grype-owned-output" and thread.is_alive() for thread in threading.enumerate())
+        calls.append("post reap")
+
+    monkeypatch.setattr(runtime.ReaderDescriptors, "close", closing)
+    started = time.monotonic()
+    assert runtime.run(["fixed"], environment={}, cwd=tmp_path, deadline=started + 30, limit=32,
+                       post_reap_monitor=post_reap) == b""
+    assert calls == ["private descriptors closed", "post reap"]
+
+
+@pytest.mark.parametrize("fault", ["primary", "cancel", "nonzero", "reader_close", "process_cleanup"])
+def test_live_tree_post_reap_hook_is_suppressed_by_primary_or_cleanup_failure(
+        owned_process_boundary, monkeypatch, tmp_path, fault):
+    boundary = owned_process_boundary
+    primary = KeyboardInterrupt("private cancel") if fault == "cancel" else runtime.GrypeRuntimeError("filesystem")
+    original = runtime.ReaderDescriptors.close
+
+    def monitoring():
+        if fault in {"primary", "cancel"}:
+            raise primary
+
+    def closing(lease):
+        original(lease)
+        raise runtime.GrypeRuntimeError("owned_cleanup_failed")
+
+    if fault == "reader_close":
+        monkeypatch.setattr(runtime.ReaderDescriptors, "close", closing)
+    elif fault == "process_cleanup":
+        monkeypatch.setattr(runtime, "cleanup_process", lambda *args, **kwargs: (_ for _ in ()).throw(
+            runtime.GrypeRuntimeError("owned_cleanup_failed")))
+    elif fault == "nonzero":
+        monkeypatch.setattr(boundary.os, "waitid", lambda *args: SimpleNamespace(si_pid=123, si_code=1, si_status=23))
+    with pytest.raises(BaseException) as caught:
+        runtime.run(["fixed"], environment={}, cwd=tmp_path, deadline=time.monotonic() + 30, limit=32,
+                    monitor=monitoring, post_reap_monitor=lambda deadline: pytest.fail("hook after refusal"))
+    if fault in {"primary", "cancel"}:
+        assert caught.value is primary
+    else:
+        assert caught.value.code == ("nonzero" if fault == "nonzero" else "owned_cleanup_failed")
+
+
+@pytest.mark.parametrize("case", ["cancel", "exit", "value_error"])
+def test_live_tree_post_reap_failure_preserves_exact_primary_after_cleanup(
+        owned_process_boundary, tmp_path, case):
+    primary, callbacks = live_tree_exception(case)
+    with pytest.raises(BaseException) as caught:
+        runtime.run(["fixed"], environment={}, cwd=tmp_path, deadline=time.monotonic() + 30, limit=32,
+                    post_reap_monitor=lambda deadline: (_ for _ in ()).throw(primary))
+    assert caught.value is primary and callbacks == []
+    assert owned_process_boundary.calls.count("wait") == 1 and owned_process_boundary.child.stdout.closed
+
+
+@pytest.mark.parametrize("deadline", ["global", "command"])
+@pytest.mark.parametrize("stage", ["before", "names", "entry", "close", "after_tree"])
+def test_live_tree_post_reap_deadlines_checked_before_during_and_after_scan(live_tree, monkeypatch, deadline, stage):
+    (live_tree.path / "stable").touch()
+    clock = SimpleNamespace(now=100.0)
+    cutoff = 150.0
+    live_tree.deadline = cutoff if deadline == "global" else 200.0
+    command_deadline = cutoff if deadline == "command" else 200.0
+    monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    if stage == "before":
+        clock.now = cutoff
+    method = {"names": "names", "entry": "entry", "close": "close"}.get(stage)
+    if method:
+        original = getattr(runtime.Directory, method)
+
+        def observing(directory, *args, **kwargs):
+            value = original(directory, *args, **kwargs)
+            clock.now = cutoff
+            return value
+
+        monkeypatch.setattr(runtime.Directory, method, observing)
+    elif stage == "after_tree":
+        original = live_tree.budget_tree
+
+        def scanning(**kwargs):
+            assert kwargs == {"transient": False, "deadline": command_deadline}
+            original(**kwargs)
+            clock.now = cutoff
+
+        monkeypatch.setattr(live_tree, "budget_tree", scanning)
+    with pytest.raises(runtime.GrypeRuntimeError, match="deadline"):
+        live_tree.post_update_monitor(command_deadline)
+
+
+def test_live_tree_run_passes_original_command_deadline_without_reset_after_cleanup(
+        owned_process_boundary, monkeypatch, tmp_path):
+    clock = SimpleNamespace(now=100.0)
+    seen = []
+    original = runtime.cleanup_process
+
+    def cleaning(*args, **kwargs):
+        original(*args, **kwargs)
+        clock.now = 150.0
+
+    def post_reap(command_deadline):
+        seen.append(command_deadline)
+        runtime.remaining(command_deadline)
+
+    monkeypatch.setattr(runtime, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    monkeypatch.setattr(runtime, "cleanup_process", cleaning)
+    with pytest.raises(runtime.GrypeRuntimeError, match="deadline"):
+        runtime.run(["fixed"], environment={}, cwd=tmp_path, deadline=200.0, limit=32, timeout=50,
+                    post_reap_monitor=post_reap)
+    assert seen == [150.0] and owned_process_boundary.calls.count("wait") == 1
+
+
+def test_live_tree_only_database_update_gets_transient_monitor_and_strict_hook(synthetic, monkeypatch, tmp_path):
+    previous = runtime.run
+    scanned = []
+    commands = []
+    original = runtime.Runtime.budget_tree
+
+    def scanning(handle, **kwargs):
+        scanned.append((handle.prepare_phase, kwargs))
+        return original(handle, **kwargs)
+
+    def running(command, **kwargs):
+        commands.append((tuple(command), kwargs))
+        kwargs["monitor"]()
+        if "update" in command:
+            assert kwargs["post_reap_monitor"] is not None
+        else:
+            assert kwargs.get("post_reap_monitor") is None
+        return previous(command, **kwargs)
+
+    monkeypatch.setattr(runtime.Runtime, "budget_tree", scanning)
+    monkeypatch.setattr(runtime, "run", running)
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        handle.run_query(QUERY, tmp_path / "query.json")
+        handle.assert_unchanged()
+    assert len(commands) == 5
+    assert [kwargs for phase, kwargs in scanned if phase == "update"][0] == {"transient": True}
+    strict = [kwargs for phase, kwargs in scanned if phase == "update"][1]
+    assert strict["transient"] is False and type(strict["deadline"]) is float
+    assert all(kwargs == {} for phase, kwargs in scanned if phase != "update")
+    assert [item[1]["timeout"] for item in commands] == [120, 120, 300, 120, 120]
+    assert not list(synthetic.scratch.iterdir())
+
+
+@pytest.mark.parametrize("arguments,phase,live_update", [
+    (["version"], "update", True), (["db", "update"], "version", True),
+    (["db", "update"], None, True), (["db", "update"], 1, True),
+    (("db", "update"), "update", True), ([], "update", True),
+    (["db", "update", "extra"], "update", True), (["db", 1], "update", True),
+    (["db", "update"], "update", 1), (["db", "update"], "update", None),
+])
+def test_live_update_controls_refuse_before_launch(live_tree, monkeypatch, arguments, phase, live_update):
+    live_tree.prepare_phase = phase
+    monkeypatch.setattr(runtime, "run", lambda *args, **kwargs: pytest.fail("invalid control launched"))
+    with pytest.raises(runtime.GrypeRuntimeError, match="config"):
+        live_tree.command(arguments, live_update=live_update)
+
+
+@pytest.mark.parametrize("control", ["flag", "arguments", "argument", "phase"])
+def test_live_update_hostile_controls_have_no_protocol_callbacks(live_tree, monkeypatch, control):
+    calls = []
+
+    def refused(name):
+        def callback(*args):
+            calls.append(name)
+            raise KeyboardInterrupt("private protocol")
+        return callback
+
+    base = object if control == "flag" else list if control == "arguments" else str
+    kind = type("HostileControl", (base,), {name: refused(name) for name in
+                ("__bool__", "__eq__", "__ne__", "__len__", "__iter__", "__str__", "__repr__", "__getattr__")})
+    value = kind() if base is object else kind(["db", "update"] if base is list else "update")
+    arguments, flag = ["db", "update"], True
+    live_tree.prepare_phase = "update"
+    if control == "flag":
+        flag = value
+    elif control == "arguments":
+        arguments = value
+    elif control == "argument":
+        arguments[1] = value
+    else:
+        live_tree.prepare_phase = value
+    monkeypatch.setattr(runtime, "run", lambda *args, **kwargs: pytest.fail("hostile control launched"))
+    with pytest.raises(runtime.GrypeRuntimeError, match="config"):
+        live_tree.command(arguments, live_update=flag)
+    assert calls == []
+
+
+@pytest.mark.parametrize("arguments,live_update", [
+    (["db", "update"], True), (["version"], False), (["db", "update"], False), (("version",), False),
+])
+def test_live_update_valid_and_false_controls_preserve_original_run(live_tree, monkeypatch, arguments, live_update):
+    live_tree.prepare_phase = "update" if live_update else None
+    live_tree.environment = {}
+    commands, scans = [], []
+    monkeypatch.setattr(live_tree, "budget_tree", lambda **kwargs: scans.append(kwargs))
+
+    def running(command, **kwargs):
+        commands.append((command, kwargs))
+        kwargs["monitor"]()
+        return b"unchanged output"
+
+    monkeypatch.setattr(runtime, "run", running)
+    assert live_tree.command(arguments, timeout=17, live_update=live_update) == b"unchanged output"
+    command, kwargs = commands[0]
+    assert len(commands) == 1 and command == [str(live_tree.path / "grype"), "-c",
+                                            str(live_tree.path / "grype.json"), *arguments]
+    assert kwargs["deadline"] == live_tree.deadline and kwargs["timeout"] == 17
+    assert kwargs["environment"] is live_tree.environment and kwargs["cwd"] == live_tree.path
+    assert scans == ([{"transient": True}] if live_update else [{}])
+    assert kwargs["post_reap_monitor"] == (live_tree.post_update_monitor if live_update else None)
+
+
+@pytest.mark.parametrize("kind", ["hostile-getter", "malformed-notes", "cancellation"])
+def test_directory_fstat_cleanup_note_is_best_effort_and_preserves_primary(live_tree, monkeypatch, kind):
+    child = live_tree.path / "note-child"
+    child.mkdir()
+    callbacks = []
+
+    class HostileNotesError(OSError):
+        def __getattribute__(self, name):
+            if name == "__notes__":
+                callbacks.append(name)
+                raise KeyboardInterrupt("private notes")
+            return super().__getattribute__(name)
+
+    primary = HostileNotesError(errno.EIO, "private fstat") if kind == "hostile-getter" else \
+        KeyboardInterrupt("private cancellation") if kind == "cancellation" else OSError(errno.EIO, "private fstat")
+    if kind != "hostile-getter":
+        primary.__notes__ = 0
+    descriptors, closed = {}, []
+    original_fstat, original_close = os.fstat, os.close
+
+    def opening(name, flags, *, dir_fd=None):
+        path = Path(name) if dir_fd is None else descriptors[dir_fd][0] / name
+        fd = 100000 + len(descriptors)
+        descriptors[fd] = (path, path.lstat())
+        return fd
+
+    def inspecting(fd):
+        if fd not in descriptors:
+            return original_fstat(fd)
+        path, value = descriptors[fd]
+        if path == child:
+            raise primary
+        return value
+
+    def closing(fd):
+        if fd not in descriptors:
+            return original_close(fd)
+        closed.append(fd)
+        if descriptors[fd][0] == child:
+            raise OSError(errno.EIO, "private close")
+
+    monkeypatch.setattr(runtime, "ANCHORED", True)
+    monkeypatch.setattr(runtime.os, "O_DIRECTORY", getattr(os, "O_DIRECTORY", 0), raising=False)
+    monkeypatch.setattr(runtime.os, "open", opening)
+    monkeypatch.setattr(runtime.os, "fstat", inspecting)
+    monkeypatch.setattr(runtime.os, "close", closing)
+    with pytest.raises(BaseException) as caught:
+        runtime.Directory(child)
+    assert caught.value is primary
+    assert len(closed) == len(set(closed)) == len(descriptors) and set(closed) == set(descriptors)
+    assert callbacks == (["__notes__"] if kind == "hostile-getter" else [])
+
+
+def test_live_tree_strict_hook_precedes_database_adoption_and_receipt(synthetic, monkeypatch, tmp_path):
+    sequence = []
+    scan, adopt = runtime.Runtime.post_update_monitor, runtime.Runtime.adopt_database
+
+    def scanning(handle, command_deadline):
+        scan(handle, command_deadline)
+        sequence.append("strict post reap")
+
+    def adopting(handle):
+        assert sequence == ["strict post reap"]
+        sequence.append("adoption")
+        return adopt(handle)
+
+    monkeypatch.setattr(runtime.Runtime, "post_update_monitor", scanning)
+    monkeypatch.setattr(runtime.Runtime, "adopt_database", adopting)
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        handle.run_query(QUERY, tmp_path / "query.json")
+        receipt = handle.assert_unchanged()
+        assert receipt["database"]["files"]
+        sequence.append("receipt")
+    assert sequence == ["strict post reap", "adoption", "receipt"]
+
+
+@pytest.mark.parametrize("name", ["vulnerability.db", "import.json"])
+def test_live_tree_stable_missing_final_artifact_still_fails_adoption(synthetic, name):
+    synthetic.update_mutate = lambda database: (database / name).unlink()
+    with pytest.raises(runtime.GrypeRuntimeError, match="database") as caught:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("missing final artifact accepted")
+    assert caught.value.prepare_phase == "adopt_database"
+    assert len(synthetic.calls) == 3 and not list(synthetic.scratch.iterdir())
+
+
+@pytest.mark.parametrize("transient", [False, True])
+def test_live_tree_stable_leaf_and_child_controls_pass(live_tree, transient):
+    (live_tree.path / "stable").write_bytes(b"leaf")
+    (live_tree.path / "child").mkdir()
+    (live_tree.path / "child" / "stable").write_bytes(b"child leaf")
+    live_tree.budget_tree(transient=transient)
+
+
+def test_live_tree_initial_ancestor_failure_is_outside_entry_tolerance(live_tree, monkeypatch):
+    primary = FileNotFoundError(errno.ENOENT, "private ancestor")
+    monkeypatch.setattr(live_tree.root, "check", lambda: (_ for _ in ()).throw(primary))
+    monkeypatch.setattr(runtime, "safe_stat", lambda *args, **kwargs: pytest.fail("named leaf syscall reached"))
+    with pytest.raises(FileNotFoundError) as caught:
+        live_tree.root.entry("changing", transient=True)
+    assert caught.value is primary
+
+
+def test_live_tree_junction_observation_is_outside_lstat_tolerance(live_tree, monkeypatch):
+    leaf = live_tree.path / "stable"
+    leaf.touch()
+    original = getattr(Path, "is_junction", lambda path: False)
+    primary = FileNotFoundError(errno.ENOENT, "private junction refusal")
+
+    def junction(path):
+        if path == leaf:
+            raise primary
+        return original(path)
+
+    monkeypatch.setattr(Path, "is_junction", junction, raising=False)
+    with pytest.raises(FileNotFoundError) as caught:
+        runtime.safe_stat(leaf, transient=True)
+    assert caught.value is primary
+
+
+def test_live_tree_missing_executable_is_never_tolerated(live_tree, monkeypatch):
+    primary = FileNotFoundError(errno.ENOENT, "private missing executable")
+    live_tree.environment = {}
+    live_tree.prepare_phase = "update"
+    monkeypatch.setattr(runtime, "require_owned_waitid", lambda: None)
+    monkeypatch.setattr(runtime, "OwnedPopen", lambda *args, **kwargs: (_ for _ in ()).throw(primary))
+    monkeypatch.setattr(live_tree, "budget_tree", lambda **kwargs: pytest.fail("monitor after launch refusal"))
+    monkeypatch.setattr(live_tree, "post_update_monitor", lambda deadline: pytest.fail("hook after launch refusal"))
+    with pytest.raises(FileNotFoundError) as caught:
+        live_tree.command(["db", "update"], live_update=True)
+    assert caught.value is primary

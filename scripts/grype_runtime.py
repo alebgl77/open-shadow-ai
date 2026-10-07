@@ -117,36 +117,80 @@ def unchanged(before, after):
     ) == (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
 
 
-def safe_stat(path):
-    value = path.lstat()
+def transient_missing(primary):
+    kind = type(primary)
+    if kind is not FileNotFoundError and kind is not OSError:
+        return False
+    value = OSError.errno.__get__(primary, kind)
+    return type(value) is int and value == errno.ENOENT
+
+
+def safe_stat(path, *, transient=False):
+    try:
+        value = path.lstat()
+    except OSError as primary:
+        if transient and transient_missing(primary):
+            return None
+        raise
     if stat.S_ISLNK(value.st_mode) or getattr(path, "is_junction", lambda: False)():
         raise GrypeRuntimeError("filesystem", filesystem_reason="directory_not_safe")
     return value
 
 
+def validate_name(name):
+    if type(name) is not str or name in {"", ".", ".."} or any(part in name for part in ("/", "\\", "\0")) or \
+            Path(name).name != name or Path(name).drive:
+        raise GrypeRuntimeError("filesystem", filesystem_reason="directory_not_safe")
+
+
 class Directory:
     """Pin every ancestor and use directory-relative operations on POSIX."""
 
-    def __init__(self, path):
+    def __init__(self, path, *, expected=None, transient=False):
         self.path = Path(os.path.abspath(path))
         self.chain = []
         self.fd = None
+        self.missing = False
         current = Path(self.path.anchor)
         try:
             for part in (None, *self.path.parts[1:]):
                 parent = self.fd
                 if part is not None:
                     current /= part
-                observed = safe_stat(current)
+                terminal = current == self.path
+                observed = safe_stat(current, transient=True) if terminal and transient else safe_stat(current)
+                if observed is None:
+                    self.check()
+                    self.missing = True
+                    return
                 if not stat.S_ISDIR(observed.st_mode):
                     raise GrypeRuntimeError("filesystem", filesystem_reason="directory_not_safe")
+                if terminal and expected is not None and identity(observed) != expected:
+                    raise GrypeRuntimeError("identity_changed")
                 fd = None
                 if ANCHORED:
-                    fd = os.open(current if part is None else part,
-                                 os.O_RDONLY | os.O_DIRECTORY | FLAGS, dir_fd=parent)
-                    if identity(os.fstat(fd)) != identity(observed):
-                        os.close(fd)
-                        raise GrypeRuntimeError("identity_changed")
+                    try:
+                        fd = os.open(current if part is None else part,
+                                     os.O_RDONLY | os.O_DIRECTORY | FLAGS, dir_fd=parent)
+                    except OSError as primary:
+                        if not terminal or not transient or not transient_missing(primary):
+                            raise
+                        self.check()
+                        self.missing = True
+                        return
+                    try:
+                        if identity(os.fstat(fd)) != identity(observed):
+                            raise GrypeRuntimeError("identity_changed")
+                    except BaseException as primary:
+                        descriptor, fd = fd, None
+                        try:
+                            os.close(descriptor)
+                        except OSError:
+                            try:
+                                BaseException.add_note(primary, "owned_cleanup_failed")
+                            except BaseException:
+                                pass
+                        raise
                 self.chain.append((current, identity(observed), fd))
                 self.fd = fd
             self.check()
@@ -159,10 +203,21 @@ class Directory:
             if identity(safe_stat(path)) != expected or fd is not None and identity(os.fstat(fd)) != expected:
                 raise GrypeRuntimeError("identity_changed")
 
-    def entry(self, name):
+    def entry(self, name, *, transient=False):
         self.check()
-        value = (os.stat(name, dir_fd=self.fd, follow_symlinks=False)
-                 if ANCHORED else safe_stat(self.path / name))
+        validate_name(name)
+        if ANCHORED:
+            try:
+                value = os.stat(name, dir_fd=self.fd, follow_symlinks=False)
+            except OSError as primary:
+                if not transient or not transient_missing(primary):
+                    raise
+                value = None
+        else:
+            value = safe_stat(self.path / name, transient=True) if transient else safe_stat(self.path / name)
+        if value is None:
+            self.check()
+            return None
         if stat.S_ISLNK(value.st_mode):
             raise GrypeRuntimeError("filesystem", filesystem_reason="directory_not_safe")
         return value
@@ -183,15 +238,16 @@ class Directory:
             os.close(fd)
             raise
 
-    def names(self):
+    def names(self, *, enumerated=False):
         self.check()
-        result = set()
+        result = []
         with os.scandir(self.fd if ANCHORED else self.path) as entries:
             for entry in entries:
                 if len(result) >= MAX_ENTRIES:
                     raise GrypeRuntimeError("byte_budget")
-                result.add(entry.name)
-        return result
+                validate_name(entry.name)
+                result.append(entry.name)
+        return result if enumerated else set(result)
 
     def remove(self, name, directory):
         self.check()
@@ -465,7 +521,8 @@ def cleanup_process(child, reader, *, stop_event=None):
         raise GrypeRuntimeError("owned_cleanup_failed")
 
 
-def run(command, *, environment, cwd, deadline, limit, output_fd=None, capture=True, monitor=None, timeout=300):
+def run(command, *, environment, cwd, deadline, limit, output_fd=None, capture=True, monitor=None,
+        post_reap_monitor=None, timeout=300):
     """Bound stdout before allocation; kill/reap the owned group even after success."""
     remaining(deadline)
     if os.name == "posix":
@@ -544,7 +601,7 @@ def run(command, *, environment, cwd, deadline, limit, output_fd=None, capture=T
                     raise GrypeRuntimeError(failures[0])
                 if returncode:
                     raise GrypeRuntimeError("nonzero")
-                return bytes(result)
+                break
             done.wait(min(0.025, budget)) if not done.is_set() else time.sleep(min(0.025, budget))
     except BaseException as error:
         primary = error
@@ -570,6 +627,9 @@ def run(command, *, environment, cwd, deadline, limit, output_fd=None, capture=T
                     primary.add_note("owned_cleanup_failed")
         finally:
             reader = descriptors = drain = None
+    if post_reap_monitor is not None:
+        post_reap_monitor(command_deadline)
+    return bytes(result)
 
 
 # Network DNS/read operations are inside the same cancellable owned process
@@ -801,22 +861,32 @@ class Runtime:
         self.created.append((parent, path.name, identity(os.fstat(fd)), False))
         return fd
 
-    def budget_tree(self):
+    def budget_tree(self, *, transient=False, deadline=None):
+        budget_deadline = self.deadline if deadline is None else min(self.deadline, deadline)
+        remaining(budget_deadline)
         self.root.check()
         total, count = 0, 0
-        pending = [self.path]
+        pending = [(self.path, self.root.chain[-1][1])]
         while pending:
-            remaining(self.deadline)
-            directory = Directory(pending.pop())
+            remaining(budget_deadline)
+            path, expected = pending.pop()
+            directory = Directory(path, expected=expected, transient=transient and path != self.path)
             try:
-                for name in directory.names():
+                remaining(budget_deadline)
+                if directory.missing:
+                    continue
+                for name in directory.names(enumerated=True):
+                    remaining(budget_deadline)
                     count += 1
                     if count > MAX_ENTRIES:
                         raise GrypeRuntimeError("byte_budget")
-                    value = directory.entry(name)
+                    value = directory.entry(name, transient=True) if transient else directory.entry(name)
+                    remaining(budget_deadline)
+                    if value is None:
+                        continue
                     file_limit = MAX_SQLITE_DB_FILE if name == "vulnerability.db" else MAX_DB_FILE
                     if stat.S_ISDIR(value.st_mode):
-                        pending.append(directory.path / name)
+                        pending.append((directory.path / name, identity(value)))
                     elif stat.S_ISREG(value.st_mode) and value.st_nlink == 1 and value.st_size <= file_limit:
                         total += value.st_size
                     else:
@@ -828,11 +898,30 @@ class Runtime:
                         raise GrypeRuntimeError("byte_budget")
             finally:
                 directory.close()
+            remaining(budget_deadline)
+        self.root.check()
+        remaining(budget_deadline)
 
-    def command(self, arguments, *, limit=MAX_JSON, output_fd=None, capture=True, timeout=120):
+    def post_update_monitor(self, command_deadline):
+        remaining(self.deadline)
+        remaining(command_deadline)
+        self.budget_tree(transient=False, deadline=command_deadline)
+        remaining(self.deadline)
+        remaining(command_deadline)
+
+    def command(self, arguments, *, limit=MAX_JSON, output_fd=None, capture=True, timeout=120, live_update=False):
+        if type(live_update) is not bool:
+            raise GrypeRuntimeError("config")
+        if live_update and (type(arguments) is not list or len(arguments) != 2
+                            or any(type(argument) is not str for argument in arguments)
+                            or arguments != ["db", "update"]
+                            or type(self.prepare_phase) is not str or self.prepare_phase != "update"):
+            raise GrypeRuntimeError("config")
         return run([str(self.path / "grype"), "-c", str(self.path / "grype.json"), *arguments],
                    environment=self.environment, cwd=self.path, deadline=self.deadline, limit=limit,
-                   output_fd=output_fd, capture=capture, monitor=self.budget_tree, timeout=timeout)
+                   output_fd=output_fd, capture=capture,
+                   monitor=(lambda: self.budget_tree(transient=True)) if live_update else self.budget_tree,
+                   post_reap_monitor=self.post_update_monitor if live_update else None, timeout=timeout)
 
     def prepare(self):
         try:
@@ -924,7 +1013,7 @@ class Runtime:
         if self.directory(self.cache).names():
             raise GrypeRuntimeError("database")
         self.prepare_phase = "update"
-        self.command(["db", "update"], limit=CHUNK, timeout=300)
+        self.command(["db", "update"], limit=CHUNK, timeout=300, live_update=True)
         self.fetched_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         self.prepare_phase = "adopt_database"
         self.adopt_database()
