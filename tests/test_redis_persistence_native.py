@@ -25,6 +25,7 @@ class OwnedRedis:
     """A bounded nonce lease; no ports, foreign containers or shared store data."""
 
     def __init__(self):
+        __tracebackhide__ = True
         self.nonce = uuid4().hex
         self.name = "shadai-redis-persistence-" + self.nonce
         self.volume = self.name + "-data"
@@ -33,6 +34,7 @@ class OwnedRedis:
         self.created_container = self.created_volume = False
 
     def call(self, *args, absent=False, readiness=False):
+        __tracebackhide__ = True
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise QualificationError("Native Redis lease exhausted")
@@ -66,6 +68,7 @@ class OwnedRedis:
             raise QualificationError("Native Redis output refused") from None
 
     def inspect(self, kind, identity, *, absent=False):
+        __tracebackhide__ = True
         output = self.call(kind, "inspect", identity, absent=absent)
         if output is None:
             return None
@@ -78,6 +81,7 @@ class OwnedRedis:
         return rows[0]
 
     def volume_record(self, value):
+        __tracebackhide__ = True
         if (value.get("Name") != self.volume or value.get("Driver") != "local"
                 or value.get("Scope") != "local" or value.get("Labels") != {LABEL: self.nonce}
                 or type(value.get("CreatedAt")) is not str):
@@ -85,6 +89,7 @@ class OwnedRedis:
         return {key: value[key] for key in ("Name", "Driver", "Scope", "Labels", "CreatedAt")}
 
     def container_record(self, value):
+        __tracebackhide__ = True
         identifier, image = value.get("Id"), value.get("Image")
         if (type(identifier) is not str or re.fullmatch(r"[0-9a-f]{64}", identifier) is None
                 or type(image) is not str or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None
@@ -101,12 +106,14 @@ class OwnedRedis:
         return {key: value[key] for key in ("Id", "Image", "Name", "Created")}
 
     def verify(self):
+        __tracebackhide__ = True
         volume = self.volume_record(self.inspect("volume", self.volume))
         container = self.container_record(self.inspect("container", self.container_identity["Id"]))
         if volume != self.volume_identity or container != self.container_identity:
             raise QualificationError("Native Redis lease changed")
 
     def start(self):
+        __tracebackhide__ = True
         if shutil.which("docker") is None:
             raise QualificationError("Required native Redis Docker prerequisite absent")
         self.call("info", "--format", "{{json .ServerVersion}}")
@@ -128,6 +135,7 @@ class OwnedRedis:
         self.ready()
 
     def ready(self):
+        __tracebackhide__ = True
         # exec may initially precede Redis readiness; this bounded readiness retry
         # never retries the persistence command itself.
         for _ in range(80):
@@ -140,6 +148,7 @@ class OwnedRedis:
         raise QualificationError("Native Redis readiness refused")
 
     def command(self, *args, raw=False):
+        __tracebackhide__ = True
         self.verify()
         output = self.call("container", "exec", self.container_identity["Id"],
                            "redis-cli", "-3", "--raw" if raw else "--json", *map(str, args))
@@ -151,30 +160,38 @@ class OwnedRedis:
             raise QualificationError("Native Redis command response refused") from None
 
     async def info(self, *sections):
+        __tracebackhide__ = True
         return decode_info(await asyncio.to_thread(self.command, "INFO", *sections, raw=True))
 
     async def bgrewriteaof(self):
+        __tracebackhide__ = True
         return await asyncio.to_thread(self.command, "BGREWRITEAOF")
 
     async def xgroup_create(self, stream, group, *, id, mkstream):
+        __tracebackhide__ = True
         assert mkstream is True
         return await asyncio.to_thread(self.command, "XGROUP", "CREATE", stream, group, id, "MKSTREAM")
 
     async def xgroup_createconsumer(self, stream, group, consumer):
+        __tracebackhide__ = True
         return await asyncio.to_thread(self.command, "XGROUP", "CREATECONSUMER", stream, group, consumer)
 
     async def xautoclaim(self, stream, group, consumer, idle, *, start_id, count):
+        __tracebackhide__ = True
         return await asyncio.to_thread(self.command, "XAUTOCLAIM", stream, group, consumer, idle,
                                        start_id, "COUNT", count)
 
     async def xreadgroup(self, group, consumer, streams, *, count, block):
+        __tracebackhide__ = True
         return await asyncio.to_thread(self.command, "XREADGROUP", "GROUP", group, consumer,
                                        "COUNT", count, "BLOCK", block, "STREAMS", *streams, *streams.values())
 
     def groups(self):
+        __tracebackhide__ = True
         return self.command("XINFO", "GROUPS", "events:dns")
 
     def restart(self):
+        __tracebackhide__ = True
         self.verify()
         self.call("container", "stop", "--time", "5", self.container_identity["Id"])
         self.verify()
@@ -182,6 +199,7 @@ class OwnedRedis:
         self.ready()
 
     def close(self):
+        __tracebackhide__ = True
         # Cleanup gets a bounded independent lease and must prove absence; no
         # successful native case can hide failed identity/removal/absence proof.
         self.deadline = time.monotonic() + 30
@@ -211,16 +229,63 @@ def native_redis():
         if os.environ.get("SHADAI_REQUIRE_REDIS_PERSISTENCE") == "1":
             pytest.fail("Required Redis persistence native platform absent")
         pytest.skip("Redis persistence native proof requires Linux")
+    yield from _native_fixture_boundary()
+
+
+def _native_refusal():
+    raise QualificationError("Native Redis persistence proof refused") from None
+
+
+def _private_native_redis_lifecycle():
+    __tracebackhide__ = True
     owned = OwnedRedis()
+    cancelled = None
     try:
         owned.start()
         yield owned
+    except BaseException as error:
+        if not isinstance(error, (Exception, GeneratorExit)):
+            cancelled = error
+        raise
     finally:
-        owned.close()
+        try:
+            owned.close()
+        except BaseException:
+            if cancelled is None:
+                raise
+
+
+def _native_fixture_boundary():
+    lifecycle = _private_native_redis_lifecycle()
+    failed = False
+    try:
+        try:
+            yield next(lifecycle)
+        finally:
+            lifecycle.close()
+    except Exception:
+        failed = True
+    finally:
+        del lifecycle
+    if failed:
+        _native_refusal()
 
 
 @pytest.mark.parametrize("repair", ["unregistered", "registered", "checkpoint"])
 async def test_native_empty_consumer_aof_restart(repair, native_redis):
+    failed = False
+    try:
+        await _private_native_empty_consumer_aof_restart(repair, native_redis)
+    except Exception:
+        failed = True
+    finally:
+        del native_redis
+    if failed:
+        _native_refusal()
+
+
+async def _private_native_empty_consumer_aof_restart(repair, native_redis):
+    __tracebackhide__ = True
     store = native_redis
     consumer = StreamConsumer(store, "group", "empty-worker", ["events:dns"])
     await consumer.initialize()
@@ -391,3 +456,162 @@ def test_native_partial_creation_absence_has_no_removal(monkeypatch):
     monkeypatch.setattr(owned, "call", lambda *args, **kwargs: calls.append(args))
     owned.close()
     assert calls == []
+
+
+NATIVE_CANARIES = ("SYNTHETIC_INFO_CANARY", "f" * 40, "SYNTHETIC_GROUP_CANARY",
+                   "SYNTHETIC_PAYLOAD_CANARY", "SYNTHETIC_STDERR_CANARY")
+
+
+def refusal_format(error, boundary, style, showlocals, fulltrace):
+    # Drop only this synthetic test's caller, as the real pytest invocation
+    # begins at the public proof/fixture boundary and contains no test canaries.
+    trace = error.__traceback__
+    while trace.tb_frame.f_code.co_name != boundary:
+        trace = trace.tb_next
+    exception = pytest.ExceptionInfo.from_exc_info((type(error), error, trace))
+    return str(exception.getrepr(style=style, showlocals=showlocals, tbfilter=not fulltrace))
+
+
+def assert_sanitized_boundary(error, boundary, style, showlocals, fulltrace):
+    assert error.args == ("Native Redis persistence proof refused",)
+    assert error.__cause__ is error.__context__ is None
+    rendered = refusal_format(error, boundary, style, showlocals, fulltrace)
+    assert not any(canary in rendered for canary in NATIVE_CANARIES)
+    trace = error.__traceback__
+    while trace.tb_frame.f_code.co_name != boundary:
+        trace = trace.tb_next
+    while trace is not None:
+        assert not {"native_redis", "owned", "lifecycle", "store", "consumer", "original",
+                    "before", "restored_info", "error"}.intersection(trace.tb_frame.f_locals)
+        trace = trace.tb_next
+
+
+@pytest.mark.parametrize("style", ["short", "long"])
+@pytest.mark.parametrize("showlocals", [False, True])
+@pytest.mark.parametrize("fulltrace", [False, True])
+async def test_native_public_proof_failure_formats_exclude_every_private_frame(
+    monkeypatch, style, showlocals, fulltrace
+):
+    class Client:
+        def __repr__(self):
+            return " ".join(NATIVE_CANARIES)
+    async def private_failure(repair, native_redis):
+        __tracebackhide__ = True
+        original = {"run_id": NATIVE_CANARIES[1], "info": NATIVE_CANARIES[0]}
+        before = [{"group": NATIVE_CANARIES[2], "payload": NATIVE_CANARIES[3]}]
+        stderr = NATIVE_CANARIES[4]
+        raise QualificationError(str(original) + str(before) + stderr)
+    monkeypatch.setitem(globals(), "_private_native_empty_consumer_aof_restart", private_failure)
+    with pytest.raises(QualificationError) as caught:
+        await test_native_empty_consumer_aof_restart("checkpoint", Client())
+    assert_sanitized_boundary(caught.value, "test_native_empty_consumer_aof_restart", style, showlocals, fulltrace)
+
+
+@pytest.mark.parametrize("during", ["startup", "cleanup"])
+@pytest.mark.parametrize("style", ["short", "long"])
+@pytest.mark.parametrize("showlocals", [False, True])
+@pytest.mark.parametrize("fulltrace", [False, True])
+def test_native_public_fixture_failure_formats_exclude_private_startup_and_cleanup(
+    monkeypatch, during, style, showlocals, fulltrace
+):
+    calls = []
+    class Client:
+        def __init__(self):
+            self.info = {"run_id": NATIVE_CANARIES[1], "metadata": NATIVE_CANARIES[0]}
+            self.groups = [{"name": NATIVE_CANARIES[2], "payload": NATIVE_CANARIES[3]}]
+            self.stderr = NATIVE_CANARIES[4]
+
+        def __repr__(self):
+            return " ".join(NATIVE_CANARIES)
+
+        def start(self):
+            __tracebackhide__ = True
+            calls.append("start")
+            if during == "startup":
+                raise QualificationError(str(self.info) + str(self.groups) + self.stderr)
+
+        def close(self):
+            __tracebackhide__ = True
+            calls.append("close")
+            if during == "cleanup":
+                raise QualificationError(str(self.info) + str(self.groups) + self.stderr)
+
+    monkeypatch.setitem(globals(), "OwnedRedis", Client)
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    lifecycle = native_redis.__wrapped__()
+    if during == "cleanup":
+        next(lifecycle)
+    with pytest.raises(QualificationError) as caught:
+        next(lifecycle)
+    assert calls == ["start", "close"]
+    assert_sanitized_boundary(caught.value, "native_redis", style, showlocals, fulltrace)
+
+
+@pytest.mark.parametrize("kind", [asyncio.CancelledError, KeyboardInterrupt, SystemExit])
+async def test_native_proof_cancellation_keeps_original_identity(monkeypatch, kind):
+    cancellation = kind("Synthetic cancellation")
+    async def private_failure(*args):
+        raise cancellation
+    monkeypatch.setitem(globals(), "_private_native_empty_consumer_aof_restart", private_failure)
+    with pytest.raises(kind) as caught:
+        await test_native_empty_consumer_aof_restart("checkpoint", object())
+    assert caught.value is cancellation
+
+
+@pytest.mark.parametrize("kind", [asyncio.CancelledError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("during", ["startup", "cleanup"])
+@pytest.mark.parametrize("cleanup_error", [False, True])
+def test_native_fixture_cancellation_keeps_identity_and_always_cleans(monkeypatch, kind, during, cleanup_error):
+    cancellation = kind("Synthetic cancellation")
+    calls = []
+    class Client:
+        def start(self):
+            calls.append("start")
+            if during == "startup":
+                raise cancellation
+
+        def close(self):
+            calls.append("close")
+            if during == "cleanup":
+                raise cancellation
+            if cleanup_error:
+                raise QualificationError("Synthetic cleanup error")
+    monkeypatch.setitem(globals(), "OwnedRedis", Client)
+    with pytest.raises(kind) as caught:
+        lifecycle = _native_fixture_boundary()
+        if during == "cleanup":
+            next(lifecycle)
+        next(lifecycle)
+    assert caught.value is cancellation and calls == ["start", "close"]
+    if during == "startup" and cleanup_error:
+        assert not hasattr(cancellation, "__notes__")
+
+
+@pytest.mark.parametrize("kind", [asyncio.CancelledError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("notes", ["malformed", "hostile"])
+def test_native_fixture_cancellation_does_not_invoke_notes_protocol(monkeypatch, kind, notes):
+    calls, note_reads = [], []
+    if notes == "hostile":
+        class Cancellation(kind):
+            @property
+            def __notes__(self):
+                note_reads.append("__notes__")
+                raise RuntimeError("Synthetic notes error")
+        cancellation = Cancellation("Synthetic cancellation")
+    else:
+        cancellation = kind("Synthetic cancellation")
+        cancellation.__notes__ = 0
+
+    class Client:
+        def start(self):
+            calls.append("start")
+            raise cancellation
+
+        def close(self):
+            calls.append("close")
+            raise QualificationError("Synthetic cleanup error")
+    monkeypatch.setitem(globals(), "OwnedRedis", Client)
+    with pytest.raises(kind) as caught:
+        next(_native_fixture_boundary())
+    assert caught.value is cancellation
+    assert calls == ["start", "close"] and note_reads == []

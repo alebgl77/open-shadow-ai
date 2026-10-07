@@ -1,11 +1,13 @@
 """Private atomic INFO parsing and bounded single-generation persistence proof."""
 
 import asyncio
+import copy
 import itertools
 import json
 from unittest.mock import AsyncMock
 
 import pytest
+from redis._parsers.helpers import parse_info as decode_info
 
 from shadai.qualification.redis_persistence import (
     COUNTERS,
@@ -78,7 +80,7 @@ def test_required_fields_have_exact_types_and_values(key, bad):
         parse_info(info(**{key: bad}))
 
 
-@pytest.mark.parametrize("value", [True, None, [], {}, (), b"private", float("nan"), float("inf"),
+@pytest.mark.parametrize("value", [True, None, (), b"private", float("nan"), float("inf"),
                                     float("-inf"), 1 << 63, -(1 << 63)])
 def test_unknown_fields_still_validate_before_state(value):
     with pytest.raises(QualificationError):
@@ -109,7 +111,165 @@ def test_parser_exact_entry_key_value_integer_and_text_limits():
         parse_info(value)
 
 
-@pytest.mark.parametrize("base", [object, str, int, float, dict])
+@pytest.mark.parametrize("producer,expected", [
+    ("redis_version:7.4.11", str),
+    ("listener0:name=tcp,bind=127.0.0.1,port=6379", dict),
+    ("listener_aliases:tcp,unix,2,3.5", list),
+    ("module:name=synthetic,ver=1,api=1,filters=0", list),
+])
+def test_pinned_info_decoder_structured_producers_are_retained_unchanged(producer, expected):
+    wire = "\r\n".join(f"{key}:{value}" for key, value in info().items()) + "\r\n" + producer + "\r\n"
+    decoded = decode_info(wire)
+    key = "modules" if producer.startswith("module:") else producer.split(":", 1)[0]
+    snapshot = copy.deepcopy(decoded)
+    assert type(decoded[key]) is expected
+    assert parse_info(decoded) is decoded and decoded == snapshot
+
+
+@pytest.mark.parametrize("metadata", [[], {}, [1, 2.5, "text", {}],
+                                      {"listener": {"bind": ["127.0.0.1", "::1"], "port": 6379}},
+                                      [{"name": "synthetic", "version": 1}],
+                                      {"str": "", "int": -MAX_INTEGER, "float": -0.0}])
+def test_unknown_bounded_graph_is_valid_and_never_mutated(metadata):
+    value = info(metadata=metadata)
+    snapshot = copy.deepcopy(value)
+    assert parse_info(value) is value and value == snapshot
+    assert value["metadata"] is metadata
+
+
+def nested(depth, leaf):
+    for _ in range(depth):
+        leaf = [leaf]
+    return leaf
+
+
+@pytest.mark.parametrize("leaf", [0, "", [], {}])
+def test_graph_depth_root_zero_exact_eight_and_nine(leaf):
+    value = info(metadata=nested(7, leaf))
+    assert parse_info(value) is value
+    with pytest.raises(QualificationError, match="sample refused"):
+        parse_info(info(metadata=nested(8, leaf)))
+
+
+def test_nested_dictionary_keys_are_nodes_with_depth_and_key_length_limits():
+    value = info(metadata=nested(6, {"x" * 128: "value"}))
+    assert parse_info(value) is value
+    for bad in (info(metadata=nested(7, {"key": 0})), info(metadata={"x" * 129: 0})):
+        with pytest.raises(QualificationError):
+            parse_info(bad)
+
+
+@pytest.mark.parametrize("container", [dict, list])
+def test_each_nested_container_has_256_entry_limit(container):
+    metadata = {str(index): index for index in range(256)} if container is dict else list(range(256))
+    value = info(metadata=metadata)
+    assert parse_info(value) is value
+    if container is dict:
+        metadata["extra"] = 0
+    else:
+        metadata.append(0)
+    with pytest.raises(QualificationError):
+        parse_info(value)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_node_occurrences_exact_4096_and_4097_including_repeated_aliases(shared):
+    repeated = list(range(256))
+    metadata = ([repeated] * 15 if shared else [list(range(256)) for _ in range(15)]) + [list(range(215))]
+    value = info(metadata=metadata)
+    # 23 existing root/key/scalar nodes + new key/list + 16 lists + 4055 scalars.
+    assert parse_info(value) is value
+    assert value["metadata"][0] is metadata[0]
+    metadata[-1].append(0)
+    with pytest.raises(QualificationError, match="sample refused"):
+        parse_info(value)
+
+
+def graph_text(value):
+    if type(value) is str:
+        return len(value)
+    if type(value) is dict:
+        return sum(len(key) + graph_text(item) for key, item in value.items())
+    if type(value) is list:
+        return sum(graph_text(item) for item in value)
+    return 0
+
+
+def test_graph_combined_text_exact_65536_counts_shared_aliases_every_time():
+    shared = ["x" * 4096]
+    value = info(metadata=[shared] * 15 + [[]])
+    value["metadata"][-1].append("x" * (65536 - graph_text(value)))
+    assert graph_text(value) == 65536 and parse_info(value) is value
+    value["metadata"][-1].append("x")
+    with pytest.raises(QualificationError, match="sample refused"):
+        parse_info(value)
+
+
+@pytest.mark.parametrize("leaf", [True, False, None, (), b"private", float("nan"), float("inf"),
+                                   float("-inf"), 1 << 63, -(1 << 63), "x" * 4097])
+def test_nested_scalar_types_and_bounds_are_not_relaxed(leaf):
+    with pytest.raises(QualificationError):
+        parse_info(info(metadata={"listener": [leaf]}))
+
+
+@pytest.mark.parametrize("kind", ["self-list", "self-dict", "ancestor", "root"])
+def test_graph_active_path_cycles_refuse(kind):
+    value = info(metadata=[])
+    if kind == "self-list":
+        value["metadata"].append(value["metadata"])
+    elif kind == "self-dict":
+        value["metadata"] = {}
+        value["metadata"]["cycle"] = value["metadata"]
+    elif kind == "ancestor":
+        value["metadata"].append({"cycle": value["metadata"]})
+    else:
+        value["metadata"].append(value)
+    with pytest.raises(QualificationError, match="sample refused"):
+        parse_info(value)
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(("run_id", "aof_enabled", "metadata"))))
+@pytest.mark.parametrize("location", ["key", "value", "list"])
+def test_nested_hostile_objects_never_run_protocols_before_required_lookups(order, location):
+    calls = []
+    def refused(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError("Private graph callback")
+    class Poison(str):
+        __eq__ = __ne__ = __str__ = __repr__ = __len__ = __iter__ = refused
+        def __hash__(self):
+            return 7
+    poison = Poison("private")
+    metadata = {poison: 0} if location == "key" else {"listener": poison if location == "value" else [poison]}
+    Poison.__hash__ = refused
+    value = info(metadata=metadata)
+    ordered = {**{key: value[key] for key in order}, **{key: item for key, item in value.items() if key not in order}}
+    with pytest.raises(QualificationError):
+        parse_info(ordered)
+    assert calls == []
+
+
+def test_hostile_type_metaclass_is_not_compared():
+    calls = []
+    class Meta(type):
+        def __eq__(cls, other):
+            calls.append(True)
+            raise AssertionError("Private metaclass comparison")
+    class Poison(metaclass=Meta):
+        pass
+    with pytest.raises(QualificationError):
+        parse_info(info(metadata=[Poison()]))
+    assert calls == []
+
+
+@pytest.mark.parametrize("key", [*FLAGS, *COUNTERS, *STATUSES, "run_id"])
+@pytest.mark.parametrize("value", [[], {}, {"bounded": [0]}])
+def test_required_fields_remain_scalar_with_structured_unknown_metadata(key, value):
+    with pytest.raises(QualificationError):
+        parse_info(info(**{key: value, "metadata": {"listener": ["tcp"]}}))
+
+
+@pytest.mark.parametrize("base", [object, str, int, float, dict, list])
 @pytest.mark.parametrize("location", ["root", "key", "unknown", "required"])
 @pytest.mark.parametrize("order", list(itertools.permutations(("run_id", "aof_enabled", "unknown"))))
 def test_poisoned_builtin_aliases_never_invoke_callbacks(base, location, order):
@@ -125,7 +285,7 @@ def test_poisoned_builtin_aliases_never_invoke_callbacks(base, location, order):
         "__eq__", "__ne__", "__hash__", "__str__", "__repr__", "__bool__", "__iter__", "items", "get",
         "__len__", "bit_length", "__float__", "__lt__", "__gt__", "__le__", "__ge__"
     )})
-    poison = poison_type() if base in (object, dict) else poison_type("7" if base is str else 7)
+    poison = poison_type() if base in (object, dict, list) else poison_type("7" if base is str else 7)
     value = info(unknown=0)
     value = {**{key: value[key] for key in order}, **{key: item for key, item in value.items() if key not in order}}
     if location == "root":
@@ -190,7 +350,7 @@ async def test_acknowledgement_aliases_refused_without_callbacks(base):
 
 @pytest.mark.parametrize("where", ["before", "after"])
 @pytest.mark.parametrize("changes", [{"run_id": "b" * 40}, {"loading": 1}, {"aof_enabled": 0},
-                                      {"aof_last_write_status": "err"}, {"unknown": []}])
+                                      {"aof_last_write_status": "err"}, {"unknown": [True]}])
 async def test_bad_samples_refuse_before_acceptance(where, changes):
     samples = [info(**changes)] if where == "before" else [info(), info(**changes)]
     if where == "before" and "run_id" in changes:

@@ -20,16 +20,23 @@ REWRITE_ACKS = ("Background append only file rewriting started", "Background app
 
 def parse_info(value):
     """Validate every field before any state comparison or key lookup."""
-    if type(value) is not dict or len(value) > 256:
+    __tracebackhide__ = True
+    if type(value) is not dict:
         raise QualificationError("Redis persistence sample refused")
-    characters = 0
-    for key, item in value.items():
-        if type(key) is not str or len(key) > 128:
+    characters, occurrences = 0, 0
+    active = set()
+
+    def visit(item, depth, *, key=False):
+        __tracebackhide__ = True
+        nonlocal characters, occurrences
+        occurrences += 1
+        if occurrences > 4096 or depth > 8:
             raise QualificationError("Redis persistence sample refused")
-        characters += len(key)
         kind = type(item)
+        if key and kind is not str:
+            raise QualificationError("Redis persistence sample refused")
         if kind is str:
-            if len(item) > 4096:
+            if len(item) > (128 if key else 4096):
                 raise QualificationError("Redis persistence sample refused")
             characters += len(item)
         elif kind is int:
@@ -38,10 +45,26 @@ def parse_info(value):
         elif kind is float:
             if not math.isfinite(item):
                 raise QualificationError("Redis persistence sample refused")
+        elif kind is dict or kind is list:
+            if len(item) > 256 or id(item) in active:
+                raise QualificationError("Redis persistence sample refused")
+            active.add(id(item))
+            try:
+                if kind is dict:
+                    for name, child in item.items():
+                        visit(name, depth + 1, key=True)
+                        visit(child, depth + 1)
+                else:
+                    for child in item:
+                        visit(child, depth + 1)
+            finally:
+                active.remove(id(item))
         else:
             raise QualificationError("Redis persistence sample refused")
         if characters > 65536:
             raise QualificationError("Redis persistence sample refused")
+
+    visit(value, 0)
     for key in FLAGS:
         if type(value.get(key)) is not int or value[key] not in (0, 1):
             raise QualificationError("Redis persistence sample refused")
