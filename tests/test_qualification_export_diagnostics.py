@@ -1,5 +1,6 @@
 """Failure-only export metadata; real source/archive guards, modeled Docker only."""
 
+import ast
 import asyncio
 import builtins
 import json
@@ -111,7 +112,7 @@ def member(name="owned", kind=tarfile.REGTYPE, *, size=0, link=""):
 GUARD_CASES = [
     ("file_budget", [member()] * 100001, 10),
     ("path_guard", [member("../" + CANARY)], 10),
-    ("metadata_guard", [member(), member()], 10),
+    ("metadata_duplicate_name", [member(), member()], 10),
     ("object_guard", [member(kind=tarfile.FIFOTYPE)], 10),
     ("content_budget", [member(size=2)], 1),
     ("link_guard", [member(kind=tarfile.SYMTYPE, link="/" + CANARY)], 10),
@@ -430,3 +431,230 @@ def test_context_rejects_scalar_aliases_and_retains_only_first_secondary():
         snapshot.export_checkpoint("archive_close")
         diagnostic.capture(SystemExit(CANARY))
         assert diagnostic.envelope()["secondary"] == [{"step": "file_close", "reason": "operation_error"}]
+
+
+class ObservedMember(tarfile.TarInfo):
+    """Fail on any extra scalar read; no production property is substituted."""
+
+    def __init__(self, **values):
+        super().__init__("owned")
+        self.reads, self.poison = [], {}
+        for key, value in values.items():
+            setattr(self, key, value)
+
+    def __getattribute__(self, key):
+        if key in {"mode", "uid", "gid", "size"}:
+            object.__getattribute__(self, "reads").append(key)
+            poison = object.__getattribute__(self, "poison")
+            if key in poison:
+                raise poison[key]
+        return object.__getattribute__(self, key)
+
+
+@pytest.mark.parametrize("values,reason,reads", [
+    ({"mode": 0o1000}, "metadata_mode", ["mode"]),
+    ({"mode": -1}, "metadata_mode", ["mode"]),
+    ({"uid": -1}, "metadata_uid", ["mode", "uid"]),
+    ({"uid": 2**32 - 1}, "metadata_uid", ["mode", "uid"]),
+    ({"gid": -1}, "metadata_gid", ["mode", "uid", "gid"]),
+    ({"gid": 2**32 - 1}, "metadata_gid", ["mode", "uid", "gid"]),
+    ({"size": -1}, "metadata_size", ["mode", "uid", "gid", "size"]),
+    ({"mode": 0o1000, "uid": -1, "gid": -1, "size": -1}, "metadata_mode", ["mode"]),
+    ({"uid": -1, "gid": -1, "size": -1}, "metadata_uid", ["mode", "uid"]),
+    ({"gid": -1, "size": -1}, "metadata_gid", ["mode", "uid", "gid"]),
+])
+def test_metadata_subtype_uses_existing_reads_and_first_true_branch(values, reason, reads):
+    item = ObservedMember(**values)
+    for key in {"mode", "uid", "gid", "size"} - set(reads):
+        item.poison[key] = AssertionError(CANARY)
+    with snapshot.export_diagnostics() as diagnostic:
+        snapshot.export_checkpoint("validate")
+        with pytest.raises(QualificationError) as caught:
+            with snapshot.export_capture():
+                snapshot.validate_members([item], 1024)
+        assert caught.value.args == ("Duplicate or unsafe archive metadata",)
+        assert diagnostic.exception is caught.value
+        assert diagnostic.envelope() == envelope("validate", reason)
+    assert item.reads == reads
+
+
+def test_duplicate_first_branch_never_reads_later_unassigned_values():
+    first, duplicate = member(), ObservedMember()
+    duplicate.name = first.name
+    duplicate.poison = {key: AssertionError(CANARY) for key in ("mode", "uid", "gid", "size")}
+    with snapshot.export_diagnostics() as diagnostic:
+        snapshot.export_checkpoint("validate")
+        with pytest.raises(QualificationError) as caught:
+            with snapshot.export_capture():
+                snapshot.validate_members([first, duplicate], 1024)
+        assert diagnostic.exception is caught.value
+        assert diagnostic.envelope() == envelope("validate", "metadata_duplicate_name")
+    assert duplicate.reads == []
+
+
+@pytest.mark.parametrize("mode,uid,gid,size", [(0, 0, 0, 0), (0o777, 2**32 - 2, 2**32 - 2, 1)])
+def test_valid_metadata_boundaries_keep_exact_reads_and_success(mode, uid, gid, size):
+    item = ObservedMember(mode=mode, uid=uid, gid=gid, size=size)
+    with snapshot.export_diagnostics() as diagnostic:
+        snapshot.export_checkpoint("validate")
+        assert snapshot.validate_members([item], 1024) == size
+        assert diagnostic.primary is diagnostic.secondary is None
+    assert item.reads == ["mode", "uid", "gid", "size", "size"]
+
+
+@pytest.mark.parametrize("key", ["mode", "uid", "gid", "size"])
+@pytest.mark.parametrize("kind", [OSError, ValueError, KeyboardInterrupt, SystemExit, asyncio.CancelledError])
+def test_poisoned_scalar_access_preserves_exact_exception_and_cancel(key, kind):
+    item, error = ObservedMember(), kind(CANARY)
+    item.poison[key] = error
+    with snapshot.export_diagnostics() as diagnostic:
+        snapshot.export_checkpoint("validate")
+        with pytest.raises(kind) as caught:
+            with snapshot.export_capture():
+                snapshot.validate_members([item], 1024)
+        assert caught.value is diagnostic.exception is error
+        assert diagnostic.envelope() == envelope("validate")
+    assert item.reads == ["mode", "uid", "gid", "size"][:["mode", "uid", "gid", "size"].index(key) + 1]
+
+
+def test_comparison_truth_alias_is_evaluated_once_without_extra_classification():
+    class TruthAlias:
+        def __init__(self, result):
+            self.calls, self.result = 0, result
+
+        def __bool__(self):
+            self.calls += 1
+            if self.calls != 1:
+                raise AssertionError(CANARY)
+            return self.result
+
+    class ModeAlias:
+        def __ge__(self, other):
+            return True
+
+        def __le__(self, other):
+            return mode_truth
+
+    class SizeAlias:
+        def __lt__(self, other):
+            return size_truth
+
+    mode_truth, size_truth = TruthAlias(False), TruthAlias(True)
+    for values, reason, truth in [({"mode": ModeAlias()}, "metadata_mode", mode_truth),
+                                  ({"size": SizeAlias()}, "metadata_size", size_truth)]:
+        with snapshot.export_diagnostics() as diagnostic:
+            snapshot.export_checkpoint("validate")
+            with pytest.raises(QualificationError):
+                with snapshot.export_capture():
+                    snapshot.validate_members([ObservedMember(**values)], 1024)
+            assert diagnostic.envelope() == envelope("validate", reason)
+        assert truth.calls == 1
+
+
+def test_metadata_primary_survives_cleanup_cancel_and_one_secondary():
+    cancel = KeyboardInterrupt(CANARY)
+    with snapshot.export_diagnostics() as diagnostic:
+        snapshot.export_checkpoint("validate")
+        with pytest.raises(KeyboardInterrupt) as caught:
+            with snapshot.export_capture():
+                try:
+                    with snapshot.export_capture("archive_close"):
+                        snapshot.validate_members([ObservedMember(mode=0o1000)], 1024)
+                finally:
+                    raise cancel
+        assert caught.value is cancel and type(diagnostic.exception) is QualificationError
+        assert diagnostic.envelope() == envelope(
+            "validate", "metadata_mode", {"step": "archive_close", "reason": "operation_error"})
+
+
+@pytest.mark.parametrize("reason", ["metadata_guard", "metadata_duplicate_name", "metadata_mode",
+                                    "metadata_uid", "metadata_gid", "metadata_size"])
+def test_legacy_and_refined_reasons_remain_closed_private_bounded_and_lab_accepted(tmp_path, capsys, reason):
+    diagnostic = snapshot.ExportDiagnostic()
+    diagnostic.primary = {"step": "validate", "reason": reason}
+    diagnostic.print(CLI_ERROR)
+    raw = capsys.readouterr().out
+    assert len(raw.encode("ascii")) <= 768 and CANARY not in raw
+    assert snapshot.parse_export_diagnostic(raw) == envelope("validate", reason)
+    lab = bare_lab(tmp_path)
+    with lab.cold_diagnostics("export"):
+        lab.cold_checkpoint("result", service="clickhouse")
+        lab.cold_export_failure(QualificationError(CANARY), 2, raw)
+        assert lab.failure["helper_reason"] == reason and closed_cold_evidence(lab.failure)
+
+
+def test_original_metadata_predicate_restored_by_only_four_pure_bool_annotations():
+    tree = ast.parse(Path(snapshot.__file__).read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "validate_members")
+    guard = next(node for node in ast.walk(function) if isinstance(node, ast.If)
+                 and any(isinstance(item, ast.Raise) and isinstance(item.exc, ast.Call)
+                         and item.exc.args and isinstance(item.exc.args[0], ast.Constant)
+                         and item.exc.args[0].value == "Duplicate or unsafe archive metadata" for item in node.body))
+    targets = []
+
+    class Reversal(ast.NodeTransformer):
+        def visit_NamedExpr(self, node):
+            targets.append(node.target.id)
+            comparisons = {
+                "metadata_mode": "0 <= item.mode <= 0o777",
+                "metadata_uid": "0 <= item.uid < 2**32 - 1",
+                "metadata_gid": "0 <= item.gid < 2**32 - 1",
+            }
+            if node.target.id in comparisons:
+                expected = ast.parse("False if " + comparisons[node.target.id] + " else True", mode="eval").body
+                assert ast.dump(node.value) == ast.dump(expected)
+                return ast.UnaryOp(op=ast.Not(), operand=node.value.test)
+            return node.value
+
+    restored = Reversal().visit(guard.test)
+    original = ast.parse("name in names or not 0 <= item.mode <= 0o777 or not 0 <= item.uid < 2**32 - 1 "
+                         "or not 0 <= item.gid < 2**32 - 1 or item.size < 0", mode="eval").body
+    assert targets == ["metadata_duplicate", "metadata_mode", "metadata_uid", "metadata_gid"]
+    assert ast.dump(restored) == ast.dump(original)
+
+
+@pytest.mark.parametrize("field", ["mode", "uid", "gid"])
+@pytest.mark.parametrize("case", ["stable_false", "false_then_true", "second_cancel", "upper_false", "all_true"])
+def test_lower_chain_truth_matches_original_conditional_guard_without_second_evaluation(field, case):
+    calls = []
+    cancel = KeyboardInterrupt(CANARY)
+
+    class LowerTruth:
+        def __bool__(self):
+            calls.append("lower")
+            if len(calls) == 2 and case == "second_cancel":
+                raise cancel
+            if case == "false_then_true":
+                return calls.count("lower") != 1
+            return case in {"upper_false", "all_true"}
+
+    class Scalar:
+        def __ge__(self, other):
+            return LowerTruth()
+
+        def upper(self):
+            calls.append("upper")
+            return case != "upper_false"
+
+        def __le__(self, other):
+            return self.upper()
+
+        def __lt__(self, other):
+            return self.upper()
+
+    item = ObservedMember(**{field: Scalar()})
+    with snapshot.export_diagnostics() as diagnostic:
+        snapshot.export_checkpoint("validate")
+        if case == "all_true":
+            assert snapshot.validate_members([item], 1024) == 0
+            assert diagnostic.primary is None
+            assert item.reads == ["mode", "uid", "gid", "size", "size"]
+        else:
+            with pytest.raises(QualificationError) as caught:
+                with snapshot.export_capture():
+                    snapshot.validate_members([item], 1024)
+            assert diagnostic.exception is caught.value
+            assert caught.value.args == ("Duplicate or unsafe archive metadata",)
+            assert diagnostic.envelope() == envelope("validate", "metadata_" + field)
+            assert item.reads == ["mode", "uid", "gid"][:["mode", "uid", "gid"].index(field) + 1]
+    assert calls == (["lower", "upper"] if case in {"upper_false", "all_true"} else ["lower"])

@@ -20,6 +20,7 @@ EXPORT_STEPS = {
 }
 EXPORT_REASONS = {
     "operation_error", "source_guard", "file_budget", "path_guard", "metadata_guard", "object_guard",
+    "metadata_duplicate_name", "metadata_mode", "metadata_uid", "metadata_gid", "metadata_size",
     "content_budget", "link_guard", "link_escape", "link_cycle", "hardlink_missing", "hardlink_nonregular",
     "header_budget", "diagnostic_unavailable",
 }
@@ -183,13 +184,18 @@ def validate_members(members, max_bytes):
     for item in members:
         name = safe_name(item.name)
         if (
-            name in names
-            or not 0 <= item.mode <= 0o777
-            or not 0 <= item.uid < 2**32 - 1
-            or not 0 <= item.gid < 2**32 - 1
+            (metadata_duplicate := name in names)
+            or (metadata_mode := (False if 0 <= item.mode <= 0o777 else True))
+            or (metadata_uid := (False if 0 <= item.uid < 2**32 - 1 else True))
+            or (metadata_gid := (False if 0 <= item.gid < 2**32 - 1 else True))
             or item.size < 0
         ):
-            export_refusal("metadata_guard")
+            export_refusal(
+                "metadata_duplicate_name" if metadata_duplicate else
+                "metadata_mode" if metadata_mode else
+                "metadata_uid" if metadata_uid else
+                "metadata_gid" if metadata_gid else "metadata_size"
+            )
             raise QualificationError("Duplicate or unsafe archive metadata")
         names.add(name)
         if not (item.isfile() or item.isdir() or item.issym() or item.islnk()):
