@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -267,10 +268,14 @@ def closed_cold_evidence(value):
                             "KeyError", "JSONDecodeError", "PermissionError", "FileNotFoundError", "OSError",
                             "RuntimeError", "KeyboardInterrupt", "SystemExit", "TimeoutExpired", "UnexpectedError"}}
     if (not {"phase", "stage", "code", "error_type"} <= value.keys()
-            or not value.keys() <= enums.keys() | {"returncode", "helper_exit_status", "helper_step", "helper_reason"}):
+            or not value.keys() <= enums.keys() | {"returncode", "helper_exit_status", "helper_step", "helper_reason",
+                                                   "inventory_comparison"}):
         return False
     for key, item in value.items():
-        if key == "returncode":
+        if key == "inventory_comparison":
+            if not closed_inventory_comparison(item):
+                return False
+        elif key == "returncode":
             if type(item) is not int or not -255 <= item <= 255:
                 return False
         elif key == "helper_exit_status":
@@ -282,11 +287,171 @@ def closed_cold_evidence(value):
                 return False
         elif type(item) is not str or item not in enums[key]:
             return False
+    if ("inventory_comparison" in value
+            and (value.get("checkpoint") != "cold_restore_inventory_compare_compare"
+                 or value.get("error_type") != "AssertionError")):
+        return False
     if ({"helper_exit_status", "helper_step", "helper_reason"} & value.keys()
             and (value.get("checkpoint") != "cold_restore_export_result"
                  or not {"helper_step", "helper_reason"} <= value.keys())):
         return False
     return True
+
+
+INVENTORY_TABLE_WIDTHS = {
+    "ingest_receipts": 1, "correlation_receipts": 2, "detections": 3, "collectors": 4,
+    "collector_credentials": 4, "detection_identity_members": 3,
+}
+INVENTORY_REDIS_COMPONENTS = {
+    "keys", "strings", "hashes", "zsets", "stream_entries", "stream_groups", "stream_pending",
+}
+
+
+def closed_inventory_comparison(value):
+    def keys(item, expected):
+        return (type(item) is dict and all(type(key) is str for key in item)
+                and item.keys() == expected)
+
+    def counts(item, minimum=0):
+        return (type(item) is list and len(item) == 3 and type(item[0]) is bool
+                and all(type(count) is int and minimum <= count <= 100000 for count in item[1:]))
+
+    return (keys(value, {"schema", "stores", "postgres", "clickhouse", "redis"})
+            and type(value["schema"]) is int and value["schema"] == 1
+            and keys(value["stores"], {"postgres", "clickhouse", "redis"})
+            and all(type(flag) is bool for flag in value["stores"].values())
+            and keys(value["postgres"], INVENTORY_TABLE_WIDTHS.keys())
+            and all(counts(item, -1) for item in value["postgres"].values())
+            and counts(value["clickhouse"])
+            and keys(value["redis"], INVENTORY_REDIS_COMPONENTS)
+            and all(counts(item) for item in value["redis"].values()))
+
+
+def cold_inventory_comparison(source, restored):
+    """Validate both private inventories before comparing; publish only fixed counts/flags."""
+    visited = characters = 0
+    active = set()
+
+    def walk(value, depth=0):
+        nonlocal visited, characters
+        visited += 1
+        if visited > 100000 or depth > 32:
+            raise ValueError("inventory_diagnostic_unavailable")
+        kind = type(value)
+        if kind is str:
+            characters += len(value)
+            if characters > 1048576:
+                raise ValueError("inventory_diagnostic_unavailable")
+        elif kind is int:
+            if value.bit_length() > 4096:
+                raise ValueError("inventory_diagnostic_unavailable")
+        elif kind is float:
+            if not math.isfinite(value):
+                raise ValueError("inventory_diagnostic_unavailable")
+        elif value is None or kind is bool:
+            pass
+        elif kind is dict or kind is list:
+            identity = id(value)
+            if identity in active or len(value) > 100000 - visited:
+                raise ValueError("inventory_diagnostic_unavailable")
+            active.add(identity)
+            if kind is dict:
+                for key, item in value.items():
+                    if type(key) is not str:
+                        raise ValueError("inventory_diagnostic_unavailable")
+                    walk(key, depth + 1)
+                    walk(item, depth + 1)
+            else:
+                for item in value:
+                    walk(item, depth + 1)
+            active.remove(identity)
+        else:
+            raise ValueError("inventory_diagnostic_unavailable")
+
+    def rows(value, width):
+        return type(value) is list and all(type(row) is list and len(row) == width for row in value)
+
+    def shape(value):
+        if type(value) is not dict or value.keys() != {"postgres", "clickhouse_events", "redis"}:
+            return False
+        postgres, redis = value["postgres"], value["redis"]
+        if (type(postgres) is not dict or not postgres.keys() <= INVENTORY_TABLE_WIDTHS.keys()
+                or not all(rows(table, INVENTORY_TABLE_WIDTHS[name]) for name, table in postgres.items())
+                or not rows(value["clickhouse_events"], 4) or type(redis) is not dict):
+            return False
+        for record in redis.values():
+            if type(record) is not dict or type(record.get("type")) is not str:
+                return False
+            kind = record["type"]
+            if kind in {"hash", "string", "zset"}:
+                if record.keys() != {"type", "value"}:
+                    return False
+                item = record["value"]
+                if kind == "string" and item is not None and type(item) is not str:
+                    return False
+                if kind == "hash" and (type(item) is not dict or
+                                       not all(type(v) is str for v in item.values())):
+                    return False
+                if kind == "zset" and (not rows(item, 2) or not all(
+                        type(pair[0]) is str and type(pair[1]) in {int, float} for pair in item)):
+                    return False
+            elif kind == "stream":
+                if record.keys() != {"type", "entries", "groups", "pending"}:
+                    return False
+                if (not rows(record["entries"], 2) or not all(type(pair[0]) is str and
+                        type(pair[1]) is dict and all(type(v) is str for v in pair[1].values())
+                        for pair in record["entries"])):
+                    return False
+                if (type(record["groups"]) is not list or not all(type(group) is dict
+                        for group in record["groups"]) or type(record["pending"]) is not dict or
+                        not all(type(items) is list and all(type(item) is dict for item in items)
+                                for items in record["pending"].values())):
+                    return False
+            else:
+                return False
+        return True
+
+    try:
+        walk(source)
+        walk(restored)
+        if not shape(source) or not shape(restored):
+            return None
+    except ValueError:
+        return None
+
+    def redis_parts(value):
+        parts = {name: {} for name in INVENTORY_REDIS_COMPONENTS if name != "keys"}
+        sizes = dict.fromkeys(INVENTORY_REDIS_COMPONENTS, 0)
+        sizes["keys"] = len(value)
+        for key, record in value.items():
+            kind = record["type"]
+            if kind == "stream":
+                for component, field in (("stream_entries", "entries"), ("stream_groups", "groups"),
+                                         ("stream_pending", "pending")):
+                    parts[component][key] = record[field]
+                    sizes[component] += (sum(len(items) for items in record[field].values())
+                                         if field == "pending" else len(record[field]))
+            else:
+                component = {"string": "strings", "hash": "hashes", "zset": "zsets"}[kind]
+                parts[component][key] = record["value"]
+                sizes[component] += 1 if kind == "string" else len(record["value"])
+        return parts, sizes
+
+    left, left_sizes = redis_parts(source["redis"])
+    right, right_sizes = redis_parts(restored["redis"])
+    redis = {name: [left[name] == right[name], left_sizes[name], right_sizes[name]] for name in left}
+    redis["keys"] = [source["redis"].keys() == restored["redis"].keys(), left_sizes["keys"], right_sizes["keys"]]
+    postgres = {}
+    for name in INVENTORY_TABLE_WIDTHS:
+        a, b = source["postgres"].get(name), restored["postgres"].get(name)
+        postgres[name] = [a == b, -1 if a is None else len(a), -1 if b is None else len(b)]
+    summary = {"schema": 1, "stores": {
+        "postgres": source["postgres"] == restored["postgres"],
+        "clickhouse": source["clickhouse_events"] == restored["clickhouse_events"],
+        "redis": source["redis"] == restored["redis"]}, "postgres": postgres,
+        "clickhouse": [source["clickhouse_events"] == restored["clickhouse_events"],
+                       len(source["clickhouse_events"]), len(restored["clickhouse_events"])], "redis": redis}
+    return summary if closed_inventory_comparison(summary) else None
 
 
 class Docker:
@@ -422,6 +587,20 @@ class Laboratory:
                 self.failure = self.cold_primary = value
         except BaseException:
             pass
+
+    def cold_inventory_failure(self, exc, source, restored):
+        if self.failure is not None:
+            return
+        self.cold_failure(exc)
+        if (type(exc) is not AssertionError or type(self.stage) is not str
+                or self.stage != "cold_restore_inventory_compare_compare"
+                or self.failure is not self.cold_primary or not closed_cold_evidence(self.failure)):
+            return
+        summary = cold_inventory_comparison(source, restored)
+        if summary is not None:
+            candidate = {**self.failure, "inventory_comparison": summary}
+            if closed_cold_evidence(candidate) and len(canonical_bytes(candidate)) <= 2048:
+                self.failure = self.cold_primary = candidate
 
     @contextmanager
     def cold_diagnostics(self, section):
@@ -1398,7 +1577,14 @@ class Laboratory:
         self.cold_checkpoint("read_restore", operation="unknown")
         restored = json.loads((self.directory / "restore-inventory.json").read_text())
         self.cold_checkpoint("compare", operation="unknown")
-        assert source == restored, "Exact cold source/restore inventories differ before worker startup"
+        try:
+            assert source == restored, "Exact cold source/restore inventories differ before worker startup"
+        except AssertionError as exc:
+            try:
+                self.cold_inventory_failure(exc, source, restored)
+            except BaseException:
+                pass
+            raise
         self.cold_phase("writers_start", "up")
         primary = None
         try:
