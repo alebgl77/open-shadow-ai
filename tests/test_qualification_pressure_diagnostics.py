@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -73,6 +73,75 @@ PHYSICAL_CASES |= {(f"physical_{section}_guard_inspect", operation)
 PHYSICAL_CASES |= {("physical_exporter_discover_list", operation) for operation in ("network_ls", "volume_ls")}
 PHYSICAL_CASES |= {("physical_exporter_discover_inspect", operation)
                    for operation in ("volume_inspect", "network_inspect")}
+PHYSICAL_GOLDEN = ROOT / "tests/fixtures/qualification/physical-healthy-2b3918b.json"
+PHYSICAL_GOLDEN_SHA256 = "983b132513e6f7227046908a8a9df2fd1d153f9ff26ea9880dddf371e6940fcc"
+PHYSICAL_GOLDEN_PROVENANCE = {
+    "commit": "2b3918b074f8b901aac4c67e7ceb61c69b1541b3",
+    "path": "src/shadai/qualification/lab.py",
+    "raw_source_sha256": "19db45e18993168a3ae1774aa9d30ef924841958694613de0067b556a08ff0b4",
+    "normalization_contract": [
+        "json.dumps(value,sort_keys=True)", "literal run UUID -> RUN_UUID",
+        "literal JSON-escaped run directory -> RUN_DIR",
+        "inspector-[0-9a-f]{12} -> inspector-INVOCATION",
+    ],
+    "input_paths": [
+        {"marker": "SYMBOLIC_COMPOSE_PATH", "option": "--file", "scope": "repository",
+         "target": "deploy/qualification/compose.yaml", "positions": [[13, 4], [73, 4]]},
+        {"marker": "ENV_FILE_PATH", "option": "--env-file", "scope": "run_directory",
+         "target": "empty.env", "positions": [[13, 6], [73, 6]]},
+    ],
+}
+
+
+def normalized_physical_trace(value, instance):
+    text = json.dumps(value, sort_keys=True)
+    text = text.replace(instance.journal.value["run_id"], "RUN_UUID")
+    text = text.replace(json.dumps(str(instance.directory))[1:-1], "RUN_DIR")
+    return re.sub(r"-inspector-[0-9a-f]{12}", "-inspector-INVOCATION", text)
+
+
+def load_physical_golden(path=PHYSICAL_GOLDEN):
+    raw = path.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PHYSICAL_GOLDEN_SHA256
+    return json.loads(raw)
+
+
+def physical_golden_expected(golden, instance):
+    """Bind only the two declared input paths at their exact historical argv slots."""
+    assert set(golden) == {"schema", "provenance", "calls", "scenarios"}
+    assert type(golden["schema"]) is int and golden["schema"] == 1
+    assert json.dumps(golden["provenance"], sort_keys=True) == json.dumps(PHYSICAL_GOLDEN_PROVENANCE, sort_keys=True)
+    calls = json.loads(json.dumps(golden["calls"]))
+    assert isinstance(calls, list) and len(calls) == 92
+    targets = {
+        "SYMBOLIC_COMPOSE_PATH": str(instance.repository / "deploy/qualification/compose.yaml"),
+        "ENV_FILE_PATH": str(instance.directory / "empty.env"),
+    }
+    slots = {(call, arg): (binding["marker"], binding["option"])
+             for binding in PHYSICAL_GOLDEN_PROVENANCE["input_paths"] for call, arg in binding["positions"]}
+    seen = set()
+    for call_index, call in enumerate(calls):
+        assert isinstance(call, list) and all(type(arg) is str for arg in call)
+        for arg_index, arg in enumerate(call):
+            markers = [marker for marker in targets if marker in arg]
+            if markers:
+                slot = call_index, arg_index
+                assert slot in slots and len(markers) == 1
+                marker, option = slots[slot]
+                assert arg == marker and call[arg_index - 1] == option
+                call[arg_index] = targets[marker]
+                seen.add(slot)
+    assert seen == set(slots)
+    assert isinstance(golden["scenarios"], list)
+    assert not any(marker in json.dumps(golden["scenarios"]) for marker in targets)
+    return calls, golden["scenarios"]
+
+
+def assert_physical_golden_trace(calls, scenarios, instance, golden):
+    expected_calls, expected_scenarios = physical_golden_expected(golden, instance)
+    # Compare serialized JSON to retain the original distinctions between bool/int/float.
+    assert normalized_physical_trace(calls, instance) == normalized_physical_trace(expected_calls, instance)
+    assert normalized_physical_trace(scenarios, instance) == normalized_physical_trace(expected_scenarios, instance)
 
 
 class CliModel:
@@ -349,26 +418,9 @@ def test_physical_inspector_cleanup_keeps_primary_or_secondary_cancellation(phys
 
 
 def test_healthy_physical_calls_and_results_match_exact_published_source(tmp_path, monkeypatch):
-    original = subprocess.run(
-        ["git", "show", "2b3918b074f8b901aac4c67e7ceb61c69b1541b3:src/shadai/qualification/lab.py"],
-        cwd=ROOT, capture_output=True, check=True,
-    ).stdout
-    assert hashlib.sha256(original).hexdigest() == "19db45e18993168a3ae1774aa9d30ef924841958694613de0067b556a08ff0b4"
-    namespace = {"__name__": "published_qualification_lab"}
-    exec(compile(original, "<published-qualification-lab>", "exec"), namespace)
-    old, old_cli = create_physical_lab(tmp_path / "published", monkeypatch, namespace["Laboratory"])
     lab, cli = create_physical_lab(tmp_path / "candidate", monkeypatch)
-    old.experiment_physical("unused")
     lab.experiment_physical("unused")
-
-    def normalized(value, instance):
-        text = json.dumps(value, sort_keys=True)
-        text = text.replace(instance.journal.value["run_id"], "RUN_UUID")
-        text = text.replace(json.dumps(str(instance.directory))[1:-1], "RUN_DIR")
-        return re.sub(r"-inspector-[0-9a-f]{12}", "-inspector-INVOCATION", text)
-
-    assert normalized(cli.calls, lab) == normalized(old_cli.calls, old)
-    assert normalized(lab.scenarios, lab) == normalized(old.scenarios, old)
+    assert_physical_golden_trace(cli.calls, lab.scenarios, lab, load_physical_golden())
     assert set(cli.pairs) == PHYSICAL_CASES
     assert lab.write_report() == 0 and lab.failure is None
     assert lab.physical_section is None and lab.docker.checkpoint is None
@@ -377,6 +429,107 @@ def test_healthy_physical_calls_and_results_match_exact_published_source(tmp_pat
     assert len(expected) == len(stats[4:]) == len(set(stats[4:])) == 7
     assert set(stats[4:]) == {record["id"] for record in expected}
     assert "2" * 64 not in stats[4:]  # Pressure store is outside the seven physical service measurements.
+
+
+@pytest.mark.parametrize("absence", ["git", "history"])
+def test_healthy_physical_golden_needs_no_git_history(tmp_path, monkeypatch, absence):
+    def missing(command, **kwargs):
+        if absence == "git":
+            raise FileNotFoundError("git unavailable")
+        if command[:2] == ["git", "show"]:
+            raise subprocess.CalledProcessError(128, command)
+        assert command == ["git", "rev-parse", "HEAD"]
+        return subprocess.CompletedProcess(command, 128, stdout="", stderr="")
+
+    unavailable = Mock(side_effect=missing)
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    test_healthy_physical_calls_and_results_match_exact_published_source(tmp_path, monkeypatch)
+    # Report provenance may ask for the current revision; the regression never reads history.
+    assert all(call.args[0] == ["git", "rev-parse", "HEAD"] for call in unavailable.call_args_list)
+
+
+@pytest.mark.parametrize("root,directory", [
+    (PurePosixPath("/repository"), PurePosixPath("/private/run")),
+    (PureWindowsPath("C:/repository"), PureWindowsPath("D:/private/run")),
+])
+def test_physical_golden_only_binds_exact_native_input_paths(root, directory):
+    instance = SimpleNamespace(repository=root, directory=directory,
+                               journal=SimpleNamespace(value={"run_id": "unused"}))
+    calls, _ = physical_golden_expected(load_physical_golden(), instance)
+    for index in (13, 73):
+        assert calls[index][3:7] == ["--file", str(root / "deploy/qualification/compose.yaml"),
+                                   "--env-file", str(directory / "empty.env")]
+    assert "ENV_FILE_PATH" not in normalized_physical_trace(calls, instance)
+    assert "SYMBOLIC_COMPOSE_PATH" not in normalized_physical_trace(calls, instance)
+
+
+@pytest.mark.parametrize("change", [
+    "misplaced_compose", "misplaced_env", "extra_marker", "embedded_marker", "missing_marker",
+    "repository_target", "run_target", "commit", "source_hash", "normalization",
+])
+def test_physical_golden_refuses_marker_or_provenance_changes(physical_diagnostic_lab, change):
+    lab, _ = physical_diagnostic_lab
+    golden = load_physical_golden()
+    if change in {"misplaced_compose", "misplaced_env"}:
+        index = 4 if change == "misplaced_compose" else 6
+        golden["calls"][13][index], golden["calls"][13][7] = golden["calls"][13][7], golden["calls"][13][index]
+    elif change == "extra_marker":
+        golden["calls"][0].append("ENV_FILE_PATH")
+    elif change == "embedded_marker":
+        golden["calls"][13][6] += "/suffix"
+    elif change == "missing_marker":
+        golden["calls"][13][6] = "UNDECLARED_PATH"
+    elif change in {"repository_target", "run_target"}:
+        golden["provenance"]["input_paths"][0 if change == "repository_target" else 1]["target"] = "foreign.env"
+    elif change == "commit":
+        golden["provenance"]["commit"] = "0" * 40
+    elif change == "source_hash":
+        golden["provenance"]["raw_source_sha256"] = "0" * 64
+    else:
+        golden["provenance"]["normalization_contract"].append("generic path scrub")
+    with pytest.raises(AssertionError):
+        physical_golden_expected(golden, lab)
+
+
+@pytest.mark.parametrize("change", [
+    "reorder", "remove", "add", "readonly", "mount_readonly", "capability", "identity",
+    "compose_target", "env_target", "bool_as_int", "int_as_float",
+])
+def test_physical_golden_refuses_complete_trace_changes(physical_diagnostic_lab, change):
+    lab, cli = physical_diagnostic_lab
+    lab.experiment_physical("unused")
+    calls, scenarios = json.loads(json.dumps(cli.calls)), json.loads(json.dumps(lab.scenarios))
+    if change == "reorder":
+        calls[0], calls[13] = calls[13], calls[0]
+    elif change == "remove":
+        calls.pop()
+    elif change == "add":
+        calls.append(calls[0])
+    elif change == "readonly":
+        calls[30][2] = "--privileged"
+    elif change == "mount_readonly":
+        calls[30][22] = calls[30][22].removesuffix(",readonly")
+    elif change == "capability":
+        calls[30][20] = "SYS_ADMIN"
+    elif change == "identity":
+        calls[0][2] = "f" * 64
+    elif change == "compose_target":
+        calls[13][4] = str(lab.repository / "deploy/qualification/foreign.yaml")
+    elif change == "env_target":
+        calls[13][6] = str(lab.directory / "foreign.env")
+    elif change == "bool_as_int":
+        scenarios[0]["measurements"]["filesystem_sum"] = 0
+    else:
+        scenarios[0]["measurements"]["redis_and_filesystem"]["redis_memory"] = 100.0
+    with pytest.raises(AssertionError):
+        assert_physical_golden_trace(calls, scenarios, lab, load_physical_golden())
+
+
+def test_physical_golden_refuses_changed_fixture_bytes(tmp_path):
+    changed = tmp_path / "changed-golden.json"
+    changed.write_bytes(PHYSICAL_GOLDEN.read_bytes() + b" ")
+    with pytest.raises(AssertionError):
+        load_physical_golden(changed)
 
 
 @pytest.mark.parametrize("checkpoint,operation", sorted(PHYSICAL_CASES))

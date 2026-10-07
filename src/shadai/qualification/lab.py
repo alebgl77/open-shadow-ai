@@ -1219,6 +1219,37 @@ class Laboratory:
         )
         return result.returncode == 0
 
+    def wait_probe_dependencies(self, worker):
+        services = {"migrate", "redis", "clickhouse"}
+        records = self.containers(services)
+        if len(records) != len(services):
+            raise QualificationError("Probe dependency identity is not unique")
+        while True:
+            self.remaining()
+            starting = False
+            for record in records:
+                inspected = self.docker.inspect("container", record["id"])
+                verify_resource(record, inspected)
+                state = inspected.get("State")
+                if type(state) is not dict:
+                    raise QualificationError("Probe dependency state is invalid")
+                if record["service"] == "migrate":
+                    if (state.get("Status") != "exited" or state.get("Running") is not False or
+                            type(state.get("ExitCode")) is not int or state["ExitCode"] != 0):
+                        raise QualificationError("Probe migration has not completed successfully")
+                else:
+                    health = state.get("Health")
+                    if (state.get("Running") is not True or type(health) is not dict or
+                            type(health.get("Status")) is not str or
+                            health.get("Status") not in {"healthy", "starting"}):
+                        raise QualificationError("Probe store health is invalid")
+                    starting = starting or health["Status"] == "starting"
+            if not starting:
+                break
+            self.sleep(min(1, self.remaining()))
+        if not self.probe_status(worker, "readiness"):
+            raise QualificationError("Probe worker is not ready after dependency recovery")
+
     def experiment_probes(self, url):
         worker = self.containers({"ingest-worker"})[0]
         assert self.probe_status(worker, "startup") and self.probe_status(worker, "liveness")
@@ -1228,10 +1259,21 @@ class Laboratory:
         assert self.probe_status(worker, "liveness") and not self.probe_status(worker, "readiness")
         assert self.docker.inspect("container", worker["id"])["RestartCount"] == before
         self.change("start", {"redis"})
+        previous_deadlines = self.deadline, self.docker.deadline
+        deadline = self.local_deadline(120)
+        if self.docker.deadline is not None:
+            deadline = min(deadline, self.docker.deadline)
+        self.deadline = self.docker.deadline = deadline
         try:
-            self.compose("up", "-d", "probe-ingest-peer")
+            self.wait_probe_dependencies(worker)
+            self.remaining()
+            try:
+                self.compose("up", "-d", "--no-deps", "probe-ingest-peer")
+            finally:
+                self.deadline, self.docker.deadline = previous_deadlines
+                self.discover()
         finally:
-            self.discover()
+            self.deadline, self.docker.deadline = previous_deadlines
         peer = self.containers({"probe-ingest-peer"})[0]
         deadline = self.local_deadline(30)
         while time.monotonic() < deadline and not self.probe_status(peer, "startup"):
