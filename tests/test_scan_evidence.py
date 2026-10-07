@@ -204,6 +204,52 @@ def test_recorded_real_tool_sentinels_cannot_be_missing_or_substituted(evidence,
         evidence.validate(metadata)
 
 
+def test_source_and_offline_control_accept_identical_bound_alias_without_id_rewriting(evidence):
+    def alias(report, query):
+        if query == "cpe:2.3:a:redislabs:redis:5.0.0:*:*:*:*:*:*:*":
+            report["matches"][0]["vulnerability"]["id"] = "BIT-redis-2021-32675"
+            report["matches"][0]["relatedVulnerabilities"] = [{"id": "CVE-2021-32675", "namespace": "nvd:cpe",
+                "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2021-32675", "urls": [], "cvss": []}]
+    evidence.harness.state.grype_mutate = alias
+    evidence.harness.run("postgres")
+    metadata = evidence.metadata()
+    sentinel = metadata["complement"]["sentinels"][0]
+    path = evidence.harness.output / sentinel["report_path"]
+    before = path.read_bytes()
+    assert evidence.validate()["components"]
+    assert evidence.run().is_file()
+    assert path.read_bytes() == before
+    assert hashlib.sha256(before).hexdigest() == sentinel["report_sha256"]
+    assert json.loads(before)["matches"][0]["vulnerability"]["id"] == "BIT-redis-2021-32675"
+
+
+@pytest.mark.parametrize("mutation", ["namespace", "url", "mixed", "duplicate", "query", "artifact", "cvss", "epss"])
+def test_rehashed_offline_alias_cannot_rescue_malformed_or_transplanted_control(evidence, mutation):
+    metadata = evidence.metadata()
+    sentinel = metadata["complement"]["sentinels"][0]
+    path = evidence.harness.output / sentinel["report_path"]
+    raw = json.loads(path.read_bytes())
+    item = {"id": "CVE-2021-32675", "namespace": "nvd:cpe",
+            "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2021-32675", "urls": [], "cvss": []}
+    raw["matches"][0]["relatedVulnerabilities"] = [item]
+    if mutation == "namespace":
+        item["namespace"] = "foreign"
+    elif mutation == "url":
+        item["dataSource"] += "?foreign"
+    elif mutation in {"mixed", "duplicate"}:
+        raw["matches"][0]["relatedVulnerabilities"].append(None if mutation == "mixed" else dict(item))
+    elif mutation in {"cvss", "epss"}:
+        item[mutation] = [{}]
+    elif mutation == "query":
+        raw["source"]["target"] = raw["source"]["target"].replace("5.0.0", "5.0.14")
+    else:
+        raw["matches"][0]["artifact"]["version"] = "5.0.14"
+    path.write_text(json.dumps(raw))
+    sentinel["report_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError):
+        evidence.validate(metadata)
+
+
 @pytest.mark.parametrize("mutation", ["version", "commit", "archive", "manifest", "module", "template", "rendered",
     "filter", "platform", "db_missing", "db_stale", "db_future", "db_invalid", "db_source", "db_path", "db_schema",
     "db_table", "db_digest", "db_extra", "db_fetched_future"])

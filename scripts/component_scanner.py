@@ -7,6 +7,7 @@ explicit claim about build inputs, never a version observed in an UNKNOWN binary
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -379,6 +380,78 @@ def validate_report(report, *, query, configuration, database_status):
         severity = vulnerability.get("severity")
         if fix["versions"] and severity not in {"Low", "Medium", "Negligible"}:
             findings.append(f"{query}: {vulnerability['id']}")
+    return findings
+
+
+def validate_sentinel_report(report, *, query, configuration, database_status, required_advisories):
+    """Require a known advisory on the validated query, preserving all original IDs."""
+    findings = validate_report(report, query=query, configuration=configuration, database_status=database_status)
+
+    def number(value):
+        return type(value) is int or (type(value) is float and math.isfinite(value))
+
+    def record(value, *, strings=(), optional_strings=(), numbers=(), optional_numbers=(), string_lists=()):
+        if type(value) is not dict or any(type(key) is not str for key in value) or \
+                any(type(value.get(field)) is not str for field in strings) or \
+                any(field in value and type(value[field]) is not str for field in optional_strings) or \
+                any(not number(value.get(field)) for field in numbers) or \
+                any(field in value and not number(value[field]) for field in optional_numbers) or \
+                any(field in value and (type(value[field]) is not list or
+                    any(type(item) is not str for item in value[field])) for field in string_lists):
+            raise ValueError("Malformed sentinel related advisory metadata")
+
+    matched = False
+    required_cves = {identifier for identifier in required_advisories if identifier.startswith("CVE-")}
+    for match in report["matches"]:
+        related = match.get("relatedVulnerabilities")
+        if related is not None:
+            if type(related) is not list:
+                raise ValueError("Malformed sentinel related advisory metadata")
+            seen = set()
+            for advisory in related:
+                if type(advisory) is not dict or any(type(key) is not str for key in advisory) or \
+                        type(advisory.get("id")) is not str or not advisory["id"] or \
+                        type(advisory.get("dataSource")) is not str or \
+                        type(advisory.get("urls")) is not list or \
+                        any(type(url) is not str for url in advisory["urls"]) or \
+                        type(advisory.get("cvss")) is not list or \
+                        any(type(score) is not dict for score in advisory["cvss"]):
+                    raise ValueError("Malformed sentinel related advisory metadata")
+                for field in ("namespace", "severity", "description"):
+                    if field in advisory and type(advisory[field]) is not str:
+                        raise ValueError("Malformed sentinel related advisory metadata")
+                for field in ("knownExploited", "epss", "cwes"):
+                    if field in advisory and (type(advisory[field]) is not list or
+                            any(type(item) is not dict for item in advisory[field])):
+                        raise ValueError("Malformed sentinel related advisory metadata")
+                for score in advisory["cvss"]:
+                    record(score, strings=("version", "vector"), optional_strings=("source", "type"))
+                    if "vendorMetadata" not in score:
+                        raise ValueError("Malformed sentinel related advisory metadata")
+                    record(score.get("metrics"), numbers=("baseScore",),
+                           optional_numbers=("exploitabilityScore", "impactScore"))
+                for item in advisory.get("knownExploited", []):
+                    record(item, strings=("cve", "knownRansomwareCampaignUse"),
+                           optional_strings=("vendorProject", "product", "dateAdded", "requiredAction",
+                                             "dueDate", "notes"),
+                           string_lists=("urls", "cwes"))
+                for item in advisory.get("epss", []):
+                    record(item, strings=("cve", "date"), numbers=("epss", "percentile"))
+                for item in advisory.get("cwes", []):
+                    record(item, strings=("cve",), optional_strings=("cwe", "source", "type"))
+                identity = (advisory["id"], advisory.get("namespace", ""))
+                if identity in seen:
+                    raise ValueError("Duplicate sentinel related advisory metadata")
+                seen.add(identity)
+                if advisory["id"] in required_cves:
+                    if advisory.get("namespace") != "nvd:cpe" or \
+                            advisory["dataSource"] != "https://nvd.nist.gov/vuln/detail/" + advisory["id"]:
+                        raise ValueError("Sentinel related advisory source differs")
+                    matched = True
+        if match["vulnerability"]["id"] in required_advisories:
+            matched = True
+    if not matched:
+        raise ValueError("Complement scanner known-vulnerable sentinel did not match")
     return findings
 
 

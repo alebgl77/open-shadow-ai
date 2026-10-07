@@ -219,9 +219,8 @@ def validate(*, metadata, report, layout, image, platform, root, audit_directory
         if control.get("query") != query or control.get("required_advisories") != sorted(ids):
             raise ValueError("Complementary scanner control identity differs")
         raw = load_report(control)
-        components.validate_report(raw, query=query, configuration=configuration, database_status=status)
-        if not ids.intersection({m["vulnerability"]["id"] for m in raw["matches"]}):
-            raise ValueError("Recorded complementary scanner control did not match")
+        components.validate_sentinel_report(raw, query=query, configuration=configuration,
+                                            database_status=status, required_advisories=ids)
         current_providers = raw["descriptor"]["db"]["providers"]
         if providers is not None and providers != current_providers:
             raise ValueError("Complementary scanner provider metadata changed")

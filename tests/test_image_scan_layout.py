@@ -389,6 +389,52 @@ def test_failed_tool_configuration_database_or_control_has_raw_only(harness, mut
     assert not (harness.output / 'redis.evidence-manifest.json').exists()
 
 
+def test_source_control_accepts_bound_nvd_alias_and_preserves_raw_primary(harness):
+    def alias(report, query):
+        if query == 'cpe:2.3:a:redislabs:redis:5.0.0:*:*:*:*:*:*:*':
+            match = report['matches'][0]
+            match['vulnerability']['id'] = 'BIT-redis-2021-32675'
+            match['relatedVulnerabilities'] = [{'id': 'CVE-2021-32675', 'namespace': 'nvd:cpe',
+                'dataSource': 'https://nvd.nist.gov/vuln/detail/CVE-2021-32675', 'urls': [], 'cvss': []}]
+    harness.state.grype_mutate = alias
+    harness.run()
+    metadata = json.loads((harness.output / 'redis.metadata.json').read_bytes())
+    control = metadata['complement']['sentinels'][0]
+    raw = (harness.output / control['report_path']).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == control['report_sha256']
+    assert json.loads(raw)['matches'][0]['vulnerability']['id'] == 'BIT-redis-2021-32675'
+    assert control['required_advisories'] == ['CVE-2021-32675']
+    assert metadata['verdict'] == 'passed' and metadata['findings'] == []
+    assert harness.state.grype_calls[-1] == 'cleanup' and harness.calls[-1] == 'cleanup'
+
+
+@pytest.mark.parametrize('mutation', ['namespace', 'url', 'mixed', 'duplicate', 'cvss', 'epss'])
+def test_source_control_refuses_bad_related_even_when_primary_matches_and_cleans(harness, mutation):
+    def malformed(report, query):
+        if query != 'cpe:2.3:a:redislabs:redis:5.0.0:*:*:*:*:*:*:*':
+            return
+        item = {'id': 'CVE-2021-32675', 'namespace': 'nvd:cpe',
+                'dataSource': 'https://nvd.nist.gov/vuln/detail/CVE-2021-32675', 'urls': [], 'cvss': []}
+        aliases = [item]
+        if mutation == 'namespace':
+            item['namespace'] = 'foreign'
+        elif mutation == 'url':
+            item['dataSource'] += '?foreign'
+        elif mutation in {'cvss', 'epss'}:
+            item[mutation] = [{}]
+        else:
+            aliases.append(dict(item) if mutation == 'duplicate' else None)
+        report['matches'][0]['relatedVulnerabilities'] = aliases
+    harness.state.grype_mutate = malformed
+    with pytest.raises(ValueError):
+        harness.run()
+    assert harness.state.grype_calls[-1] == 'cleanup' and harness.calls[-1] == 'cleanup'
+    assert len(harness.state.grype_calls) == 3  # Abort before another control or component query.
+    assert list(harness.output.glob('redis.complement-*/sentinel-0.json'))
+    assert not (harness.output / 'redis.metadata.json').exists()
+    assert not (harness.output / 'redis.evidence-manifest.json').exists()
+
+
 @pytest.mark.parametrize('error', [TimeoutError('synthetic bounded deadline'), KeyboardInterrupt()])
 def test_tool_timeout_and_cancel_preserve_primary_and_dispose_both_contexts(harness, error):
     harness.state.grype_error = error

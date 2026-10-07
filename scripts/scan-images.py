@@ -399,14 +399,13 @@ def scan(args, pins, diagnostic):
                     diagnostic.at("sentinel_query")
                     sentinel = runtime.run_query(query, path)
                     diagnostic.at("sentinel_report")
-                    components.validate_report(sentinel, query=query, configuration=runtime.configuration,
-                                               database_status=runtime.database_status)
+                    components.validate_sentinel_report(sentinel, query=query, configuration=runtime.configuration,
+                                                        database_status=runtime.database_status,
+                                                        required_advisories=identifiers)
                     current_providers = sentinel["descriptor"]["db"]["providers"]
                     if providers is not None and current_providers != providers:
                         raise ValueError("Complement database provider metadata changed")
                     providers = current_providers
-                    if not identifiers.intersection({match["vulnerability"]["id"] for match in sentinel["matches"]}):
-                        raise ValueError("Complement scanner known-vulnerable sentinel did not match")
                     sentinels.append({"query": query, "report_path": path.relative_to(args.output).as_posix(),
                                       "report_sha256": capture_report(path, sentinel),
                                       "required_advisories": sorted(identifiers)})
