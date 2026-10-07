@@ -69,7 +69,7 @@ def configuration(cache, platform="linux/amd64"):
 
 
 def status(cache):
-    return {"schemaVersion": "6.1.10", "from": "https://grype.anchore.io/databases/v6/"
+    return {"schemaVersion": "v6.1.10", "from": "https://grype.anchore.io/databases/v6/"
             "vulnerability-db_v6.1.10_2026-10-07T00:00:00Z.tar.zst?checksum=sha256%3A" + "a" * 64,
             "built": (datetime.now(UTC) - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
             "path": str(cache / "6" / "vulnerability.db"), "valid": True}
@@ -110,7 +110,7 @@ def synthetic(tmp_path, monkeypatch):
             value = state.status or status(cache)
             (database / "vulnerability.db").write_bytes(b"synthetic DB\r\n\x1a")
             (database / "import.json").write_bytes(runtime.canonical({"source": value["from"],
-                "digest": "xxh64:" + "a" * 16, "client_version": "6.1.10"}))
+                "digest": "xxh64:" + "a" * 16, "client_version": "v6.1.10"}))
             (database / "last_update_check").write_text(datetime.now(UTC).isoformat())
             if state.update_mutate:
                 state.update_mutate(database)
@@ -726,6 +726,69 @@ def test_database_future_status_and_fetched_time_refused(tmp_path):
         runtime.validate_status(value, cache, (datetime.now(UTC) + timedelta(seconds=1)).isoformat())
 
 
+def test_official_v6_pair_preserves_raw_status_import_and_command_trace(synthetic):
+    # Pinned producer: SchemaVer.String and writeImportMetadata both retain "v".
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        observed = status(handle.cache)
+        observed["built"] = handle.database_status["built"]
+        assert handle.database_status == observed
+        assert handle.status_bytes == runtime.canonical(observed)
+        imported = handle.db_guards["import.json"].read_json()
+        assert imported == {"source": observed["from"], "digest": "xxh64:" + "a" * 16,
+                            "client_version": "v6.1.10"}
+        assert handle.db_guards["import.json"].sha256 == hashlib.sha256(
+            runtime.canonical(imported)).hexdigest()
+        operations = ["download" if command[0] == sys.executable else
+                      next(operation for operation in ("version", "update", "status")
+                           if operation in command) for command in synthetic.calls]
+        assert operations == ["download", "version", "update", "status"]
+    assert not list(synthetic.scratch.iterdir())
+
+
+@pytest.mark.parametrize("value", ["6.1.10", "v5.1.10", "v7.1.10", "v6.1", "v6.1.10.0",
+                                  "v6.1.1000", " v6.1.10", "v6.1.10\n", True, 6, 6.1, None, {}, []])
+def test_official_schema_representation_refuses_aliases_without_normalization(tmp_path, value):
+    cache = tmp_path / "database"
+    observed = status(cache)
+    observed["schemaVersion"] = value
+    before = runtime.canonical(observed)
+    with pytest.raises(runtime.GrypeRuntimeError, match="database"):
+        runtime.validate_status(observed, cache, datetime.now(UTC).isoformat())
+    assert runtime.canonical(observed) == before
+
+
+@pytest.mark.parametrize("field,phase", [("schemaVersion", "status"),
+                                        ("client_version", "import_validation")])
+def test_unprefixed_producer_field_refuses_before_yield_with_complete_cleanup(
+        synthetic, monkeypatch, field, phase):
+    original_run = runtime.run
+
+    def run(command, **kwargs):
+        raw = original_run(command, **kwargs)
+        if field == "schemaVersion" and "status" in command:
+            observed = runtime.decode_json(raw)
+            observed[field] = "6.1.10"
+            return runtime.canonical(observed)
+        return raw
+
+    def mutate(database):
+        path = database / "import.json"
+        observed = json.loads(path.read_bytes())
+        observed[field] = "6.1.10"
+        path.write_bytes(runtime.canonical(observed))
+
+    monkeypatch.setattr(runtime, "run", run)
+    if field == "client_version":
+        synthetic.update_mutate = mutate
+    with pytest.raises(runtime.GrypeRuntimeError, match="database") as caught:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert caught.value.prepare_phase == phase
+    assert len(synthetic.calls) == 4
+    assert not list(synthetic.scratch.iterdir())
+    assert not getattr(caught.value, "__notes__", [])
+
+
 def test_database_update_failure_no_fallback(synthetic):
     synthetic.update_fail = True
     with pytest.raises(runtime.GrypeRuntimeError, match="nonzero"):
@@ -990,7 +1053,10 @@ def test_extra_database_file_refuses_and_preserves_unknown(synthetic):
 
 
 @pytest.mark.parametrize("field,value", [("digest", "sha256:wrong"), ("source", "https://evil.invalid"),
-                                      ("client_version", "6.0.0")])
+                                      ("client_version", "6.1.10"), ("client_version", "v6.0.0"),
+                                      ("client_version", "v5.1.10"), ("client_version", "v7.1.10"),
+                                      ("client_version", "v6.1.10\n"), ("client_version", True),
+                                      ("client_version", 6), ("client_version", None)])
 def test_import_metadata_integrity_contract_is_not_invented_or_ignored(synthetic, field, value):
     def mutate(database):
         path = database / "import.json"

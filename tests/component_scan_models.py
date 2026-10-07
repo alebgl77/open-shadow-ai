@@ -85,7 +85,7 @@ def runtime_receipt(root, now=None):
             "manifest_sha256": fingerprints["requirements/component-scanner.json"],
             "config_template_sha256": fingerprints["requirements/grype.yaml"],
             "config_sha256": hashlib.sha256(runtime.canonical(rendered)).hexdigest(), "configuration": config,
-            "database": {"status": {"valid": True, "schemaVersion": "6.1.10",
+            "database": {"status": {"valid": True, "schemaVersion": "v6.1.10",
                 "from": "https://grype.anchore.io/databases/v6/db.tar.zst?checksum=sha256%3A" + "a" * 64,
                 "path": config["db"]["cache-dir"] + "/6/vulnerability.db",
                 "built": (now - timedelta(hours=1)).isoformat()}, "fetched_at": now.isoformat(),

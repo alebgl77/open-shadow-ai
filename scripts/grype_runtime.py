@@ -704,7 +704,7 @@ def validate_status(value, cache, fetched_at):
     if value.get("valid") is not True or value.get("error") is not None and value.get("error") != "":
         raise GrypeRuntimeError("database")
     if not isinstance(value.get("schemaVersion"), str) or \
-            not re.fullmatch(r"6\.\d{1,3}\.\d{1,3}", value["schemaVersion"]):
+            not re.fullmatch(r"v6\.\d{1,3}\.\d{1,3}", value["schemaVersion"]):
         raise GrypeRuntimeError("database")
     if value.get("path") != str(cache / "6" / "vulnerability.db"):
         raise GrypeRuntimeError("database")
@@ -911,7 +911,7 @@ class Runtime:
         self.prepare_phase = "import_validation"
         imported = self.db_guards["import.json"].read_json()
         if imported.get("source") != self.database_status["from"] or \
-                imported.get("client_version") != "6.1.10" or \
+                imported.get("client_version") != "v6.1.10" or \
                 not isinstance(imported.get("digest"), str) or \
                 not re.fullmatch(r"xxh64:[0-9a-f]{16}", imported["digest"]):
             raise GrypeRuntimeError("database")
