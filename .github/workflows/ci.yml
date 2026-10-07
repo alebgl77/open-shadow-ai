@@ -26,7 +26,15 @@ jobs:
           python -m pip install --only-binary=:all: --require-hashes -r requirements/development.txt
           python -m pip install --no-deps --no-build-isolation . ./agent
       - run: python -m ruff check src tests agent/shadai_agent migrations scripts
-      - run: python -m pytest -q
+      - run: python -m pytest -q --junitxml artifacts/python-tests-${{ matrix.python-version }}.xml -o junit_logging=no
+      - name: Retain bounded Python test outcomes without captured output
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: python-tests-${{ matrix.python-version }}
+          path: artifacts/python-tests-${{ matrix.python-version }}.xml
+          if-no-files-found: error
+          retention-days: 7
       - run: python scripts/verify-deployment.py
   network-sensor:
     runs-on: ubuntu-24.04-arm
@@ -340,6 +348,7 @@ jobs:
           python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
           python scripts/verify-oci-evidence.py artifacts/runtime.oci.tar --platform '${{ steps.tools.outputs.platform }}' --output artifacts/evidence.json
           python scripts/scan-images.py --input artifacts/runtime.oci.tar --image '${{ matrix.image }}' --platform '${{ steps.tools.outputs.platform }}' --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/image-audit
+          python scripts/verify-scan-evidence.py --input artifacts/runtime.oci.tar --audit artifacts/image-audit --image '${{ matrix.image }}' --platform '${{ steps.tools.outputs.platform }}' --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output 'artifacts/image-audit/${{ matrix.image }}.evidence-manifest.json'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -403,6 +412,7 @@ jobs:
           file: deploy/service-builds/Dockerfile.${{ matrix.service }}
           tags: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
           push: false
+          load: ${{ matrix.service == 'clickhouse' }}
           platforms: ${{ steps.tools.outputs.platform }}
           outputs: type=oci,dest=artifacts/runtime.oci.tar
           provenance: mode=max
@@ -411,7 +421,12 @@ jobs:
         run: |
           python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt
           python scripts/verify-oci-evidence.py artifacts/runtime.oci.tar --platform '${{ steps.tools.outputs.platform }}' --output artifacts/evidence.json
+          if [ '${{ matrix.service }}' = clickhouse ]; then
+            mkdir -p artifacts/image-audit
+            python scripts/observe-clickhouse-version.py --input artifacts/runtime.oci.tar --platform '${{ steps.tools.outputs.platform }}' --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/image-audit/clickhouse.principal-observation.json
+          fi
           python scripts/scan-images.py --input artifacts/runtime.oci.tar --image '${{ matrix.service }}' --platform '${{ steps.tools.outputs.platform }}' --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/image-audit
+          python scripts/verify-scan-evidence.py --input artifacts/runtime.oci.tar --audit artifacts/image-audit --image '${{ matrix.service }}' --platform '${{ steps.tools.outputs.platform }}' --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output 'artifacts/image-audit/${{ matrix.service }}.evidence-manifest.json'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -483,6 +498,8 @@ jobs:
           if [ '${{ matrix.os }}' = ubuntu-24.04-arm ]; then platform=linux/arm64; else platform=linux/amd64; fi
           python scripts/verify-oci-evidence.py artifacts/runtime.oci.tar --platform "$platform" --output artifacts/rechecked-evidence.json
           python -c "import json; from pathlib import Path; a=json.loads(Path('artifacts/evidence.json').read_text()); b=json.loads(Path('artifacts/rechecked-evidence.json').read_text()); assert a == b, 'Downloaded OCI archive/evidence changed'"
+          python scripts/verify-scan-evidence.py --input artifacts/runtime.oci.tar --audit artifacts/image-audit --image '${{ matrix.image }}' --platform "$platform" --source-commit '${{ github.sha }}' --repository '${{ github.repository }}' --output artifacts/revalidated-scan-evidence-manifest.json
+          cmp 'artifacts/image-audit/${{ matrix.image }}.evidence-manifest.json' artifacts/revalidated-scan-evidence-manifest.json
       - name: Sign the exact scanned OCI archive with ephemeral GitHub Sigstore identity
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -490,14 +507,24 @@ jobs:
           subject-path: artifacts/runtime.oci.tar
           push-to-registry: false
           create-storage-record: false
+      - name: Sign the separate complete scanner evidence manifest
+        id: attest-evidence
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: artifacts/revalidated-scan-evidence-manifest.json
+          push-to-registry: false
+          create-storage-record: false
       - name: Verify signature, repository, workflow, ref and exact source commit
         env:
           GH_TOKEN: ${{ github.token }}
           ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          EVIDENCE_ATTESTATION_BUNDLE: ${{ steps.attest-evidence.outputs.bundle-path }}
         run: |
           python scripts/download-gh-verifier.py --output "$RUNNER_TEMP/gh-verifier"
           "$RUNNER_TEMP/gh-verifier/bin/gh" attestation verify artifacts/runtime.oci.tar --repo "${{ github.repository }}" --signer-workflow "${{ github.repository }}/.github/workflows/ci.yml" --source-ref "${{ github.ref }}" --source-digest "${{ github.sha }}" --deny-self-hosted-runners --bundle "$ATTESTATION_BUNDLE" --format json > artifacts/signature-verification.json
           cp "$ATTESTATION_BUNDLE" artifacts/sigstore-bundle.json
+          "$RUNNER_TEMP/gh-verifier/bin/gh" attestation verify artifacts/revalidated-scan-evidence-manifest.json --repo "${{ github.repository }}" --signer-workflow "${{ github.repository }}/.github/workflows/ci.yml" --source-ref "${{ github.ref }}" --source-digest "${{ github.sha }}" --deny-self-hosted-runners --bundle "$EVIDENCE_ATTESTATION_BUNDLE" --format json > artifacts/evidence-signature-verification.json
+          cp "$EVIDENCE_ATTESTATION_BUNDLE" artifacts/evidence-sigstore-bundle.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-evidence-${{ matrix.image }}-${{ matrix.os }}
@@ -505,5 +532,8 @@ jobs:
             artifacts/evidence.json
             artifacts/signature-verification.json
             artifacts/sigstore-bundle.json
+            artifacts/revalidated-scan-evidence-manifest.json
+            artifacts/evidence-signature-verification.json
+            artifacts/evidence-sigstore-bundle.json
           if-no-files-found: error
           retention-days: 7

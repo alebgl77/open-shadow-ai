@@ -1,0 +1,21 @@
+{
+  "check-for-app-update": false,
+  "add-cpes-if-none": false,
+  "only-fixed": false,
+  "only-notfixed": false,
+  "ignore-states": "",
+  "ignore": [],
+  "exclude": [],
+  "vex-documents": [],
+  "vex-add": [],
+  "include-matcher-suppressions": true,
+  "fail-on-severity": "",
+  "db": {
+    "update-url": "https://grype.anchore.io/databases",
+    "auto-update": false,
+    "validate-by-hash-on-start": true,
+    "validate-age": true,
+    "max-allowed-built-age": "24h",
+    "require-update-check": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "version": "0.120.1",
+  "commit": "6f8d854af29d3a3086b11a84afa51554a2a245fe",
+  "checksum_file_sha256": "c25b6095265b44fd9bbb9dbe76aca8daa394c5f0490793d2b52b16be4f5b71b1",
+  "archives": {
+    "linux/amd64": {
+      "url": "https://github.com/anchore/grype/releases/download/v0.120.1/grype_0.120.1_linux_amd64.tar.gz",
+      "sha256": "0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d",
+      "bytes": 32270829
+    },
+    "linux/arm64": {
+      "url": "https://github.com/anchore/grype/releases/download/v0.120.1/grype_0.120.1_linux_arm64.tar.gz",
+      "sha256": "29f47391dc283aa79fcc38e65224cd61f64dec0ecfd0db7074128ebf8ff23514",
+      "bytes": 29446856
+    }
+  }
+}

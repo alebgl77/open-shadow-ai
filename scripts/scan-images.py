@@ -8,12 +8,28 @@ import os
 import re
 import subprocess
 import uuid
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 TRIVY_VERSION = "0.75.0"
+EVIDENCE_SOURCE_FILES = (
+    "scripts/scan-images.py", "scripts/component_scanner.py", "scripts/component_source.py",
+    "scripts/component_principal.py",
+    "scripts/oci_scan_layout.py", "scripts/verify-oci-evidence.py", "scripts/verify-image-pins.py",
+    "scripts/verify-scan-evidence.py", ".github/workflows/ci.yml", ".dockerignore",
+    "scripts/audit-dependencies.py", "requirements/runtime.txt", "requirements/development.txt",
+    "requirements/images.json", "requirements/service-builds/manifest.json",
+)
+
+
+def source_fingerprints(root, maintained=False, principal=False):
+    files = EVIDENCE_SOURCE_FILES + (("scripts/grype_runtime.py", "requirements/component-scanner.json",
+                                      "requirements/grype.yaml") if maintained else ())
+    if principal:
+        files += ("scripts/observe-clickhouse-version.py",)
+    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files}
 
 
 def script(name):
@@ -100,7 +116,7 @@ def immutable_subject(reference: str) -> tuple[str, str]:
 
 def gate(report: dict, *, expected: set | None = None, image_id: str | None = None,
          artifact: str | None = None, platform: str | None = None, reference: str | None = None,
-         ecosystems: set | None = None) -> list[str]:
+         ecosystems: set | None = None, complement: dict | None = None) -> list[str]:
     results = report.get("Results") if isinstance(report, dict) else None
     if not isinstance(results, list) or not results:
         raise ValueError("Image scanner produced no results")
@@ -120,6 +136,7 @@ def gate(report: dict, *, expected: set | None = None, image_id: str | None = No
         if platform != f"{config.get('os')}/{config.get('architecture')}":
             raise ValueError("Trivy report native platform mismatch")
     covered, targets, package_instances = set(), set(), set()
+    observed_main = set()
     findings = []
     for result in results:
         if not isinstance(result, dict) or not isinstance(result.get("Target"), str) or not result["Target"] or \
@@ -133,6 +150,16 @@ def gate(report: dict, *, expected: set | None = None, image_id: str | None = No
         if not isinstance(packages, list) or not packages:
             raise ValueError("Trivy report requires complete --list-all-pkgs inventory")
         for package in packages:
+            if complement and isinstance(package, dict) and not package.get("Version"):
+                claim = next((claim for claim in complement["components"] if claim["observed_unversioned"] and
+                              claim["original_package"]["name"] == package.get("Name")), None)
+                if claim is None or claim["spdx_id"] in observed_main:
+                    raise ValueError("Unexpected or duplicate Trivy unversioned main module")
+                script("component_scanner").validate_main_observation(package, result, claim)
+                if package.get("Layer", {}).get("Digest") != claim["original_binary_file"]["comment"].split(" ")[1]:
+                    raise ValueError("Trivy main module binary layer differs from SPDX observation")
+                observed_main.add(claim["spdx_id"])
+                continue
             if not isinstance(package, dict) or not package.get("Name") or not package.get("Version"):
                 raise ValueError("Malformed Trivy package inventory")
             key = package_key(package.get("Identifier", {}).get("PURL"))
@@ -164,6 +191,9 @@ def gate(report: dict, *, expected: set | None = None, image_id: str | None = No
         missing, extra = expected - covered, covered - expected
         raise ValueError(f"Trivy report does not cover exact package inventory: "
                          f"missing={sorted(missing)}, extra={sorted(extra)}")
+    if complement and observed_main != {claim["spdx_id"] for claim in complement["components"]
+                                       if claim["observed_unversioned"]}:
+        raise ValueError("Trivy report lacks the original unversioned main module observation")
     return findings
 
 
@@ -180,13 +210,18 @@ def main() -> None:
     args = parser.parse_args()
     if bool(args.input) == args.infrastructure or bool(args.image) != bool(args.input):
         parser.error("Choose --input with --image, or --infrastructure")
+    args.output.mkdir(parents=True, exist_ok=True)
+    early_targets = [args.image] if args.image else [name for name, role in pins.ROLES.items() if role == "runtime"]
+    for name in early_targets:
+        for suffix in (".metadata.json", ".evidence-manifest.json"):
+            (args.output / (name + suffix)).unlink(missing_ok=True)
     images_path = ROOT / "requirements/images.json"
     images_bytes = images_path.read_bytes()
     images = pins.inventory(ROOT)
     service_manifest = pins.check_service_builds(ROOT, images)
     service_manifest_path = ROOT / "requirements/service-builds/manifest.json"
     service_manifest_bytes = service_manifest_path.read_bytes()
-    args.output.mkdir(parents=True, exist_ok=True)
+    source_hashes = source_fingerprints(ROOT, args.image in pins.SERVICES, args.image == "clickhouse")
     cache = ROOT / "tmp/production-delivery/trivy-cache"
     cache.mkdir(parents=True, exist_ok=True)
     references = {name: image["reference"] for name, image in images.items() if image["role"] == "runtime"} \
@@ -200,15 +235,24 @@ def main() -> None:
     repository = args.repository or os.environ.get("GITHUB_REPOSITORY") or "local"
     failures = []
     pending_metadata = []
+    report_inputs = {}
+
+    def capture_report(path, expected_json=None):
+        data = script("verify-scan-evidence").read(path)
+        if expected_json is not None and script("verify-scan-evidence").decode(data) != expected_json:
+            raise ValueError("Raw scanner report differs from validated observations")
+        fingerprint = hashlib.sha256(data).hexdigest()
+        report_inputs[path] = fingerprint
+        return fingerprint
     for name in targets:
         # A rejected snapshot/preflight must not leave a prior successful scan sidecar.
-        for suffix in (".json", ".metadata.json", ".inventory.json"):
+        for suffix in (".json", ".metadata.json", ".inventory.json", ".evidence-manifest.json"):
             (args.output / (name + suffix)).unlink(missing_ok=True)
     context = script("oci_scan_layout").prepared_layout(
         args.input, platform=args.platform, scratch_parent=cache.parent,
         expected_source={"commit": source_commit, "repository": repository}, expected_component=args.image,
     ) if args.input else nullcontext(None)
-    with context as layout:
+    with context as layout, ExitStack() as component_contexts:
         for name, reference in targets.items():
             maintained = name in pins.SERVICES
             python_runtime = name in pins.APP_IMAGES and name != "frontend"
@@ -257,19 +301,110 @@ def main() -> None:
             output.with_suffix(".metadata.json").unlink(missing_ok=True)
             scan_command = [*command, "--format", "json", "--output", f"/output/{output.name}", *source]
             subprocess.run(scan_command, check=True)
-            report = json.loads(output.read_text(encoding="utf-8"))
+            report = script("verify-scan-evidence").decode(script("verify-scan-evidence").read(output))
+            report_hash = capture_report(output, report)
             layout_metadata = layout.assert_unchanged() if layout else None
+            complement = None
+            complement_evidence = None
+            principal_evidence = None
             if args.input:
-                expected = spdx_inventory(evidence["sboms"][image_digest], frontend=name == "frontend",
-                                          service=maintained)
+                if maintained:
+                    components = script("component_scanner")
+                    source_binding = script("component_source")
+                    documents = source_binding.subject_documents(layout, image_digest)
+                    complement = components.partition(evidence["sboms"][image_digest], service=name,
+                                                      package_key=package_key)
+                    expected_source = {"commit": source_commit, "repository": repository}
+                    components.bind_components(complement, documents=documents, service=name, platform=args.platform,
+                                               root=ROOT, service_manifest=service_manifest,
+                                               expected_source=expected_source, binder=source_binding.bind)
+                    if name == "clickhouse":
+                        principal = script("component_principal")
+                        expected_ci = principal.ci_identity(os.environ)
+                        principal_path = principal.canonical_receipt_path(args.output / principal.RECEIPT_NAME,
+                                                                         expected_parent=args.output)
+                        principal_bytes = script("verify-scan-evidence").read(principal_path)
+                        if len(principal_bytes) > 16 * 1024:
+                            raise ValueError("Principal observation exceeds receipt budget")
+                        observation = script("verify-scan-evidence").decode(principal_bytes)
+                        principal.validate_receipt(observation, subject={**subject,
+                            "image_manifest": "sha256:" + image_digest.removeprefix("sha256:"),
+                            "platform": args.platform},
+                            config=documents["config"], expected_source=expected_source, expected_ci=expected_ci,
+                            collector_sha256=source_hashes["scripts/observe-clickhouse-version.py"],
+                            process_module_sha256=source_hashes["scripts/grype_runtime.py"])
+                        proof = source_binding.bind_clickhouse(documents["provenance"]["statement"]["predicate"],
+                            platform=args.platform, selected_manifest=documents["manifest"], root=ROOT,
+                            service_manifest=service_manifest, expected_source=expected_source, expected_ci=expected_ci)
+                        principal_hash = hashlib.sha256(principal_bytes).hexdigest()
+                        report_inputs[principal_path] = principal_hash
+                        components.declare_clickhouse(complement, receipt=observation, receipt_sha256=principal_hash,
+                                                     source_proof=proof)
+                        principal_evidence = {"report_path": principal_path.name, "report_sha256": principal_hash,
+                                              "receipt": observation}
+                    expected = complement["native"]
+                else:
+                    expected = spdx_inventory(evidence["sboms"][image_digest], frontend=name == "frontend")
                 if python_runtime and not \
                         {("pypi", package, version) for package, version in closure.items()} <= expected:
                     raise ValueError("Image SBOM does not include the complete native runtime hash-lock closure")
             ecosystems = None if reference or maintained else \
                 {"deb", "apk"} if name == "frontend" else {"deb", "apk", "pypi"}
-            failures.extend(gate(report, expected=expected, image_id=image_id, artifact=artifact,
-                                 platform=args.platform,
-                                 reference=reference, ecosystems=ecosystems))
+            target_failures = gate(report, expected=expected, image_id=image_id, artifact=artifact,
+                                   platform=args.platform, reference=reference, ecosystems=ecosystems,
+                                   complement=complement)
+            if maintained:
+                runtime = component_contexts.enter_context(script("grype_runtime").prepared_grype(
+                    scratch_parent=cache.parent, manifest_path=ROOT / "requirements/component-scanner.json",
+                    config_path=ROOT / "requirements/grype.yaml", platform=args.platform))
+                query_directory = args.output / f"{name}.complement-{invocation}"
+                query_directory.mkdir(mode=0o700, exist_ok=False)
+                sentinels = []
+                providers = None
+                for index, (query, identifiers) in enumerate((
+                    ("cpe:2.3:a:redislabs:redis:5.0.0:*:*:*:*:*:*:*", {"CVE-2021-32675"}),
+                    ("pkg:golang/golang.org/x/crypto@0.1.0", {"CVE-2023-48795", "GHSA-45x7-px36-x8w8",
+                                                            "GO-2023-2402"}),
+                )):
+                    path = query_directory / f"sentinel-{index}.json"
+                    sentinel = runtime.run_query(query, path)
+                    components.validate_report(sentinel, query=query, configuration=runtime.configuration,
+                                               database_status=runtime.database_status)
+                    current_providers = sentinel["descriptor"]["db"]["providers"]
+                    if providers is not None and current_providers != providers:
+                        raise ValueError("Complement database provider metadata changed")
+                    providers = current_providers
+                    if not identifiers.intersection({match["vulnerability"]["id"] for match in sentinel["matches"]}):
+                        raise ValueError("Complement scanner known-vulnerable sentinel did not match")
+                    sentinels.append({"query": query, "report_path": path.relative_to(args.output).as_posix(),
+                                      "report_sha256": capture_report(path, sentinel),
+                                      "required_advisories": sorted(identifiers)})
+                reports = []
+                for claim in complement["components"]:
+                    for query in claim["queries"]:
+                        path = query_directory / f"query-{len(reports):02d}.json"
+                        raw_report = runtime.run_query(query, path)
+                        if raw_report.get("descriptor", {}).get("db", {}).get("providers") != providers:
+                            raise ValueError("Complement database provider metadata changed")
+                        target_failures.extend(components.validate_report(
+                            raw_report, query=query, configuration=runtime.configuration,
+                            database_status=runtime.database_status))
+                        reports.append((claim, query, str(path.relative_to(args.output)).replace("\\", "/"),
+                                        capture_report(path, raw_report)))
+                runtime_receipt = runtime.assert_unchanged()
+                if components.digest(evidence["sboms"][image_digest]) != complement["spdx_sha256"]:
+                    raise ValueError("Original SPDX observations changed during complement scan")
+                complement_evidence = {"schema": 1, "spdx_sha256": complement["spdx_sha256"],
+                                       "software_package_count": complement["software_package_count"],
+                                       "components": complement["components"], "runtime": runtime_receipt,
+                                       "principal_observation": principal_evidence,
+                                       "sentinels": sentinels, "receipts": [components.query_receipt(
+                    claim=claim, query=query, report_path=path, report_sha256=report_hash,
+                    subject=subject, platform=args.platform, expected_source=expected_source,
+                    sbom_blob=documents["sbom"]["blob"], provenance_blob=documents["provenance"]["blob"],
+                    runtime_receipt=runtime_receipt) for claim, query, path, report_hash in reports]}
+                layout_metadata = layout.assert_unchanged()
+            failures.extend(target_failures)
             if args.input:
                 with args.input.open("rb") as source_file:
                     if hashlib.file_digest(source_file, "sha256").hexdigest() != subject["archive_sha256"]:
@@ -282,6 +417,7 @@ def main() -> None:
                 raise ValueError("Maintained service manifest changed during image scan")
             pins.check_service_builds(ROOT, images)
             metadata = {"invocation": invocation, "platform": args.platform, "subject": subject,
+                        "verdict": "failed" if target_failures else "passed", "findings": target_failures,
                         "command": scan_command,
                         "source_commit": source_commit, "repository": repository,
                         "source_dirty": bool(subprocess.check_output(
@@ -289,18 +425,25 @@ def main() -> None:
                         "scanner_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                         "scanner": images["trivy"]["reference"], "expected_packages": sorted(expected),
                         "images_manifest_sha256": hashlib.sha256(images_bytes).hexdigest(),
-                        "report_sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
+                        "report_sha256": report_hash}
+            metadata["source_fingerprints"] = source_hashes
             if layout:
                 metadata["oci_layout"] = layout_metadata
             if maintained:
                 metadata["role"] = "derived-runtime"
                 metadata["service_recipe"] = service_manifest["services"][name]
                 metadata["service_manifest_sha256"] = hashlib.sha256(service_manifest_bytes).hexdigest()
+                metadata["complement"] = complement_evidence
             if args.input and python_runtime:
                 metadata["lock_sha256"] = hashlib.sha256(lock.read_bytes()).hexdigest()
                 metadata["expected_dependencies"] = closure
             pending_metadata.append((output.with_suffix(".metadata.json"), metadata))
     # Successful disposal is part of the proof; a refused cleanup cannot publish success metadata.
+    if source_fingerprints(ROOT, args.image in pins.SERVICES, args.image == "clickhouse") != source_hashes:
+        raise ValueError("Scanner source inputs changed during image scan")
+    for path, fingerprint in report_inputs.items():
+        if hashlib.sha256(script("verify-scan-evidence").read(path)).hexdigest() != fingerprint:
+            raise ValueError("Raw scanner evidence changed during image scan")
     for path, metadata in pending_metadata:
         path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     if failures:
