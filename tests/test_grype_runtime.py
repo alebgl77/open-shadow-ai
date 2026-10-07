@@ -1,6 +1,7 @@
 """Synthetic security-boundary checks; actual Linux Grype/DB scans remain CI gates."""
 
 import copy
+import errno
 import gc
 import hashlib
 import importlib.util
@@ -663,16 +664,171 @@ def test_process_cleanup_failure_preserves_primary_and_marks_constant_secondary(
 
 @pytest.mark.skipif(os.name != "posix", reason="real owned descendant process-group proof requires POSIX")
 def test_descendants_cleaned_even_when_direct_parent_succeeds(tmp_path):
-    program = ("import subprocess,sys;"
-               "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],stdout=subprocess.DEVNULL);"
-               "print(p.pid,flush=True)")
-    result = runtime.run([sys.executable, "-I", "-B", "-c", program],
-                         environment=runtime.clean_environment(tmp_path), cwd=tmp_path,
-                         deadline=time.monotonic() + 5, limit=4096)
-    pid = int(result)
-    observed = Path(f"/proc/{pid}/stat")
-    if observed.exists():
-        assert observed.read_text().split(")", 1)[1].split()[0] == "Z"
+    witness = run_owned_descendant(tmp_path, seconds=60)
+    assert_owned_descendant_stopped(witness)
+
+
+def descendant_witness(raw):
+    value = runtime.decode_json(raw, 4096)
+    assert set(value) == {"pid", "startticks"}
+    assert all(type(value[key]) is int and value[key] > 0 for key in value)
+    return value
+
+
+def descendant_stat(raw, pid):
+    assert type(raw) is bytes and len(raw) <= 4096
+    prefix, closing, tail = raw.rpartition(b")")
+    identity, opening, _ = prefix.partition(b" (")
+    fields = tail.split()
+    assert opening and closing and identity.isdigit() and int(identity) == pid
+    assert len(fields) >= 20 and fields[0] in {bytes([state]) for state in b"RSDZTWtXxKWPI"}
+    assert fields[19].isdigit() and int(fields[19]) > 0
+    return fields[0], int(fields[19])
+
+
+def read_descendant_stat(pid):
+    with Path(f"/proc/{pid}/stat").open("rb") as stream:
+        return stream.read(4097)
+
+
+def assert_owned_descendant_stopped(witness, *, timeout=2, read=read_descendant_stat,
+                                    clock=time.monotonic, pause=time.sleep):
+    assert set(witness) == {"pid", "startticks"}
+    assert all(type(value) is int and value > 0 for value in witness.values())
+    assert type(timeout) in {int, float} and 0 < timeout <= 5
+    deadline = clock() + timeout
+    while True:
+        assert clock() < deadline, "owned descendant still live at deadline"
+        try:
+            state, startticks = descendant_stat(read(witness["pid"]), witness["pid"])
+        except OSError as error:
+            if error.errno in {errno.ENOENT, errno.ESRCH}:
+                assert clock() < deadline, "owned descendant still live at deadline"
+                return
+            raise
+        assert clock() < deadline, "owned descendant still live at deadline"
+        if startticks != witness["startticks"] or state == b"Z":
+            return
+        remaining = deadline - clock()
+        assert remaining > 0, "owned descendant still live at deadline"
+        pause(min(0.01, remaining))
+
+
+def run_owned_descendant(tmp_path, *, seconds):
+    program = (
+        "import json,subprocess,sys;from pathlib import Path;"
+        f"p=subprocess.Popen([sys.executable,'-c','import time;time.sleep({seconds})'],stdout=subprocess.DEVNULL);"
+        "stat=Path('/proc/'+str(p.pid)+'/stat').open('rb');raw=stat.read(4097);stat.close();assert len(raw)<=4096;"
+        "fields=raw.rsplit(b')',1)[1].split();assert fields[19].isdigit() and int(fields[19])>0;"
+        "print(json.dumps({'pid':p.pid,'startticks':int(fields[19])}),flush=True)"
+    )
+    raw = runtime.run([sys.executable, "-I", "-B", "-c", program],
+                      environment=runtime.clean_environment(tmp_path), cwd=tmp_path,
+                      deadline=time.monotonic() + 5, limit=4096)
+    return descendant_witness(raw)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="real group-signal suppression and automatic descendant exit need POSIX")
+def test_descendant_wait_refuses_real_suppressed_group_signal_then_observes_automatic_exit(tmp_path, monkeypatch):
+    children, requests = [], []
+    real_child = runtime.OwnedPopen
+
+    class Child(real_child):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            children.append(self)
+
+    def suppressed(pid, signum):
+        assert len(children) == 1 and pid == children[0].pid and signum == runtime.signal.SIGKILL
+        assert runtime.peek_owned_returncode(children[0]) == 0  # The owned leader remains unreaped here.
+        requests.append((pid, signum))
+
+    with monkeypatch.context() as boundary:
+        boundary.setattr(runtime, "OwnedPopen", Child)
+        boundary.setattr(runtime.os, "killpg", suppressed)
+        witness = run_owned_descendant(tmp_path, seconds=5)
+    assert children[0].returncode == 0 and requests == [(children[0].pid, runtime.signal.SIGKILL)]
+    try:
+        with pytest.raises(AssertionError, match="owned descendant still live at deadline"):
+            assert_owned_descendant_stopped(witness)
+    finally:
+        # The bounded control exits by itself; no PID/group signal or reap after the leader was released.
+        assert_owned_descendant_stopped(witness, timeout=5)
+
+
+def synthetic_descendant_stat(*, pid=123, state=b"R", startticks=b"456", command=b"python) owned"):
+    return str(pid).encode() + b" (" + command + b") " + b" ".join([state] + [b"0"] * 18 + [startticks])
+
+
+@pytest.mark.parametrize("state", [b"R", b"S", b"D", b"T", b"X"])
+def test_descendant_wait_refuses_same_birth_live_states_with_bounded_readonly_poll(state):
+    now, reads = [0.0], []
+
+    def read(pid):
+        reads.append(pid)
+        return synthetic_descendant_stat(state=state)
+
+    with pytest.raises(AssertionError, match="owned descendant still live at deadline"):
+        assert_owned_descendant_stopped({"pid": 123, "startticks": 456}, read=read,
+                                        clock=lambda: now[0],
+                                        pause=lambda duration: now.__setitem__(0, now[0] + duration))
+    assert 2 <= now[0] <= 2.000001 and reads and set(reads) == {123}
+
+
+@pytest.mark.parametrize("terminal", ["zombie", "changed_birth", "absent", "lookup"])
+def test_descendant_wait_only_accepts_terminal_or_original_birth_absent(terminal):
+    def read(pid):
+        assert pid == 123
+        if terminal in {"absent", "lookup"}:
+            raise OSError(errno.ENOENT if terminal == "absent" else errno.ESRCH, "fixed process gone")
+        return synthetic_descendant_stat(state=b"Z" if terminal == "zombie" else b"R",
+                                         startticks=b"456" if terminal == "zombie" else b"457")
+
+    assert_owned_descendant_stopped({"pid": 123, "startticks": 456}, read=read)
+
+
+@pytest.mark.parametrize("raw", [b"", b"x" * 4097, synthetic_descendant_stat(pid=124),
+                                  b"123 (python) R 0 0", synthetic_descendant_stat(startticks=b"\xff"),
+                                  synthetic_descendant_stat(state=b"N", startticks=b"457"),
+                                  synthetic_descendant_stat(state=b"?"), synthetic_descendant_stat(startticks=b"0"),
+                                  synthetic_descendant_stat(startticks=b"-1"),
+                                  synthetic_descendant_stat(startticks=b"True")])
+def test_descendant_wait_refuses_malformed_identity_or_stat(raw):
+    with pytest.raises(AssertionError):
+        assert_owned_descendant_stopped({"pid": 123, "startticks": 456}, read=lambda pid: raw)
+
+
+@pytest.mark.parametrize("code", [errno.EACCES, errno.EIO, errno.ENOTDIR, None])
+def test_descendant_wait_refuses_other_io_errors(code):
+    def read(pid):
+        raise OSError(code, "fixed IO refusal")
+
+    with pytest.raises(OSError) as raised:
+        assert_owned_descendant_stopped({"pid": 123, "startticks": 456}, read=read)
+    assert raised.value.errno == code
+
+
+@pytest.mark.parametrize("terminal", ["zombie", "changed_birth", "absent"])
+def test_descendant_wait_refuses_terminal_observations_after_deadline(terminal):
+    now = [0.0]
+
+    def read(pid):
+        now[0] = 2.1
+        if terminal == "absent":
+            raise FileNotFoundError(errno.ENOENT, "fixed late disappearance")
+        return synthetic_descendant_stat(state=b"Z" if terminal == "zombie" else b"R",
+                                         startticks=b"456" if terminal == "zombie" else b"457")
+
+    with pytest.raises(AssertionError, match="owned descendant still live at deadline"):
+        assert_owned_descendant_stopped({"pid": 123, "startticks": 456}, read=read, clock=lambda: now[0])
+
+
+@pytest.mark.parametrize("value", [{"pid": True, "startticks": 456}, {"pid": 123, "startticks": False},
+                                    {"pid": 0, "startticks": 456}, {"pid": 123, "startticks": -1},
+                                    {"pid": "123", "startticks": 456}, {"pid": 123, "startticks": 456, "extra": 1}])
+def test_descendant_witness_refuses_unbound_or_nonpositive_identity(value):
+    with pytest.raises(AssertionError):
+        descendant_witness(json.dumps(value).encode())
 
 
 def test_external_sources_cannot_enable_network_enrichment(tmp_path):

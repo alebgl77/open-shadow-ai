@@ -402,21 +402,37 @@ jobs:
           if [ "$(uname -m)" = aarch64 ]; then platform=linux/arm64; else platform=linux/amd64; fi
           echo "platform=$platform" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: builder
         with:
           version: v0.37.2
           driver-opts: image=${{ steps.tools.outputs.buildkit }}
       - name: Build the actual maintained service runtime with bound SBOM and provenance
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
+          builder: ${{ steps.builder.outputs.name }}
           context: .
           file: deploy/service-builds/Dockerfile.${{ matrix.service }}
           tags: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
           push: false
-          load: ${{ matrix.service == 'clickhouse' }}
+          load: false
           platforms: ${{ steps.tools.outputs.platform }}
           outputs: type=oci,dest=artifacts/runtime.oci.tar
           provenance: mode=max
           sbom: generator=${{ steps.tools.outputs.sbom }}
+      - name: Export ClickHouse locally for exact subject-bound CLI observation
+        if: matrix.service == 'clickhouse'
+        timeout-minutes: 5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          builder: ${{ steps.builder.outputs.name }}
+          context: .
+          file: deploy/service-builds/Dockerfile.${{ matrix.service }}
+          tags: ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
+          push: false
+          load: true
+          platforms: ${{ steps.tools.outputs.platform }}
+          provenance: false
+          sbom: false
       - name: Verify exact OCI evidence and scan the complete final service runtime
         run: |
           python -m pip install --only-binary=:all: --require-hashes -r requirements/build.txt

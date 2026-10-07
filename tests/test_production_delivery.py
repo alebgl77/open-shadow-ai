@@ -605,6 +605,123 @@ def test_image_export_names_one_commit_component_without_registry_publication():
     assert len(names) == 2 * len(job["strategy"]["matrix"]["image"])
 
 
+def maintained_export_contract(job):
+    """Require the attested OCI export and isolated local CH export, without bypasses."""
+    assert type(job["timeout-minutes"]) is int and job["timeout-minutes"] == 30
+    assert job["strategy"]["fail-fast"] is False
+    assert job["strategy"]["matrix"] == {
+        "os": ["ubuntu-latest", "ubuntu-24.04-arm"],
+        "service": ["postgres", "clickhouse", "redis", "node-exporter"],
+    }
+    steps = job["steps"]
+    assert all("continue-on-error" not in step for step in steps)
+    setup, = [step for step in steps if step.get("uses", "").startswith("docker/setup-buildx-action@")]
+    assert setup["uses"] == "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069"
+    assert setup["id"] == "builder"
+    assert setup["with"] == {"version": "v0.37.2", "driver-opts": "image=${{ steps.tools.outputs.buildkit }}"}
+    first, second = [step for step in steps if step.get("uses", "").startswith("docker/build-push-action@")]
+    pinned_action = "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc"
+    assert first["uses"] == second["uses"] == pinned_action
+    assert "if" not in first and set(first) == {"name", "uses", "with"}
+    assert set(second) == {"name", "if", "timeout-minutes", "uses", "with"}
+    assert second["if"] == "matrix.service == 'clickhouse'"
+    assert type(second["timeout-minutes"]) is int and second["timeout-minutes"] == 5
+    shared = {"builder": "${{ steps.builder.outputs.name }}", "context": ".",
+              "file": "deploy/service-builds/Dockerfile.${{ matrix.service }}",
+              "tags": "ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}",
+              "push": False, "platforms": "${{ steps.tools.outputs.platform }}"}
+    for step, expected in (
+        (first, {**shared, "load": False, "outputs": "type=oci,dest=artifacts/runtime.oci.tar",
+                 "provenance": "mode=max", "sbom": "generator=${{ steps.tools.outputs.sbom }}"}),
+        (second, {**shared, "load": True, "provenance": False, "sbom": False}),
+    ):
+        options = step["with"]
+        assert type(options) is dict and set(options) == set(expected)
+        assert all(type(options[key]) is type(value) and options[key] == value for key, value in expected.items())
+    assert steps.index(first) == steps.index(setup) + 1
+    assert steps.index(second) == steps.index(first) + 1
+    collector, = [step for step in steps if "scripts/observe-clickhouse-version.py" in step.get("run", "")]
+    assert steps.index(collector) == steps.index(second) + 1
+    assert "if" not in collector and "continue-on-error" not in collector
+    assert "--input artifacts/runtime.oci.tar" in collector["run"]
+    assert "--output artifacts/image-audit/clickhouse.principal-observation.json" in collector["run"]
+    assert "scripts/scan-images.py --input artifacts/runtime.oci.tar" in collector["run"]
+    assert "scripts/verify-scan-evidence.py --input artifacts/runtime.oci.tar" in collector["run"]
+
+
+def test_maintained_services_export_attested_oci_then_only_clickhouse_local_docker():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    maintained_export_contract(workflow["jobs"]["derived-service-builds"])
+
+
+@pytest.mark.parametrize("which,key,value", [
+    (0, "load", True), (0, "load", 0), (0, "provenance", False), (0, "sbom", False),
+    (0, "push", True), (0, "outputs", "type=docker"), (0, "builder", "other-builder"),
+    (1, "builder", "other-builder"), (1, "context", "other-source"), (1, "file", "docker/Dockerfile.api"),
+    (1, "tags", "clickhouse:latest"), (1, "platforms", "linux/arm64"), (1, "outputs", "type=oci"),
+    (1, "attests", "type=provenance"), (1, "cache-to", "type=registry,ref=untrusted"),
+    (1, "cache-from", "type=registry,ref=untrusted"), (1, "load", False), (1, "load", 1),
+    (1, "push", True), (1, "provenance", "mode=max"), (1, "sbom", "generator=other"),
+    (1, "build-args", "SOURCE_DATE_EPOCH=123"), (1, "labels", "dynamic=${{ github.run_id }}"),
+    (1, "target", "other"), (1, "pull", True), (1, "no-cache", True),
+])
+def test_maintained_export_options_refuse_drift_or_additional_exporters(which, key, value):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    job = copy.deepcopy(workflow["jobs"]["derived-service-builds"])
+    builds = [step for step in job["steps"] if step.get("uses", "").startswith("docker/build-push-action@")]
+    builds[which]["with"][key] = value
+    with pytest.raises(AssertionError):
+        maintained_export_contract(job)
+
+
+@pytest.mark.parametrize("defect", ["first-condition", "second-condition", "second-always", "second-bypass",
+                                   "first-bypass", "collector-bypass", "second-timeout", "timeout-bool",
+                                   "job-timeout", "wrong-action", "wrong-builder-id", "order", "late-export",
+                                   "extra-build", "old-mixed-export"])
+def test_maintained_export_order_conditions_and_budgets_refuse_bypass(defect):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    job = copy.deepcopy(workflow["jobs"]["derived-service-builds"])
+    steps = job["steps"]
+    first, second = [step for step in steps if step.get("uses", "").startswith("docker/build-push-action@")]
+    collector, = [step for step in steps if "scripts/observe-clickhouse-version.py" in step.get("run", "")]
+    if defect == "first-condition":
+        first["if"] = "matrix.service == 'clickhouse'"
+    elif defect == "second-condition":
+        second["if"] = "matrix.service == 'postgres'"
+    elif defect == "second-always":
+        second["if"] = "always() && matrix.service == 'clickhouse'"
+    elif defect == "second-bypass":
+        second["continue-on-error"] = True
+    elif defect == "first-bypass":
+        first["continue-on-error"] = True
+    elif defect == "collector-bypass":
+        collector["continue-on-error"] = True
+    elif defect == "second-timeout":
+        second["timeout-minutes"] = 20
+    elif defect == "timeout-bool":
+        second["timeout-minutes"] = True
+    elif defect == "job-timeout":
+        job["timeout-minutes"] = 31
+    elif defect == "wrong-action":
+        second["uses"] = "docker/build-push-action@" + "a" * 40
+    elif defect == "wrong-builder-id":
+        setup, = [step for step in steps if step.get("id") == "builder"]
+        setup["id"] = "different-builder"
+    elif defect == "order":
+        a, b = steps.index(first), steps.index(second)
+        steps[a], steps[b] = steps[b], steps[a]
+    elif defect == "late-export":
+        a, b = steps.index(second), steps.index(collector)
+        steps[a], steps[b] = steps[b], steps[a]
+    elif defect == "extra-build":
+        steps.insert(steps.index(second) + 1, copy.deepcopy(second))
+    else:
+        first["with"]["load"] = "${{ matrix.service == 'clickhouse' }}"
+        steps.remove(second)
+    with pytest.raises((AssertionError, ValueError)):
+        maintained_export_contract(job)
+
+
 def test_signing_permissions_and_exact_archive_contract():
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]

@@ -1048,15 +1048,17 @@ def test_real_directory_close_failure_never_publishes_canonical_or_retries_reuse
             assert replacement[0] == descriptor
             raise OSError("fixed directory close refusal")
         return real_close(descriptor)
-    monkeypatch.setattr(OBSERVER.os, "open", opened)
-    monkeypatch.setattr(OBSERVER.os, "close", close)
-    try:
-        with pytest.raises(OSError) as raised:
-            OBSERVER.atomic_receipt(output, b"verified-candidate")
-        assert not output.exists() and calls.count(initial[0]) == 1
-        assert "owned_cleanup_failed" in raised.value.__notes__
-        assert os.read(replacement[0], 128) == b"foreign-directory-fd-control"
-        assert len(list(publication_directory.glob("*.pending"))) == int(cleanup_refused)
-    finally:
-        for descriptor in replacement:
-            real_close(descriptor)
+    with monkeypatch.context() as boundary:
+        boundary.setattr(OBSERVER.os, "open", opened)
+        boundary.setattr(OBSERVER.os, "close", close)
+        try:
+            with pytest.raises(OSError) as raised:
+                OBSERVER.atomic_receipt(output, b"verified-candidate")
+            assert not output.exists() and calls.count(initial[0]) == 1
+            assert "owned_cleanup_failed" in raised.value.__notes__
+            assert os.read(replacement[0], 128) == b"foreign-directory-fd-control"
+            assert len(list(publication_directory.glob("*.pending"))) == int(cleanup_refused)
+        finally:
+            for descriptor in replacement:
+                real_close(descriptor)
+    assert os.open is real_open and os.close is real_close
