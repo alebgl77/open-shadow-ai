@@ -139,6 +139,9 @@ def physical_golden_expected(golden, instance):
 
 def assert_physical_golden_trace(calls, scenarios, instance, golden):
     expected_calls, expected_scenarios = physical_golden_expected(golden, instance)
+    # The immutable historical trace permits only this candidate startup argv delta.
+    assert expected_calls[73][7:] == ["up", "-d", "node-exporter"]
+    expected_calls[73][7:] = ["up", "-d", "--no-build", "--pull", "never", "node-exporter"]
     # Compare serialized JSON to retain the original distinctions between bool/int/float.
     assert normalized_physical_trace(calls, instance) == normalized_physical_trace(expected_calls, instance)
     assert normalized_physical_trace(scenarios, instance) == normalized_physical_trace(expected_scenarios, instance)
@@ -417,9 +420,11 @@ def test_physical_inspector_cleanup_keeps_primary_or_secondary_cancellation(phys
     assert CANARY not in json.dumps(lab.failure) and lab.write_report() == 2
 
 
-def test_healthy_physical_calls_and_results_match_exact_published_source(tmp_path, monkeypatch):
+def test_healthy_physical_trace_matches_published_source_with_exact_exporter_startup_delta(tmp_path, monkeypatch):
     lab, cli = create_physical_lab(tmp_path / "candidate", monkeypatch)
     lab.experiment_physical("unused")
+    assert len(cli.calls) == 92 and cli.calls[73][7:] == (
+        "up", "-d", "--no-build", "--pull", "never", "node-exporter")
     assert_physical_golden_trace(cli.calls, lab.scenarios, lab, load_physical_golden())
     assert set(cli.pairs) == PHYSICAL_CASES
     assert lab.write_report() == 0 and lab.failure is None
@@ -429,6 +434,25 @@ def test_healthy_physical_calls_and_results_match_exact_published_source(tmp_pat
     assert len(expected) == len(stats[4:]) == len(set(stats[4:])) == 7
     assert set(stats[4:]) == {record["id"] for record in expected}
     assert "2" * 64 not in stats[4:]  # Pressure store is outside the seven physical service measurements.
+
+
+def test_physical_exporter_startup_and_observation_budgets_are_unchanged(physical_diagnostic_lab, monkeypatch):
+    lab, cli = physical_diagnostic_lab
+    timeouts = []
+
+    def runner(command, **kwargs):
+        if command[3] == "compose" and command[-1] == "node-exporter":
+            timeouts.append(kwargs["timeout"])
+        return cli.runner(command, **kwargs)
+
+    lab.docker.runner = runner
+    monkeypatch.setattr(lab_module.time, "monotonic", lambda: 100.0)
+    observe = Mock(return_value={"filesystem_sum": False})
+    monkeypatch.setattr("shadai.qualification.physical.host_exporter_proof", observe)
+    lab.experiment_physical("unused")
+    assert timeouts == [120]
+    observe.assert_called_once_with(lab.context, lab.journal.value["projects"]["source"], "8" * 64, deadline=130)
+    assert len(cli.calls) == 92
 
 
 @pytest.mark.parametrize("absence", ["git", "history"])
@@ -443,7 +467,7 @@ def test_healthy_physical_golden_needs_no_git_history(tmp_path, monkeypatch, abs
 
     unavailable = Mock(side_effect=missing)
     monkeypatch.setattr(subprocess, "run", unavailable)
-    test_healthy_physical_calls_and_results_match_exact_published_source(tmp_path, monkeypatch)
+    test_healthy_physical_trace_matches_published_source_with_exact_exporter_startup_delta(tmp_path, monkeypatch)
     # Report provenance may ask for the current revision; the regression never reads history.
     assert all(call.args[0] == ["git", "rev-parse", "HEAD"] for call in unavailable.call_args_list)
 
@@ -493,7 +517,7 @@ def test_physical_golden_refuses_marker_or_provenance_changes(physical_diagnosti
 
 @pytest.mark.parametrize("change", [
     "reorder", "remove", "add", "readonly", "mount_readonly", "capability", "identity",
-    "compose_target", "env_target", "bool_as_int", "int_as_float",
+    "compose_target", "env_target", "bool_as_int", "int_as_float", "exporter_build", "exporter_pull",
 ])
 def test_physical_golden_refuses_complete_trace_changes(physical_diagnostic_lab, change):
     lab, cli = physical_diagnostic_lab
@@ -519,6 +543,10 @@ def test_physical_golden_refuses_complete_trace_changes(physical_diagnostic_lab,
         calls[13][6] = str(lab.directory / "foreign.env")
     elif change == "bool_as_int":
         scenarios[0]["measurements"]["filesystem_sum"] = 0
+    elif change == "exporter_build":
+        calls[73][9] = "--build"
+    elif change == "exporter_pull":
+        calls[73][11] = "always"
     else:
         scenarios[0]["measurements"]["redis_and_filesystem"]["redis_memory"] = 100.0
     with pytest.raises(AssertionError):

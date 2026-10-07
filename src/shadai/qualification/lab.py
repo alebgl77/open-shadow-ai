@@ -44,7 +44,8 @@ TOOLS = {"node-exporter", "probe-ingest-peer"}
 WRITERS = {"api", "ingest-worker", "correlation-worker", "purge-worker"}
 STORES = {"postgres", "clickhouse", "redis"}
 FAILURE_STAGES = {
-    "starting_compose", "starting_discover", "initialize_stop", "initialize_inspector", "initialize_start",
+    "starting_exporter_build", "starting_compose", "starting_discover", "initialize_stop", "initialize_inspector",
+    "initialize_start",
     "readiness", "enroll", "scenario",
 }
 DOCKER_FAILURE_CODES = {"docker_nonzero", "docker_timeout", "docker_process_error", "docker_output_budget"}
@@ -144,7 +145,7 @@ DOCKER_OPERATIONS = {
     for kind, commands in {
         "container": {"inspect", "create", "start", "stop", "wait", "logs", "cp", "rm", "exec"},
         "volume": {"inspect", "create", "ls", "rm"}, "network": {"inspect", "ls", "rm"},
-        "compose": {"run", "up"},
+        "compose": {"build", "run", "up"},
     }.items() for command in commands
 }
 DOCKER_OPERATION_NAMES = set(DOCKER_OPERATIONS.values()) | {"container_list", "container_stats", "unknown"}
@@ -1148,6 +1149,10 @@ class Laboratory:
         (self.directory / "empty.env").touch(mode=0o600, exist_ok=True)
         self.failure = None
         try:
+            if "physical" in self.profile["scenarios"] and "physical" not in self.journal.value["completed"]:
+                self.journal.phase("starting")
+                self.stage = "starting_exporter_build"
+                self.compose("build", "node-exporter", timeout=600)
             if not resume:
                 self.journal.phase("starting")
                 self.stage = "starting_compose"
@@ -2053,7 +2058,7 @@ class Laboratory:
         with self.physical_diagnostics("exporter"):
             primary = None
             try:
-                self.compose("up", "-d", "node-exporter")
+                self.compose("up", "-d", "--no-build", "--pull", "never", "node-exporter")
             except BaseException as exc:
                 primary = exc
                 if self.failure is None:

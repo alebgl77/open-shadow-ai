@@ -9,8 +9,17 @@ from unittest.mock import Mock
 
 import pytest
 
+import shadai.qualification.lab as lab_module
 from shadai.qualification.journal import LABEL, RunJournal, atomic_json, resource_identity
-from shadai.qualification.lab import WRITERS, Docker, DockerOperationError, Laboratory, failure_evidence
+from shadai.qualification.lab import (
+    SERVICES,
+    WRITERS,
+    Docker,
+    DockerOperationError,
+    Laboratory,
+    docker_operation,
+    failure_evidence,
+)
 from shadai.qualification.schemas import QualificationError, load_profile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +54,7 @@ def test_failure_before_scenarios_keeps_stage_without_message(tmp_path, monkeypa
     lab = prepared_lab(tmp_path, monkeypatch)
     error = RuntimeError(SECRET)
     if stage == "starting_compose":
-        lab.compose.side_effect = error
+        lab.compose.side_effect = ["", error]
     elif stage == "starting_discover":
         lab.discover.side_effect = error
     elif stage in {"initialize_stop", "initialize_start"}:
@@ -71,7 +80,7 @@ def test_failure_before_scenarios_keeps_stage_without_message(tmp_path, monkeypa
 @pytest.mark.parametrize("primary", [DockerOperationError("docker_nonzero", 17), KeyboardInterrupt(SECRET)])
 def test_discover_failure_preserves_primary_and_cancellation(tmp_path, monkeypatch, primary):
     lab = prepared_lab(tmp_path, monkeypatch)
-    lab.compose.side_effect = primary
+    lab.compose.side_effect = ["", primary]
     lab.discover.side_effect = PermissionError(SECRET)
     assert lab.execute() == 2
     result = json.loads((lab.directory / "report.json").read_text())
@@ -91,7 +100,7 @@ def test_discover_failure_preserves_primary_and_cancellation(tmp_path, monkeypat
 @pytest.mark.parametrize("secondary", [KeyboardInterrupt(SECRET), SystemExit(SECRET)])
 def test_discover_cancellation_survives_prior_compose_failure(tmp_path, monkeypatch, secondary):
     lab = prepared_lab(tmp_path, monkeypatch)
-    lab.compose.side_effect = DockerOperationError("docker_nonzero", 17)
+    lab.compose.side_effect = ["", DockerOperationError("docker_nonzero", 17)]
     lab.discover.side_effect = secondary
     assert lab.execute() == 2
     result = json.loads((lab.directory / "report.json").read_text())
@@ -170,6 +179,223 @@ def test_successful_report_does_not_add_failure_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(lab, "execute_special", Mock())
     assert lab.execute() == 0
     assert "failure" not in json.loads((lab.directory / "report.json").read_text())["evidence"]
+
+
+def exporter_startup_lab(tmp_path, monkeypatch, *, resume=False, selected=True, completed=False, remaining=1500):
+    """Keep real prepare, Compose ownership and Docker deadlines at the CLI boundary."""
+    lab = prepared_lab(tmp_path, monkeypatch)
+    lab.profile["scenarios"] = ["physical"] if selected else ["baseline"]
+    clock, calls, events = [100.0], [], []
+    monkeypatch.setattr(lab_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(lab_module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(lab, "make_secrets", Mock())
+    monkeypatch.setattr(lab, "verify_secrets", Mock(side_effect=lambda: events.append("secrets")))
+
+    def source_proof():
+        events.append("source")
+        return {"unit_test": True}
+
+    monkeypatch.setattr(lab, "source_proof", source_proof)
+
+    def seed():
+        project = lab.journal.value["projects"]["source"]
+        lab.startup_resource = {
+            "Id": "a" * 64, "Created": "2026-10-07T00:00:00Z", "State": {"Running": False},
+            "Config": {"Labels": {LABEL + "run": lab.journal.value["run_id"], LABEL + "role": "source",
+                                  "com.docker.compose.project": project, "com.docker.compose.service": "api"}},
+        }
+        lab.journal.add_resources([resource_identity(
+            "container", lab.startup_resource, lab.journal.value["run_id"], "source", project)])
+        if completed:
+            lab.journal.phase("physical", completed=True)
+
+    if resume:
+        lab.journal = RunJournal.create(lab.directory, lab.profile, lab.config_hash, lab.context)
+        seed()
+        atomic_json(lab.directory / "source.json", {"unit_test": True})
+
+    def prepare(resuming):
+        Laboratory.prepare(lab, resuming)
+        if not resuming:
+            seed()
+        events.append("prepared")
+        clock[0] = lab.deadline - remaining
+        if getattr(lab, "foreign_after_prepare", False):
+            lab.startup_resource["Config"]["Labels"][LABEL + "role"] = "foreign"
+
+    def runner(command, **kwargs):
+        args = tuple(command[3:])
+        calls.append((args, kwargs))
+        if args[0] == "info":
+            return SimpleNamespace(returncode=0, stdout='"synthetic"', stderr="")
+        if args[:2] == ("container", "inspect"):
+            events.append("guard")
+            return SimpleNamespace(returncode=0, stdout=json.dumps([lab.startup_resource]), stderr="")
+        assert args[0] == "compose"
+        assert args[1:7] == ("--project-name", lab.journal.value["projects"]["source"],
+                             "--file", str(lab.compose_file), "--env-file", str(lab.directory / "empty.env"))
+        assert kwargs["env"]["SHADAI_QUAL_RUN"] == lab.journal.value["run_id"]
+        assert kwargs["env"]["SHADAI_QUAL_ROLE"] == "source"
+        assert kwargs["env"]["SHADAI_QUAL_DIR"] == str(lab.directory)
+        assert kwargs["env"]["SHADAI_QUAL_TENANT"] == lab.tenant
+        assert (lab.directory / "empty.env").is_file()
+        if args[7] == "build":
+            assert args[7:] == ("build", "node-exporter")
+            assert lab.stage == "starting_exporter_build" and lab.journal.value["phase"] == "starting"
+            events.append("build")
+            if getattr(lab, "build_failure", None) is not None:
+                raise lab.build_failure
+        else:
+            assert args[7:] == ("up", "-d", "--build", *sorted(SERVICES))
+            events.append("initial_up")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    lab.prepare = prepare
+    lab.docker = Docker(lab.context, runner=runner)
+    lab.compose = Laboratory.compose.__get__(lab)
+    lab.change.side_effect = lambda *args: events.append("initialize_change")
+    lab.inspector.side_effect = lambda *args: events.append("inspector") or {}
+    lab.wait_ready.side_effect = lambda: events.append("readiness") or "http://127.0.0.1:12345"
+    monkeypatch.setattr(lab, "send", Mock(return_value={"accepted": lab.profile["load"]["total_events"]}))
+    monkeypatch.setattr(lab, "drain", Mock(return_value={}))
+    monkeypatch.setattr(lab, "execute_special", Mock(side_effect=lambda *args: events.append("measurements")))
+    return lab, calls, events
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("remaining", [1500, 40])
+def test_pending_physical_prebuild_is_owned_bounded_and_before_all_measurements(
+    tmp_path, monkeypatch, resume, remaining
+):
+    lab, calls, events = exporter_startup_lab(tmp_path, monkeypatch, resume=resume, remaining=remaining)
+    lab.execute(resume=resume)
+    builds = [(args, kwargs) for args, kwargs in calls if args[0] == "compose" and args[7] == "build"]
+    assert len(builds) == 1 and builds[0][1]["timeout"] == min(600, remaining)
+    assert lab.deadline == lab.docker.deadline == 1600
+    assert events[events.index("build") - 1] == "guard"
+    assert all(events.index("build") < events.index(event)
+               for event in ("initialize_change", "inspector", "readiness", "measurements"))
+    initial = [args for args, _ in calls if args[0] == "compose" and args[7] == "up"]
+    assert len(initial) == (0 if resume else 1)
+    if resume:
+        assert events[:4] == ["guard", "secrets", "source", "prepared"]
+    assert "physical" not in lab.journal.value["completed"]
+    assert not any("build" in key for key in lab.journal.value)
+    assert lab.failure is None
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("selected,completed", [(False, False), (True, True)])
+def test_unselected_or_completed_physical_skips_prebuild(tmp_path, monkeypatch, resume, selected, completed):
+    lab, calls, _ = exporter_startup_lab(tmp_path, monkeypatch, resume=resume, selected=selected, completed=completed)
+    lab.execute(resume=resume)
+    assert not any(args[0] == "compose" and args[7] == "build" for args, _ in calls)
+    assert sum(args[0] == "compose" and args[7] == "up" for args, _ in calls) == (0 if resume else 1)
+
+
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("primary", [DockerOperationError("docker_nonzero", 17, operation="compose_build"),
+                                   RuntimeError(SECRET), KeyboardInterrupt(SECRET), SystemExit(SECRET)])
+def test_prebuild_failure_preserves_identity_cancellation_and_owned_cleanup(tmp_path, monkeypatch, resume, primary):
+    lab, calls, events = exporter_startup_lab(tmp_path, monkeypatch, resume=resume)
+    lab.build_failure = primary
+    lab.sender = Mock()
+    captured = []
+    original = failure_evidence
+
+    def evidence(exc, phase, stage):
+        captured.append(exc)
+        return original(exc, phase, stage)
+
+    monkeypatch.setattr(lab_module, "failure_evidence", evidence)
+    assert lab.execute(resume=resume) == 2
+    assert captured == [primary] and lab.sender.stop.call_count == 1
+    assert events[-1] == "build"
+    assert not any(args[0] == "compose" and args[7] == "up" for args, _ in calls)
+    lab.discover.assert_not_called()
+    lab.change.assert_not_called()
+    lab.inspector.assert_not_called()
+    lab.wait_ready.assert_not_called()
+    lab.execute_special.assert_not_called()
+    assert len(lab.journal.value["resources"]) == 1
+    assert lab.journal.value["resources"][0]["id"] == lab.startup_resource["Id"]
+    assert lab.clean() == {"schema": 1, "execute": False, "resources": lab.journal.value["resources"],
+                           "remove_volumes": False}
+    cancelled = isinstance(primary, (KeyboardInterrupt, SystemExit))
+    assert lab.journal.value["cancelled"] is cancelled
+    assert lab.journal.value["phase"] == ("cancelled" if cancelled else "interrupted")
+    proof = json.loads((lab.directory / "report.json").read_text())
+    assert proof["evidence"]["failure"]["phase"] == "starting"
+    assert proof["evidence"]["failure"]["stage"] == "starting_exporter_build"
+    assert proof["evidence"]["failure"]["error_type"] == type(primary).__name__
+    assert proof["scenarios"] == [] and SECRET not in json.dumps(proof)
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_expired_global_budget_does_not_launch_prebuild(tmp_path, monkeypatch, resume):
+    lab, calls, events = exporter_startup_lab(tmp_path, monkeypatch, resume=resume, remaining=0)
+    assert lab.execute(resume=resume) == 2
+    assert not any(args[0] == "compose" for args, _ in calls)
+    assert events[-1] == "prepared"
+    assert lab.failure == {"phase": "starting", "stage": "starting_exporter_build",
+                           "error_type": "QualificationError", "code": "qualification_error"}
+    lab.execute_special.assert_not_called()
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_prebuild_guard_refuses_resource_changed_after_prepare(tmp_path, monkeypatch, resume):
+    lab, calls, _ = exporter_startup_lab(tmp_path, monkeypatch, resume=resume)
+    lab.foreign_after_prepare = True
+    assert lab.execute(resume=resume) == 2
+    assert not any(args[0] == "compose" for args, _ in calls)
+    assert lab.failure["stage"] == "starting_exporter_build"
+    lab.execute_special.assert_not_called()
+
+
+def test_resume_ownership_verification_refuses_before_prebuild(tmp_path, monkeypatch):
+    lab, calls, events = exporter_startup_lab(tmp_path, monkeypatch, resume=True)
+    lab.startup_resource["Config"]["Labels"][LABEL + "role"] = "foreign"
+    with pytest.raises(QualificationError):
+        lab.execute(resume=True)
+    assert events == ["guard"]
+    assert not any(args[0] == "compose" for args, _ in calls)
+    lab.verify_secrets.assert_not_called()
+
+
+@pytest.mark.parametrize("proof", ["secrets", "source"])
+def test_resume_changed_proof_refuses_before_prebuild(tmp_path, monkeypatch, proof):
+    lab, calls, events = exporter_startup_lab(tmp_path, monkeypatch, resume=True)
+    if proof == "secrets":
+        lab.verify_secrets.side_effect = QualificationError(SECRET)
+    else:
+        monkeypatch.setattr(lab, "source_proof", lambda: {"changed": True})
+    with pytest.raises(QualificationError):
+        lab.execute(resume=True)
+    assert "guard" in events and "prepared" not in events
+    assert not any(args[0] == "compose" for args, _ in calls)
+    lab.execute_special.assert_not_called()
+
+
+@pytest.mark.parametrize("kind,code", [("nonzero", "docker_nonzero"), ("timeout", "docker_timeout"),
+                                     ("process", "docker_process_error"), ("output", "docker_output_budget")])
+def test_build_operation_is_closed_and_failure_output_stays_private(kind, code):
+    def runner(command, **kwargs):
+        if kind == "timeout":
+            raise subprocess.TimeoutExpired(command, 600, output=SECRET, stderr=SECRET)
+        if kind == "process":
+            raise OSError(SECRET)
+        return SimpleNamespace(returncode=17 if kind == "nonzero" else 0, stderr=SECRET,
+                               stdout="x" * (4 * 1048576 + 1) if kind == "output" else SECRET)
+
+    args = ("compose", "--project-name", SECRET, "--file", SECRET, "--env-file", SECRET, "build", "node-exporter")
+    assert docker_operation(("compose", "build")) == docker_operation(args) == "compose_build"
+    assert docker_operation(("compose", "build " + SECRET)) == "unknown"
+    with pytest.raises(DockerOperationError) as caught:
+        Docker("exact-context", runner=runner).call(*args, timeout=600)
+    assert caught.value.operation == "compose_build" and caught.value.code == code
+    proof = failure_evidence(caught.value, "starting", "starting_exporter_build")
+    assert proof["stage"] == "starting_exporter_build" and proof["code"] == code
+    assert "operation" not in proof and SECRET not in json.dumps(proof) and SECRET not in str(caught.value)
 
 
 def test_cli_exception_class_name_is_not_public_output(tmp_path, monkeypatch, capsys):

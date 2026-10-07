@@ -50,6 +50,21 @@ These are follow-up requirements; this overlay supplies no resource exporter,
 resource alert or saturation/restore evidence. Prometheus failure itself also
 needs an independent external watchdog because its own rules cannot run then.
 
+The separate disposable qualification lab builds `node-exporter` before its
+initial service startup and before any scenario measurements when `physical` is
+selected and still incomplete. A resumed run first verifies its journal resource
+ownership, secrets and source proof, then repeats this bounded build for a pending
+physical scenario. An unselected or completed physical scenario skips it. The
+build uses the owned Compose project and environment, checks resource ownership,
+and is capped at 600 seconds within the smoke profile's unchanged 1500-second
+global budget. The physical measurement later starts the exporter with
+`up -d --no-build --pull never node-exporter`, keeping the existing 120-second
+startup cap and 30-second observation cap, each bounded by the global time
+remaining. Discovery, exact resource identity checks and cleanup remain required.
+This moves cold image building ahead of measurements; it does not establish the
+cause of the previously observed physical exporter timeout or demonstrate native
+or production resource coverage.
+
 ## Alerts, owners and pilot defaults
 
 Assign the `platform` and `pipeline` owner labels to named on-call people before
