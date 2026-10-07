@@ -1641,12 +1641,20 @@ class Laboratory:
                     starting = starting or health["Status"] == "starting"
                 self.probe_completed()
             if not starting:
-                break
+                self.remaining()
+                self.probe_reason = self.probe_secondary_reason = None
+                if self.probe_status(worker, "readiness"):
+                    break
+                if not (type(self.probe_reason) is str and self.probe_reason == "phase_unready"
+                        and type(self.probe_secondary_reason) is str and self.probe_secondary_reason == "none"):
+                    raise QualificationError("Probe worker is not ready after dependency recovery")
+            else:
+                self.probe_checkpoint("readiness_identity", operation="container_inspect", service=worker["service"])
+                verify_resource(worker, self.docker.inspect("container", worker["id"]))
+                self.probe_completed()
             self.probe_checkpoint("wait")
             self.sleep(min(1, self.remaining()))
             self.probe_completed()
-        if not self.probe_status(worker, "readiness"):
-            raise QualificationError("Probe worker is not ready after dependency recovery")
 
     def experiment_probes(self, url):
         with self.probe_diagnostics():

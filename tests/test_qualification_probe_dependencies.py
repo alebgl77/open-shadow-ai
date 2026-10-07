@@ -1,5 +1,6 @@
 """Probe peer dependency ownership and one shared window; synthetic Docker only."""
 
+import asyncio
 import copy
 import json
 import subprocess
@@ -19,6 +20,7 @@ from shadai.qualification.lab import (
     probe_failure_evidence,
 )
 from shadai.qualification.schemas import QualificationError
+from shadai.workers import probe as worker_probe
 from shadai.workers.probe import READINESS_REASONS
 
 
@@ -580,7 +582,7 @@ def test_witness_json_refusal_reports_only_constant_result_checkpoint(dependenci
     assert any(x["kind"] == "container" and x["id"] == "d" * 64 for x in lab.journal.value["resources"])
 
 
-@pytest.mark.parametrize("reason", sorted(READINESS_REASONS))
+@pytest.mark.parametrize("reason", sorted(READINESS_REASONS - {"phase_unready"}))
 def test_fixed_readiness_reason_is_diagnostic_only_and_never_authorizes_peer(dependencies, reason):
     lab, cli, _ = dependencies
     cli.ready = False
@@ -631,3 +633,192 @@ def test_readiness_reason_and_secondary_are_revalidated_before_publication():
         value = probe_failure_evidence(error, checkpoint, "container_exec", "ingest-worker", None,
                                        reason_code=CANARY, secondary_reason={"password": CANARY})
         assert "reason_code" not in value and "secondary_reason" not in value and CANARY not in json.dumps(value)
+
+
+def test_delayed_real_phase_publication_waits_then_uses_exit_zero_before_peer(dependencies, monkeypatch):
+    lab, cli, clock = dependencies
+    process = worker_probe.ProcessProbe("ingest", clock=lambda: clock.now)
+    process.data = {"initialized": True, "heartbeat_monotonic": clock.now, "phase": "blocked",
+                    "phase_started_monotonic": clock.now, "last_poll_monotonic": clock.now,
+                    "last_successful_cycle_monotonic": clock.now}
+    published = copy.deepcopy(process.data)
+    process.poll()
+    assert process.data["phase"] == "idle" and published["phase"] == "blocked"
+    monkeypatch.setattr(worker_probe, "read_probe", lambda *args, **kwargs: (published.copy(), clock.now))
+    cli.readiness_diagnostic = json.dumps({"schema": 1, "reason": "phase_unready", "secondary_reason": "none"})
+    original = cli.probe_status
+    results, waits = [], []
+
+    def status(record, mode):
+        if mode == "readiness" and cli.preflight and lab.probe_section == "dependencies":
+            original(record, mode)
+            diagnostic = worker_probe.ReadinessDiagnostic()
+            ready = worker_probe.local_check(mode, "ingest", diagnostic=diagnostic)
+            results.append(ready)
+            return ready
+        return original(record, mode)
+
+    def sleep(seconds):
+        clock.sleep(seconds)
+        if seconds <= 1:
+            waits.append(seconds)
+            if len(waits) == 2:
+                published.update(copy.deepcopy(process.data))
+                published["heartbeat_monotonic"] = clock.now
+
+    cli.probe_status = status
+    monkeypatch.setattr(lab_module.time, "sleep", sleep)
+    original_runner = cli.runner
+
+    def runner(command, **kwargs):
+        if command[3] == "compose" and command[10] == "up":
+            assert results[-1] is True and len(results) == 3
+            assert lab.probe_reason is lab.probe_secondary_reason is None
+        return original_runner(command, **kwargs)
+
+    lab.docker.runner = runner
+    lab.experiment_probes("unused")
+    assert results == [False, False, True] and waits == [1, 1]
+    assert clock.sleeps == [10, 1, 1, 32]
+    assert cli.launches[0]["deadline"] == cli.launches[0]["docker_deadline"] == 230
+    assert cli.launches[0]["timeout"] == 118
+    assert cli.readiness_records == ["0" * 63 + "1"] * 3
+    assert (lab.deadline, lab.docker.deadline) == (1000.0, 900.0)
+    assert lab.failure is None
+    pairs = cli.diagnostic_pairs
+    for service in ("migrate", "redis", "clickhouse"):
+        assert pairs.count(("probes_dependencies_inspect", "container_inspect", service)) == 3
+    assert pairs.count(("probes_dependencies_readiness_identity", "container_inspect", "ingest-worker")) == 3
+
+
+def test_persistent_phase_unready_exhausts_original_window_without_peer(dependencies):
+    lab, cli, clock = dependencies
+    cli.ready = False
+    cli.readiness_diagnostic = json.dumps({"schema": 1, "reason": "phase_unready", "secondary_reason": "none"})
+    before = copy.deepcopy(lab.journal.value["resources"])
+    with pytest.raises(QualificationError, match="budget"):
+        lab.experiment_probes("unused")
+    assert clock.now == 230 and clock.sleeps == [10] + [1] * 120
+    assert len(cli.readiness_records) == 120
+    assert_refused_without_adoption(lab, cli, before)
+    assert_probe_failure(lab, "probes_dependencies_wait")
+    assert "reason_code" not in lab.failure and "secondary_reason" not in lab.failure
+
+
+@pytest.mark.parametrize("mutation", ["worker_identity", "store_identity", "store_health", "store_stopped",
+                                      "migration_exit", "migration_running"])
+def test_recovery_revalidates_every_identity_and_state_after_each_phase_refusal(dependencies, monkeypatch, mutation):
+    lab, cli, clock = dependencies
+    cli.ready = False
+    cli.readiness_diagnostic = json.dumps({"schema": 1, "reason": "phase_unready", "secondary_reason": "none"})
+    before = copy.deepcopy(lab.journal.value["resources"])
+
+    def sleep(seconds):
+        clock.sleep(seconds)
+        if seconds <= 1:
+            worker = cli.containers["0" * 63 + "1"]
+            store = cli.containers[cli.dependency_ids["redis"]]
+            migration = cli.containers[cli.dependency_ids["migrate"]]
+            if mutation == "worker_identity":
+                worker["Created"] = "foreign"
+            elif mutation == "store_identity":
+                store["Created"] = "foreign"
+            elif mutation == "store_health":
+                store["State"]["Health"]["Status"] = "unhealthy"
+            elif mutation == "store_stopped":
+                store["State"]["Running"] = False
+            elif mutation == "migration_exit":
+                migration["State"]["ExitCode"] = 1
+            else:
+                migration["State"].update(Status="running", Running=True)
+
+    monkeypatch.setattr(lab_module.time, "sleep", sleep)
+    with pytest.raises(QualificationError):
+        lab.experiment_probes("unused")
+    assert len(cli.readiness_records) == 1 and clock.sleeps == [10, 1]
+    assert_refused_without_adoption(lab, cli, before)
+
+
+def test_starting_stores_revalidate_worker_identity_before_next_wait(dependencies, monkeypatch):
+    lab, cli, clock = dependencies
+    cli.containers[cli.dependency_ids["redis"]]["State"]["Health"]["Status"] = "starting"
+    before = copy.deepcopy(lab.journal.value["resources"])
+
+    def sleep(seconds):
+        clock.sleep(seconds)
+        if seconds <= 1:
+            cli.containers["0" * 63 + "1"]["Created"] = "foreign"
+
+    monkeypatch.setattr(lab_module.time, "sleep", sleep)
+    with pytest.raises(QualificationError):
+        lab.experiment_probes("unused")
+    assert not cli.readiness_records and clock.sleeps == [10, 1]
+    assert_refused_without_adoption(lab, cli, before)
+    assert_probe_failure(lab, "probes_dependencies_readiness_identity", service="ingest-worker")
+
+
+@pytest.mark.parametrize("raw", [
+    json.dumps({"schema": 1, "reason": "phase_unready", "secondary_reason": "dependency_cleanup_error"}),
+    '{"schema":1,"reason":"phase_unready","secondary_reason":"none","reason":"phase_unready"}',
+    '{"schema":1,"reason":"phase_unready","secondary_reason":"none"',
+    json.dumps({"schema": 1, "reason": "phase_unready", "secondary_reason": "none"}) + "\n{}",
+])
+def test_phase_secondary_or_nonexact_json_refuses_without_recovery_wait(dependencies, raw):
+    lab, cli, clock = dependencies
+    cli.ready, cli.readiness_diagnostic = False, raw
+    before = copy.deepcopy(lab.journal.value["resources"])
+    with pytest.raises(QualificationError, match="not ready"):
+        lab.experiment_probes("unused")
+    assert len(cli.readiness_records) == 1 and clock.sleeps == [10]
+    assert_refused_without_adoption(lab, cli, before)
+    assert_probe_failure(lab, "probes_dependencies_readiness")
+
+
+@pytest.mark.parametrize("primary", [DockerOperationError("docker_nonzero", 17),
+                                   subprocess.TimeoutExpired(CANARY, 1, output=CANARY, stderr=CANARY),
+                                   KeyboardInterrupt(CANARY), SystemExit(CANARY), asyncio.CancelledError(CANARY)])
+def test_later_readiness_exception_retains_identity_without_stale_phase_reason(dependencies, monkeypatch, primary):
+    lab, cli, clock = dependencies
+    cli.ready = False
+    cli.readiness_diagnostic = json.dumps({"schema": 1, "reason": "phase_unready", "secondary_reason": "none"})
+    before = copy.deepcopy(lab.journal.value["resources"])
+    original, calls = cli.runner, []
+
+    def runner(command, **kwargs):
+        if lab.probe_section == "dependencies" and command[3:5] == ["container", "exec"]:
+            calls.append(kwargs.copy())
+            if len(calls) == 2:
+                raise primary
+        return original(command, **kwargs)
+
+    lab.docker.runner = runner
+    with pytest.raises(type(primary)) as caught:
+        lab.experiment_probes("unused")
+    assert caught.value is primary and len(calls) == 2 and clock.sleeps == [10, 1]
+    assert "reason_code" not in lab.failure and "secondary_reason" not in lab.failure
+    assert_refused_without_adoption(lab, cli, before)
+
+
+@pytest.mark.parametrize("inspect_cost", [30, 40])
+def test_inspections_exhaust_budget_before_new_readiness_exec(dependencies, inspect_cost):
+    lab, cli, _ = dependencies
+    cli.inspect_cost = inspect_cost
+    before = copy.deepcopy(lab.journal.value["resources"])
+    with pytest.raises(QualificationError, match="budget"):
+        lab.experiment_probes("unused")
+    assert not cli.readiness_records
+    assert_refused_without_adoption(lab, cli, before)
+
+
+def test_real_ready_exit_at_exact_deadline_cannot_authorize_peer(dependencies):
+    lab, cli, clock = dependencies
+    lab.deadline = lab.docker.deadline = 118.0
+    cli.readiness_cost = 8
+    before = copy.deepcopy(lab.journal.value["resources"])
+    with pytest.raises(QualificationError, match="budget"):
+        lab.experiment_probes("unused")
+    assert clock.now == 118 and len(cli.readiness_records) == 1
+    assert not cli.launches and lab.journal.value["resources"] == before
+    assert (lab.deadline, lab.docker.deadline) == (118.0, 118.0)
+    assert_probe_failure(lab, "probes_dependencies_launch_budget")
+    assert "reason_code" not in lab.failure
