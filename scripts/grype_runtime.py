@@ -48,6 +48,14 @@ ERRORS = {
     "download", "archive", "version", "nonzero", "json", "database", "identifier", "query_budget",
     "output_budget", "timeout", "owned_cleanup_failed", "configuration_unobserved",
 }
+PREPARE_PHASES = frozenset({
+    "source_guard", "workspace", "download", "extract", "config", "version", "check_files",
+    "update", "adopt_database", "status", "import_validation",
+})
+FILESYSTEM_REASONS = frozenset({
+    "directory_not_safe", "file_not_regular", "hardlink", "tree_unexpected", "root_unexpected",
+    "home_nonempty", "tmp_nonempty", "cache_unexpected", "identity_drift", "syscall",
+})
 TEMPLATE = {
     "check-for-app-update": False, "add-cpes-if-none": False, "only-fixed": False, "only-notfixed": False,
     "ignore-states": "", "ignore": [], "exclude": [], "vex-documents": [], "vex-add": [],
@@ -58,8 +66,10 @@ TEMPLATE = {
 
 
 class GrypeRuntimeError(ValueError):
-    def __init__(self, code):
+    def __init__(self, code, *, filesystem_reason=None):
         self.code = code if code in ERRORS else "config"
+        self.prepare_phase = None
+        self.filesystem_reason = filesystem_reason
         super().__init__(self.code)
 
 
@@ -76,7 +86,7 @@ def unchanged(before, after):
 def safe_stat(path):
     value = path.lstat()
     if stat.S_ISLNK(value.st_mode) or getattr(path, "is_junction", lambda: False)():
-        raise GrypeRuntimeError("filesystem")
+        raise GrypeRuntimeError("filesystem", filesystem_reason="directory_not_safe")
     return value
 
 
@@ -95,7 +105,7 @@ class Directory:
                     current /= part
                 observed = safe_stat(current)
                 if not stat.S_ISDIR(observed.st_mode):
-                    raise GrypeRuntimeError("filesystem")
+                    raise GrypeRuntimeError("filesystem", filesystem_reason="directory_not_safe")
                 fd = None
                 if ANCHORED:
                     fd = os.open(current if part is None else part,
@@ -120,7 +130,7 @@ class Directory:
         value = (os.stat(name, dir_fd=self.fd, follow_symlinks=False)
                  if ANCHORED else safe_stat(self.path / name))
         if stat.S_ISLNK(value.st_mode):
-            raise GrypeRuntimeError("filesystem")
+            raise GrypeRuntimeError("filesystem", filesystem_reason="directory_not_safe")
         return value
 
     def open(self, name, flags, mode=0o600):
@@ -130,7 +140,9 @@ class Directory:
         try:
             value = os.fstat(fd)
             if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or identity(value) != identity(self.entry(name)):
-                raise GrypeRuntimeError("filesystem")
+                reason = "file_not_regular" if not stat.S_ISREG(value.st_mode) else \
+                    "hardlink" if value.st_nlink != 1 else "identity_drift"
+                raise GrypeRuntimeError("filesystem", filesystem_reason=reason)
             self.check()
             return fd
         except BaseException:
@@ -263,7 +275,7 @@ def write_all(fd, data):
     while data:
         size = os.write(fd, data)
         if size <= 0:
-            raise GrypeRuntimeError("filesystem")
+            raise GrypeRuntimeError("filesystem", filesystem_reason="syscall")
         data = data[size:]
 
 
@@ -725,6 +737,7 @@ class Runtime:
         self.status_bytes = None
         self.queries = 0
         self.closed = False
+        self.prepare_phase = None
         self.sources = [(Path(os.path.abspath(p))) for p in (manifest_path, config_path, __file__)]
 
     def directory(self, path):
@@ -772,7 +785,7 @@ class Runtime:
                     elif stat.S_ISREG(value.st_mode) and value.st_nlink == 1 and value.st_size <= MAX_DB_FILE:
                         total += value.st_size
                     else:
-                        raise GrypeRuntimeError("filesystem")
+                        raise GrypeRuntimeError("filesystem", filesystem_reason="tree_unexpected")
                     if total > MAX_WORKSPACE:
                         raise GrypeRuntimeError("byte_budget")
             finally:
@@ -784,18 +797,31 @@ class Runtime:
                    output_fd=output_fd, capture=capture, monitor=self.budget_tree, timeout=timeout)
 
     def prepare(self):
+        try:
+            self._prepare()
+        except BaseException as primary:
+            if type(primary) is GrypeRuntimeError:
+                primary.prepare_phase = self.prepare_phase
+            raise
+        else:
+            self.prepare_phase = None
+
+    def _prepare(self):
+        self.prepare_phase = "source_guard"
         if self.platform != native_platform():
             raise GrypeRuntimeError("platform")
         self.source_guards = [self.guard(path, CHUNK) for path in self.sources]
         asset = validate_manifest(self.source_guards[0].read_json(), self.platform)
         if self.source_guards[1].read_json() != TEMPLATE:
             raise GrypeRuntimeError("config")
+        self.prepare_phase = "workspace"
         self.mkdir(self.path)
         self.root = self.directory(self.path)
         for name in ("home", "tmp", "cache", "database"):
             self.mkdir(self.path / name)
         self.cache = self.path / "database"
         self.environment = clean_environment(self.path)
+        self.prepare_phase = "download"
         archive = self.path / "asset.tar.gz"
         fd = self.create(archive)
         try:
@@ -808,6 +834,7 @@ class Runtime:
         self.archive_guard = self.guard(archive, asset["bytes"])
         if self.archive_guard.fd_stat.st_size != asset["bytes"] or self.archive_guard.sha256 != asset["sha256"]:
             raise GrypeRuntimeError("download")
+        self.prepare_phase = "extract"
         binary = self.path / "grype"
         seen = set()
         os.lseek(self.archive_guard.fd, 0, os.SEEK_SET)
@@ -839,6 +866,7 @@ class Runtime:
         self.archive_guard.check()
         self.root.chmod("grype", 0o500)
         self.binary_guard = self.guard(binary, MAX_BINARY)
+        self.prepare_phase = "config"
         config = json.loads(canonical(TEMPLATE))
         config["db"]["cache-dir"] = str(self.cache)
         fd = self.create(self.path / "grype.json")
@@ -848,15 +876,19 @@ class Runtime:
             os.close(fd)
         self.root.chmod("grype.json", 0o400)
         self.config_guard = self.guard(self.path / "grype.json", CHUNK)
+        self.prepare_phase = "version"
         version = decode_json(self.command(["version", "-o", "json"], limit=CHUNK), CHUNK)
         if version.get("version") != VERSION or version.get("application") != "grype" or \
                 version.get("platform") != self.platform or version.get("gitCommit") != COMMIT:
             raise GrypeRuntimeError("version")
+        self.prepare_phase = "check_files"
         self.check_files()
         if self.directory(self.cache).names():
             raise GrypeRuntimeError("database")
+        self.prepare_phase = "update"
         self.command(["db", "update"], limit=CHUNK, timeout=300)
         self.fetched_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        self.prepare_phase = "adopt_database"
         self.adopt_database()
         database = self.directory(self.cache / "6")
         for name in database.names():
@@ -864,15 +896,18 @@ class Runtime:
         self.db_guards = {name: self.guard(self.cache / "6" / name, MAX_DB_FILE) for name in database.names()}
         self.file_table = {"6/" + name: guard.sha256 for name, guard in sorted(self.db_guards.items())}
         self.table_sha256 = hashlib.sha256(canonical(self.file_table)).hexdigest()
+        self.prepare_phase = "status"
         self.database_status = decode_json(self.command(["db", "status", "-o", "json"], limit=CHUNK), CHUNK)
         validate_status(self.database_status, self.cache, self.fetched_at)
         self.status_bytes = canonical(self.database_status)
+        self.prepare_phase = "import_validation"
         imported = self.db_guards["import.json"].read_json()
         if imported.get("source") != self.database_status["from"] or \
                 imported.get("client_version") != "6.1.10" or \
                 not isinstance(imported.get("digest"), str) or \
                 not re.fullmatch(r"xxh64:[0-9a-f]{16}", imported["digest"]):
             raise GrypeRuntimeError("database")
+        self.prepare_phase = "check_files"
         self.check_files()
 
     def adopt_database(self):
@@ -910,10 +945,12 @@ class Runtime:
                 validate_status(self.database_status, self.cache, self.fetched_at)
         if hasattr(self, "root"):
             if self.root.names() != {"home", "tmp", "cache", "database", "asset.tar.gz", "grype", "grype.json"}:
-                raise GrypeRuntimeError("filesystem")
+                raise GrypeRuntimeError("filesystem", filesystem_reason="root_unexpected")
             for name in ("home", "tmp", "cache"):
                 if self.directory(self.path / name).names():
-                    raise GrypeRuntimeError("filesystem")
+                    raise GrypeRuntimeError("filesystem", filesystem_reason={
+                        "home": "home_nonempty", "tmp": "tmp_nonempty", "cache": "cache_unexpected",
+                    }[name])
 
     def run_query(self, identifier, output):
         validate_identifier(identifier)
@@ -1016,7 +1053,9 @@ def prepared_grype(*, scratch_parent: Path, manifest_path: Path, config_path: Pa
         except GrypeRuntimeError:
             primary.add_note("owned_cleanup_failed")
         if isinstance(primary, (OSError, tarfile.TarError)):
-            raise GrypeRuntimeError("filesystem") from None
+            converted = GrypeRuntimeError("filesystem", filesystem_reason="syscall")
+            converted.prepare_phase = handle.prepare_phase
+            raise converted from None
         raise
     else:
         handle.cleanup()

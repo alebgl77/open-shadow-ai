@@ -28,6 +28,14 @@ FAILURE_CODES = frozenset({
     "version", "json", "database", "identifier", "query_budget", "output_budget", "owned_cleanup_failed",
     "configuration_unobserved",
 })
+FAILURE_PREPARE_PHASES = frozenset({
+    "source_guard", "workspace", "download", "extract", "config", "version", "check_files",
+    "update", "adopt_database", "status", "import_validation",
+})
+FAILURE_FILESYSTEM_REASONS = frozenset({
+    "directory_not_safe", "file_not_regular", "hardlink", "tree_unexpected", "root_unexpected",
+    "home_nonempty", "tmp_nonempty", "cache_unexpected", "identity_drift", "syscall",
+})
 FAILURE_TYPES = {
     ValueError: "ValueError", OSError: "OSError", PermissionError: "PermissionError",
     FileNotFoundError: "FileNotFoundError", FileExistsError: "FileExistsError", TimeoutError: "TimeoutError",
@@ -38,13 +46,20 @@ FAILURE_TYPES = {
 
 def validate_failure_diagnostic(value):
     """Failure diagnostics are a closed, unsigned schema with no exception payload."""
+    required = {"schema", "kind", "status", "accepted", "stage", "error_type", "code", "secondary"}
     if type(value) is not dict or any(type(key) is not str for key in value) or \
-            set(value) != {"schema", "kind", "status", "accepted", "stage", "error_type",
-                                               "code", "secondary"} or \
+            not required <= set(value) or set(value) - required - {"prepare_phase", "filesystem_reason"} or \
             type(value["schema"]) is not int or type(value["accepted"]) is not bool or \
             any(type(value[key]) is not str for key in ("kind", "status", "stage", "error_type", "code")) or \
             type(value["secondary"]) is not list or \
             any(type(note) is not str for note in value["secondary"]):
+        raise ValueError("Invalid unsigned scanner failure diagnostic")
+    if "prepare_phase" in value and (value["error_type"] != "GrypeRuntimeError" or
+            value["stage"] != "grype_prepare" or type(value["prepare_phase"]) is not str or
+            value["prepare_phase"] not in FAILURE_PREPARE_PHASES) or \
+            "filesystem_reason" in value and (value["error_type"] != "GrypeRuntimeError" or
+            value["code"] != "filesystem" or type(value["filesystem_reason"]) is not str or
+            value["filesystem_reason"] not in FAILURE_FILESYSTEM_REASONS):
         raise ValueError("Invalid unsigned scanner failure diagnostic")
     if value["schema"] != 1 or value["kind"] != "image-scan-failure" or value["status"] != "diagnostic-only" or \
             value["accepted"] or \
@@ -96,6 +111,15 @@ class FailureDiagnostic:
                 self.secondary.add("owned_cleanup_failed")
         if self.first is None:
             self.first = {"stage": self.stage, "error_type": kind, "code": code}
+            if error_type is self.grype_error_type:
+                attributes = error.__dict__
+                if type(attributes) is dict:
+                    phase = attributes.get("prepare_phase")
+                    reason = attributes.get("filesystem_reason")
+                    if self.stage == "grype_prepare" and type(phase) is str and phase in FAILURE_PREPARE_PHASES:
+                        self.first["prepare_phase"] = phase
+                    if code == "filesystem" and type(reason) is str and reason in FAILURE_FILESYSTEM_REASONS:
+                        self.first["filesystem_reason"] = reason
 
     @contextmanager
     def context(self, context):

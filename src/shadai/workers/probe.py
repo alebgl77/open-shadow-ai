@@ -6,6 +6,7 @@ import json
 import math
 import os
 import stat
+import sys
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -28,6 +29,100 @@ FIELDS = {
     "last_successful_cycle_monotonic",
 }
 PHASES = {"starting", "idle", "poll", "handler", "blocked", "failed", "purge", "sleep"}
+READINESS_REASONS = {
+    "invalid_record", "uninitialized", "heartbeat_stale", "phase_unready", "handler_stale", "poll_missing",
+    "poll_stale", "purge_cycle_stale", "purge_phase_stale", "invalid_budget", "configuration_error",
+    "postgres_error", "redis_error", "retention_unready", "unknown_stage", "group_unready", "stream_unready",
+    "clickhouse_error", "dependencies_timeout", "dependency_cleanup_error", "cancelled", "unexpected_error",
+    "diagnostic_unavailable",
+}
+SECONDARY_REASONS = {"none", "dependency_cleanup_error"}
+DIAGNOSTIC_LIMIT = 256
+
+
+class ReadinessDiagnostic:
+    """Keep only closed decision codes; neither exception text nor probe data."""
+
+    def __init__(self):
+        self.current = "unexpected_error"
+        self.reason = None
+        self.secondary_reason = "none"
+
+    def step(self, code):
+        self.current = code if type(code) is str and code in READINESS_REASONS else "unexpected_error"
+
+    def refuse(self, code):
+        if self.reason is None:
+            self.reason = code if type(code) is str and code in READINESS_REASONS else "unexpected_error"
+        return False
+
+    def cleanup_failed(self):
+        if self.reason is None:
+            self.reason = "dependency_cleanup_error"
+        else:
+            self.secondary_reason = "dependency_cleanup_error"
+
+    def envelope(self):
+        return {
+            "schema": 1,
+            "reason": self.reason if type(self.reason) is str and self.reason in READINESS_REASONS
+            else "diagnostic_unavailable",
+            "secondary_reason": (self.secondary_reason if type(self.secondary_reason) is str and
+                                 self.secondary_reason in SECONDARY_REASONS else "none"),
+        }
+
+
+def diagnostic_step(diagnostic, code):
+    if type(diagnostic) is ReadinessDiagnostic:
+        diagnostic.step(code)
+
+
+def diagnostic_refusal(diagnostic, code):
+    if type(diagnostic) is ReadinessDiagnostic:
+        diagnostic.refuse(code)
+    return False
+
+
+def diagnostic_check(diagnostic, result, code):
+    if result is False:
+        diagnostic_refusal(diagnostic, code)
+    return result
+
+
+def emit_readiness_diagnostic(diagnostic):
+    raw = json.dumps(diagnostic.envelope(), separators=(",", ":"), ensure_ascii=True) + "\n"
+    if len(raw) <= DIAGNOSTIC_LIMIT:
+        # Failed diagnostic delivery never changes the already-failed health result.
+        with suppress(Exception):
+            sys.stdout.write(raw)
+            sys.stdout.flush()
+
+
+def parse_readiness_diagnostic(raw):
+    unavailable = {"schema": 1, "reason": "diagnostic_unavailable", "secondary_reason": "none"}
+    if type(raw) not in {str, bytes} or len(raw) > DIAGNOSTIC_LIMIT:
+        return unavailable
+    if type(raw) is str and not raw.isascii():
+        return unavailable
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError
+            value[key] = item
+        return value
+
+    try:
+        value = json.loads(raw, object_pairs_hook=unique)
+        if (type(value) is not dict or set(value) != {"schema", "reason", "secondary_reason"} or
+                type(value["schema"]) is not int or value["schema"] != 1 or
+                type(value["reason"]) is not str or value["reason"] not in READINESS_REASONS or
+                type(value["secondary_reason"]) is not str or value["secondary_reason"] not in SECONDARY_REASONS):
+            return unavailable
+        return value
+    except (ValueError, TypeError, UnicodeError):
+        return unavailable
 
 
 def budget(name, default, low, high):
@@ -222,31 +317,40 @@ def validate_probe(value, stage, *, proc=Path("/proc"), now=None):
     return value, now
 
 
-def local_check(mode, stage, **kwargs):
+def local_check(mode, stage, *, diagnostic=None, **kwargs):
+    diagnostic_step(diagnostic, "invalid_record")
     value, now = read_probe(stage, **kwargs)
     if not value["initialized"]:
-        return False
+        return diagnostic_refusal(diagnostic, "uninitialized")
     if mode == "startup":
         return True
+    diagnostic_step(diagnostic, "invalid_budget")
     if now - value["heartbeat_monotonic"] > budget("SHADAI_PROBE_LIVE_SECONDS", 30, 10, 30):
-        return False
+        return diagnostic_refusal(diagnostic, "heartbeat_stale")
     if mode == "liveness":
         return True
     if mode != "readiness" or value["phase"] in {"starting", "blocked", "failed"}:
-        return False
+        return diagnostic_refusal(diagnostic, "phase_unready")
     if stage == "purge":
         cycle = value["last_successful_cycle_monotonic"]
         if cycle is None or now - cycle > budget("SHADAI_PROBE_PURGE_CYCLE_SECONDS", 97200, 86400, 97200):
-            return False
+            return diagnostic_refusal(diagnostic, "purge_cycle_stale")
         maximum = 3600 if value["phase"] == "purge" else 97200
-        return now - value["phase_started_monotonic"] <= maximum
+        return diagnostic_check(diagnostic, now - value["phase_started_monotonic"] <= maximum, "purge_phase_stale")
     if value["phase"] == "handler":
-        return now - value["phase_started_monotonic"] <= budget("SHADAI_PROBE_HANDLER_SECONDS", 300, 10, 300)
+        return diagnostic_check(
+            diagnostic,
+            now - value["phase_started_monotonic"] <= budget("SHADAI_PROBE_HANDLER_SECONDS", 300, 10, 300),
+            "handler_stale",
+        )
     poll = value["last_poll_monotonic"]
-    return poll is not None and now - poll <= budget("SHADAI_PROBE_POLL_SECONDS", 90, 10, 90)
+    if poll is None:
+        return diagnostic_refusal(diagnostic, "poll_missing")
+    return diagnostic_check(diagnostic, now - poll <= budget("SHADAI_PROBE_POLL_SECONDS", 90, 10, 90), "poll_stale")
 
 
-async def dependencies_ready(stage):
+async def dependencies_ready(stage, *, diagnostic=None):
+    diagnostic_step(diagnostic, "configuration_error")
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -254,6 +358,7 @@ async def dependencies_ready(stage):
     from shadai.database import init_clickhouse
 
     config = load_config()
+    diagnostic_step(diagnostic, "postgres_error")
     engine = create_async_engine(config.database.postgres_url)
     ch = None
     redis = None
@@ -262,6 +367,7 @@ async def dependencies_ready(stage):
             async with engine.connect() as connection:
                 await connection.execute(text("SELECT 1"))
             if stage != "purge":
+                diagnostic_step(diagnostic, "redis_error")
                 import redis.asyncio as aioredis
 
                 redis = aioredis.from_url(config.database.redis_url, decode_responses=True)
@@ -269,12 +375,12 @@ async def dependencies_ready(stage):
                 from shadai.workers.redis_lifecycle import retention_ready
 
                 if not await retention_ready(redis):
-                    return False
+                    return diagnostic_refusal(diagnostic, "retention_unready")
                 from shadai.utils.operations import STAGES, stream_snapshot
 
                 operation = STAGES.get(stage)
                 if operation is None:
-                    return False
+                    return diagnostic_refusal(diagnostic, "unknown_stage")
                 group, streams = operation
                 clock = await redis.time()
                 server_now = clock[0] + clock[1] / 1000000
@@ -282,24 +388,37 @@ async def dependencies_ready(stage):
                     groups = await redis.xinfo_groups(stream)
                     found = [item for item in groups if item["name"] == group]
                     if len(found) != 1 or found[0].get("lag") is None:
-                        return False
+                        return diagnostic_refusal(diagnostic, "group_unready")
                     health = await stream_snapshot(redis, group, stream, server_now)
                     if health["status"] in {"blocked", "unknown", "stale"}:
-                        return False
+                        return diagnostic_refusal(diagnostic, "stream_unready")
                     # PEL is visible work, not a fictional empty queue; local
                     # handler progress governs readiness while it is being handled.
             if stage in {"ingest", "purge"}:
+                diagnostic_step(diagnostic, "clickhouse_error")
                 ch = init_clickhouse(config.database)
                 await asyncio.to_thread(ch.execute, "SELECT 1")
         return True
-    except Exception:
-        return False
+    except Exception as exc:
+        code = "dependencies_timeout" if type(exc) is TimeoutError else (
+            diagnostic.current if type(diagnostic) is ReadinessDiagnostic else "unexpected_error")
+        return diagnostic_refusal(diagnostic, code)
+    except BaseException as exc:
+        code = ("cancelled" if type(exc) in {KeyboardInterrupt, SystemExit, asyncio.CancelledError}
+                else "unexpected_error")
+        diagnostic_refusal(diagnostic, code)
+        raise
     finally:
-        if redis:
-            await redis.aclose()
-        if ch:
-            ch.disconnect()
-        await engine.dispose()
+        try:
+            if redis:
+                await redis.aclose()
+            if ch:
+                ch.disconnect()
+            await engine.dispose()
+        except BaseException:
+            if type(diagnostic) is ReadinessDiagnostic:
+                diagnostic.cleanup_failed()
+            raise
 
 
 def main(argv=None):
@@ -314,12 +433,19 @@ def main(argv=None):
     if args.mode == "readiness" and hasattr(signal, "setitimer"):
         signal.signal(signal.SIGALRM, lambda *_: os._exit(1))
         signal.setitimer(signal.ITIMER_REAL, 5)
+    diagnostic = ReadinessDiagnostic() if args.mode == "readiness" else None
     try:
-        healthy = local_check(args.mode, args.stage)
+        healthy = (local_check(args.mode, args.stage, diagnostic=diagnostic) if diagnostic is not None
+                   else local_check(args.mode, args.stage))
         if healthy and args.mode == "readiness":
-            healthy = asyncio.run(dependencies_ready(args.stage))
+            healthy = asyncio.run(dependencies_ready(args.stage, diagnostic=diagnostic))
+        if not healthy and diagnostic is not None:
+            emit_readiness_diagnostic(diagnostic)
         return 0 if healthy else 1
     except Exception:
+        if diagnostic is not None:
+            diagnostic.refuse(diagnostic.current)
+            emit_readiness_diagnostic(diagnostic)
         return 1
     finally:
         if args.mode == "readiness" and hasattr(signal, "setitimer"):

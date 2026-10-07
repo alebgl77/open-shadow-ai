@@ -25,6 +25,7 @@ from shadai.qualification.journal import (
 )
 from shadai.qualification.load import LoadSender
 from shadai.qualification.schemas import SCENARIOS, QualificationError, canonical_bytes, report
+from shadai.workers.probe import READINESS_REASONS, SECONDARY_REASONS, parse_readiness_diagnostic
 
 SERVICES = {
     "api",
@@ -171,7 +172,8 @@ def failure_evidence(exc, phase, stage):
     return value
 
 
-def probe_failure_evidence(exc, checkpoint, operation, service, last_completed):
+def probe_failure_evidence(exc, checkpoint, operation, service, last_completed, *, reason_code=None,
+                           secondary_reason=None):
     value = failure_evidence(exc, "probes", checkpoint)
     if type(checkpoint) is str and checkpoint in PROBE_CHECKPOINTS:
         value["stage"] = value["checkpoint"] = checkpoint
@@ -185,6 +187,11 @@ def probe_failure_evidence(exc, checkpoint, operation, service, last_completed):
             value["service"] = service
         if type(last_completed) is str and last_completed in PROBE_CHECKPOINTS:
             value["last_completed"] = last_completed
+        if checkpoint == "probes_dependencies_readiness":
+            if type(reason_code) is str and reason_code in READINESS_REASONS:
+                value["reason_code"] = reason_code
+            if type(secondary_reason) is str and secondary_reason in SECONDARY_REASONS:
+                value["secondary_reason"] = secondary_reason
     return value
 
 
@@ -252,6 +259,7 @@ class Laboratory:
         self.probe_section = None
         self.probe_operation = "unknown"
         self.probe_service = None
+        self.probe_reason = self.probe_secondary_reason = None
 
     def probe_checkpoint(self, step, *, operation="unknown", service=None):
         section = self.probe_section
@@ -268,7 +276,8 @@ class Laboratory:
 
     def probe_failure(self, exc, *, secondary=False):
         value = probe_failure_evidence(exc, self.stage, self.probe_operation, self.probe_service,
-                                       getattr(self.docker, "last_completed", None))
+                                       getattr(self.docker, "last_completed", None), reason_code=self.probe_reason,
+                                       secondary_reason=self.probe_secondary_reason)
         if self.failure is None:
             self.failure = value
         elif secondary:
@@ -277,7 +286,7 @@ class Laboratory:
     @contextmanager
     def probe_diagnostics(self, *, secondary=False):
         previous = (self.probe_section, self.stage, getattr(self.docker, "checkpoint", None),
-                    self.probe_operation, self.probe_service)
+                    self.probe_operation, self.probe_service, self.probe_reason, self.probe_secondary_reason)
         if self.probe_section is None:
             self.probe_section = "baseline"
         try:
@@ -287,7 +296,7 @@ class Laboratory:
             raise
         finally:
             (self.probe_section, self.stage, self.docker.checkpoint,
-             self.probe_operation, self.probe_service) = previous
+             self.probe_operation, self.probe_service, self.probe_reason, self.probe_secondary_reason) = previous
 
     def pressure_checkpoint(self, step):
         if self.probe_section == "witness":
@@ -1319,6 +1328,10 @@ class Laboratory:
             timeout=min(8, self.remaining()),
         )
         self.probe_completed()
+        if result.returncode != 0 and mode == "readiness" and self.probe_section == "dependencies":
+            diagnostic = parse_readiness_diagnostic(getattr(result, "stdout", ""))
+            self.probe_reason = diagnostic["reason"]
+            self.probe_secondary_reason = diagnostic["secondary_reason"]
         return result.returncode == 0
 
     def wait_probe_dependencies(self, worker):

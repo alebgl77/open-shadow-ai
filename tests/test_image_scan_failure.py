@@ -69,6 +69,144 @@ def test_actual_grype_prepare_error_is_exact_type_and_fixed_code(harness, monkey
     assert not (harness.output / "redis.metadata.json").exists()
 
 
+def test_actual_prepare_fixed_phase_and_filesystem_reason_are_unsigned_and_bound_to_real_type(harness, monkeypatch):
+    error = GRYPE.GrypeRuntimeError("filesystem", filesystem_reason="home_nonempty")
+    error.prepare_phase = "check_files"
+    error.add_note("owned_cleanup_failed")
+    original = SCAN.script
+
+    @contextmanager
+    def refused(**kwargs):
+        harness.state.grype_calls.append("prepare")
+        raise error
+        yield None
+
+    module = SimpleNamespace(prepared_grype=refused, GrypeRuntimeError=GRYPE.GrypeRuntimeError)
+    monkeypatch.setattr(SCAN, "script", lambda name: module if name == "grype_runtime" else original(name))
+    with pytest.raises(GRYPE.GrypeRuntimeError) as raised:
+        harness.run()
+    assert raised.value is error and error.args == ("filesystem",)
+    value = failure(harness.output)
+    assert value["prepare_phase"] == "check_files" and value["filesystem_reason"] == "home_nonempty"
+    assert value["stage"] == "grype_prepare" and value["secondary"] == ["owned_cleanup_failed"]
+    assert harness.calls[-1] == "cleanup" and harness.state.grype_calls == ["prepare"]
+    assert not (harness.output / "redis.metadata.json").exists()
+    assert not (harness.output / "redis.evidence-manifest.json").exists()
+
+
+@pytest.mark.parametrize("poisoned_field", ["prepare_phase", "filesystem_reason"])
+def test_exact_grype_exception_poison_attribute_dict_preserves_primary_and_real_context_cleanup(
+        harness, monkeypatch, poisoned_field):
+    error = GRYPE.GrypeRuntimeError("filesystem", filesystem_reason="home_nonempty")
+    error.prepare_phase = "check_files"
+    error.add_note("owned_cleanup_failed")
+    inspected = []
+
+    class PoisonAttributes(dict):
+        def get(self, key, default=None):
+            inspected.append(key)
+            if key == poisoned_field:
+                raise RuntimeError(CANARY)
+            return super().get(key, default)
+
+    error.__dict__ = PoisonAttributes(error.__dict__)
+    original = SCAN.script
+
+    @contextmanager
+    def refused(**kwargs):
+        harness.state.grype_calls.append("prepare")
+        try:
+            raise error
+            yield None
+        finally:
+            harness.state.grype_calls.append("cleanup")
+
+    module = SimpleNamespace(prepared_grype=refused, GrypeRuntimeError=GRYPE.GrypeRuntimeError)
+    monkeypatch.setattr(SCAN, "script", lambda name: module if name == "grype_runtime" else original(name))
+    with pytest.raises(GRYPE.GrypeRuntimeError) as raised:
+        harness.run()
+    assert raised.value is error and error.args == ("filesystem",)
+    assert harness.calls == ["prepare", "check", "trivy", "check", "cleanup"]
+    assert harness.state.grype_calls == ["prepare", "cleanup"]
+    assert "prepare_phase" not in inspected and "filesystem_reason" not in inspected
+    value = failure(harness.output)
+    assert value["stage"] == "grype_prepare" and value["code"] == "filesystem"
+    assert value["secondary"] == ["owned_cleanup_failed"]
+    assert "prepare_phase" not in value and "filesystem_reason" not in value
+    assert not (harness.output / "redis.metadata.json").exists()
+    assert not (harness.output / "redis.evidence-manifest.json").exists()
+
+
+@pytest.mark.parametrize("field,allowed", [("prepare_phase", COMPONENTS.FAILURE_PREPARE_PHASES),
+                                         ("filesystem_reason", COMPONENTS.FAILURE_FILESYSTEM_REASONS)])
+def test_all_closed_prepare_details_have_typed_unsigned_schema(tmp_path, field, allowed):
+    for detail in allowed:
+        trace = COMPONENTS.FailureDiagnostic()
+        trace.grype_error_type = GRYPE.GrypeRuntimeError
+        trace.at("grype_prepare")
+        error = GRYPE.GrypeRuntimeError("filesystem")
+        setattr(error, field, detail)
+        trace.capture(error)
+        assert trace.first[field] == detail
+        value = {"schema": 1, "kind": "image-scan-failure", "status": "diagnostic-only", "accepted": False,
+                 **trace.first, "secondary": []}
+        COMPONENTS.validate_failure_diagnostic(value)
+    assert COMPONENTS.FAILURE_PREPARE_PHASES == GRYPE.PREPARE_PHASES
+    assert COMPONENTS.FAILURE_FILESYSTEM_REASONS == GRYPE.FILESYSTEM_REASONS
+
+
+@pytest.mark.parametrize("field", ["prepare_phase", "filesystem_reason"])
+@pytest.mark.parametrize("bad", [CANARY, None, True, 1, {}, [], "version" * 1000])
+def test_untrusted_prepare_detail_is_omitted_and_schema_rejects_explicit_value(tmp_path, field, bad):
+    trace = COMPONENTS.FailureDiagnostic()
+    trace.grype_error_type = GRYPE.GrypeRuntimeError
+    trace.at("grype_prepare")
+    error = GRYPE.GrypeRuntimeError("filesystem")
+    setattr(error, field, bad)
+    trace.emit(tmp_path, error)
+    value = failure(tmp_path)
+    assert field not in value
+    value[field] = bad
+    with pytest.raises(ValueError):
+        COMPONENTS.validate_failure_diagnostic(value)
+
+
+@pytest.mark.parametrize("field", ["prepare_phase", "filesystem_reason"])
+def test_poison_string_prepare_details_are_never_compared_or_serialized(tmp_path, field):
+    class PoisonString(str):
+        def __eq__(self, other):
+            raise AssertionError("untrusted detail compared")
+
+        def __hash__(self):
+            raise AssertionError("untrusted detail hashed")
+
+        def __str__(self):
+            raise AssertionError("untrusted detail serialized")
+
+    trace = COMPONENTS.FailureDiagnostic()
+    trace.grype_error_type = GRYPE.GrypeRuntimeError
+    trace.at("grype_prepare")
+    error = GRYPE.GrypeRuntimeError("filesystem")
+    setattr(error, field, PoisonString(CANARY))
+    trace.emit(tmp_path, error)
+    value = failure(tmp_path)
+    assert field not in value
+    value[field] = getattr(error, field)
+    with pytest.raises(ValueError):
+        COMPONENTS.validate_failure_diagnostic(value)
+
+
+@pytest.mark.parametrize("mutation", ["wrong_stage", "wrong_type", "wrong_code"])
+def test_fixed_prepare_detail_cannot_claim_other_stage_or_exception_authority(mutation):
+    value = {"schema": 1, "kind": "image-scan-failure", "status": "diagnostic-only", "accepted": False,
+             "stage": "grype_prepare", "error_type": "GrypeRuntimeError", "code": "filesystem", "secondary": [],
+             "prepare_phase": "version", "filesystem_reason": "syscall"}
+    value[{"wrong_stage": "stage", "wrong_type": "error_type", "wrong_code": "code"}[mutation]] = \
+        {"wrong_stage": "sentinel_query", "wrong_type": "ValueError", "wrong_code": "nonzero"}[mutation]
+    with pytest.raises(ValueError):
+        COMPONENTS.validate_failure_diagnostic(value)
+
+
 @pytest.mark.parametrize("base", [ValueError, GRYPE.GrypeRuntimeError])
 def test_malicious_exception_subclass_is_not_inspected(tmp_path, base):
     class PoisonError(base):

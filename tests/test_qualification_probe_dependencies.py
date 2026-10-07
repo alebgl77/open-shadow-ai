@@ -19,6 +19,7 @@ from shadai.qualification.lab import (
     probe_failure_evidence,
 )
 from shadai.qualification.schemas import QualificationError
+from shadai.workers.probe import READINESS_REASONS
 
 
 class Clock:
@@ -51,6 +52,7 @@ class DependencyCli(CliModel):
         self.diagnostic_pairs = []
         self.diagnostic_failure = None
         self.diagnostic_error = None
+        self.readiness_diagnostic = CANARY
         self.injected = None
         project = lab.journal.value["projects"]["source"]
         self.dependency_ids = {"redis": "3" * 64, "clickhouse": "4" * 64, "migrate": "6" * 64}
@@ -88,7 +90,8 @@ class DependencyCli(CliModel):
             if "shadai.workers.probe" in args:
                 mode = args[args.index("shadai.workers.probe") + 1]
                 record = next(x for x in self.lab.journal.value["resources"] if x["id"] == args[2])
-                return self.response(CANARY, code=0 if self.probe_status(record, mode) else 1, stderr=CANARY)
+                return self.response(self.readiness_diagnostic, code=0 if self.probe_status(record, mode) else 1,
+                                     stderr=CANARY)
             self.suspended = "SIGSTOP" in args[-1]
             return self.response()
         if args[0] == "compose" and args[7] == "up" and args[-1] == "probe-ingest-peer":
@@ -142,7 +145,7 @@ def assert_probe_failure(lab, checkpoint, *, service=None, operation=None):
     value = lab.failure
     assert value["phase"] == "probes" and value["stage"] == value["checkpoint"] == checkpoint
     assert set(value) <= {"phase", "stage", "checkpoint", "operation", "service", "last_completed",
-                          "error_type", "code", "returncode", "secondary"}
+                          "error_type", "code", "returncode", "secondary", "reason_code", "secondary_reason"}
     if service is not None:
         assert value["service"] == service
     if operation is not None:
@@ -575,3 +578,56 @@ def test_witness_json_refusal_reports_only_constant_result_checkpoint(dependenci
     assert not any(call[:2] == ("container", "rm") for call in cli.calls)
     # An interrupted witness remains journaled for the unchanged identity-checked cleanup.
     assert any(x["kind"] == "container" and x["id"] == "d" * 64 for x in lab.journal.value["resources"])
+
+
+@pytest.mark.parametrize("reason", sorted(READINESS_REASONS))
+def test_fixed_readiness_reason_is_diagnostic_only_and_never_authorizes_peer(dependencies, reason):
+    lab, cli, _ = dependencies
+    cli.ready = False
+    cli.readiness_diagnostic = json.dumps({"schema": 1, "reason": reason, "secondary_reason": "none"})
+    before = copy.deepcopy(lab.journal.value["resources"])
+    with pytest.raises(QualificationError):
+        lab.experiment_probes(CANARY)
+    assert_probe_failure(lab, "probes_dependencies_readiness", service="ingest-worker", operation="container_exec")
+    assert lab.failure["reason_code"] == reason and lab.failure["secondary_reason"] == "none"
+    assert_refused_without_adoption(lab, cli, before)
+    assert lab.probe_reason is lab.probe_secondary_reason is None
+
+
+@pytest.mark.parametrize("raw", [
+    "", CANARY, CANARY + json.dumps({"schema": 1, "reason": "poll_stale", "secondary_reason": "none"}),
+    '{"schema":1,"schema":1,"reason":"poll_stale","secondary_reason":"none"}',
+    json.dumps({"schema": True, "reason": "poll_stale", "secondary_reason": "none"}),
+    json.dumps({"schema": 1, "reason": CANARY, "secondary_reason": "none"}),
+    json.dumps({"schema": 1, "reason": "poll_stale", "secondary_reason": "none", "pid": CANARY}),
+    " " * 257,
+])
+def test_untrusted_readiness_output_is_unavailable_without_leaking_or_retry(dependencies, raw):
+    lab, cli, _ = dependencies
+    cli.ready = False
+    cli.readiness_diagnostic = raw
+    with pytest.raises(QualificationError):
+        lab.experiment_probes(CANARY)
+    assert_probe_failure(lab, "probes_dependencies_readiness")
+    assert lab.failure["reason_code"] == "diagnostic_unavailable" and not cli.launches
+    assert cli.readiness_records == ["0" * 63 + "1"]
+
+
+def test_ready_exit_zero_with_false_reason_payload_cannot_change_health_result(dependencies):
+    lab, cli, _ = dependencies
+    cli.readiness_diagnostic = json.dumps({"schema": 1, "reason": "phase_unready", "secondary_reason": "none"})
+    lab.experiment_probes(CANARY)
+    assert lab.failure is None and lab.probe_reason is lab.probe_secondary_reason is None
+    assert lab.scenarios[0]["status"] == "passed" and len(cli.launches) == 1
+
+
+def test_readiness_reason_and_secondary_are_revalidated_before_publication():
+    error = QualificationError(CANARY)
+    proof = probe_failure_evidence(error, "probes_dependencies_readiness", "container_exec", "ingest-worker", None,
+                                   reason_code="retention_unready", secondary_reason="dependency_cleanup_error")
+    assert proof["reason_code"] == "retention_unready" and proof["secondary_reason"] == "dependency_cleanup_error"
+    assert CANARY not in json.dumps(proof) and len(json.dumps(proof).encode()) <= 2048
+    for checkpoint in ("probes_dependencies_readiness", "probes_peer_launch"):
+        value = probe_failure_evidence(error, checkpoint, "container_exec", "ingest-worker", None,
+                                       reason_code=CANARY, secondary_reason={"password": CANARY})
+        assert "reason_code" not in value and "secondary_reason" not in value and CANARY not in json.dumps(value)

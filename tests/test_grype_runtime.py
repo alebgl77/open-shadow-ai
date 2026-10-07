@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tarfile
@@ -154,6 +155,181 @@ def test_valid_runtime_preserves_binary_db_and_raw_receipts_and_cleans(synthetic
     assert not list(synthetic.scratch.iterdir())
     assert output.is_file()
     assert sum("update" in command for command in synthetic.calls) == 1
+
+
+@pytest.mark.parametrize("phase", sorted(runtime.PREPARE_PHASES))
+def test_prepare_phase_diagnostic_preserves_same_fixed_exception_and_call_order(synthetic, monkeypatch, phase):
+    error = runtime.GrypeRuntimeError("filesystem", filesystem_reason="syscall")
+    previous_run, previous_create = runtime.run, runtime.Runtime.create
+    previous_read = runtime.FileGuard.read_json
+
+    def refuse(*args, **kwargs):
+        raise error
+
+    def running(command, **kwargs):
+        wanted = {"download": command[0] == sys.executable, "version": "version" in command,
+                  "update": "update" in command, "status": "status" in command}
+        if wanted.get(phase, False):
+            raise error
+        return previous_run(command, **kwargs)
+
+    def creating(handle, path):
+        if phase == "config" and path.name == "grype.json":
+            raise error
+        return previous_create(handle, path)
+
+    def reading(guard):
+        if phase == "import_validation" and guard.name == "import.json":
+            raise error
+        return previous_read(guard)
+
+    monkeypatch.setattr(runtime, "run", running)
+    monkeypatch.setattr(runtime.Runtime, "create", creating)
+    monkeypatch.setattr(runtime.FileGuard, "read_json", reading)
+    if phase == "source_guard":
+        monkeypatch.setattr(runtime, "native_platform", refuse)
+    elif phase == "workspace":
+        monkeypatch.setattr(runtime.Runtime, "mkdir", refuse)
+    elif phase == "extract":
+        monkeypatch.setattr(runtime.AssetTarInfo, "_proc_member", refuse)
+    elif phase == "check_files":
+        monkeypatch.setattr(runtime.Runtime, "check_files", refuse)
+    elif phase == "adopt_database":
+        monkeypatch.setattr(runtime.Runtime, "adopt_database", refuse)
+    with pytest.raises(runtime.GrypeRuntimeError) as raised:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert raised.value is error and error.code == "filesystem" and error.args == ("filesystem",)
+    assert error.prepare_phase == phase and error.filesystem_reason == "syscall"
+    expected_calls = {"source_guard": 0, "workspace": 0, "download": 0, "extract": 1,
+                      "config": 1, "version": 1, "check_files": 2, "update": 2,
+                      "adopt_database": 3, "status": 3, "import_validation": 4}
+    assert len(synthetic.calls) == expected_calls[phase]
+
+
+@pytest.mark.parametrize("directory,reason", [("home", "home_nonempty"), ("tmp", "tmp_nonempty"),
+                                              ("cache", "cache_unexpected"), ("", "root_unexpected")])
+def test_actual_prepare_empty_directory_guard_identifies_reason_and_preserves_unknown(synthetic, monkeypatch,
+                                                                                     directory, reason):
+    previous = runtime.run
+    paths = []
+
+    def running(command, **kwargs):
+        result = previous(command, **kwargs)
+        if "version" in command:
+            path = kwargs["cwd"] / directory / "unexpected"
+            path.write_bytes(b"synthetic preserved bytes")
+            paths.append(path)
+        return result
+
+    monkeypatch.setattr(runtime, "run", running)
+    with pytest.raises(runtime.GrypeRuntimeError) as raised:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert raised.value.code == "filesystem" and raised.value.args == ("filesystem",)
+    assert raised.value.prepare_phase == "check_files" and raised.value.filesystem_reason == reason
+    assert raised.value.__notes__ == ["owned_cleanup_failed"]
+    assert len(synthetic.calls) == 2 and paths[0].read_bytes() == b"synthetic preserved bytes"
+
+
+@pytest.mark.parametrize("primary", [PermissionError("not-serialized"), KeyboardInterrupt("not-serialized"),
+                                    SystemExit(7)])
+def test_prepare_syscall_diagnostic_keeps_existing_conversion_and_cancel_identity(synthetic, monkeypatch, primary):
+    previous = runtime.run
+
+    def running(command, **kwargs):
+        if "version" in command:
+            raise primary
+        return previous(command, **kwargs)
+
+    monkeypatch.setattr(runtime, "run", running)
+    expected = runtime.GrypeRuntimeError if isinstance(primary, OSError) else type(primary)
+    with pytest.raises(expected) as raised:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    if isinstance(primary, OSError):
+        assert raised.value.args == ("filesystem",) and raised.value.__cause__ is None
+        assert raised.value.__suppress_context__ is True
+        assert raised.value.prepare_phase == "version" and raised.value.filesystem_reason == "syscall"
+    else:
+        assert raised.value is primary and "prepare_phase" not in primary.__dict__
+    assert not list(synthetic.scratch.iterdir())
+
+
+def test_prepare_does_not_inspect_or_annotate_untrusted_exception_subclass(synthetic, monkeypatch):
+    class PoisonError(runtime.GrypeRuntimeError):
+        def __getattribute__(self, name):
+            if name in {"code", "args", "__dict__", "prepare_phase", "filesystem_reason"}:
+                raise AssertionError("untrusted exception inspected")
+            return super().__getattribute__(name)
+
+        def __setattr__(self, name, value):
+            raise AssertionError("untrusted exception changed")
+
+    error = PoisonError.__new__(PoisonError)
+    ValueError.__init__(error, "not-serialized")
+
+    def refusing(handle):
+        handle.prepare_phase = "version"
+        raise error
+
+    monkeypatch.setattr(runtime.Runtime, "_prepare", refusing)
+    with pytest.raises(PoisonError) as raised:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert raised.value is error and synthetic.calls == []
+
+
+@pytest.mark.parametrize("defect,reason", [("nonregular", "file_not_regular"), ("hardlink", "hardlink"),
+                                         ("identity", "identity_drift")])
+def test_file_guard_diagnostic_does_not_relax_exact_original_refusal(tmp_path, monkeypatch, defect, reason):
+    path = tmp_path / "ordinary"
+    path.write_bytes(b"owned")
+    parent = runtime.Directory(tmp_path)
+    original = runtime.os.fstat
+
+    def observing(fd):
+        observed = original(fd)
+        if stat.S_ISREG(observed.st_mode):
+            values = {key: getattr(observed, key) for key in ("st_mode", "st_nlink", "st_dev", "st_ino")}
+            if defect == "nonregular":
+                values["st_mode"] = stat.S_IFIFO
+            elif defect == "hardlink":
+                values["st_nlink"] = 2
+            else:
+                values["st_ino"] += 1
+            return SimpleNamespace(**values)
+        return observed
+
+    monkeypatch.setattr(runtime.os, "fstat", observing)
+    try:
+        with pytest.raises(runtime.GrypeRuntimeError) as raised:
+            parent.open(path.name, os.O_RDONLY)
+        assert raised.value.args == ("filesystem",) and raised.value.filesystem_reason == reason
+        assert path.read_bytes() == b"owned"
+    finally:
+        parent.close()
+
+
+def test_directory_and_tree_specific_diagnostics_preserve_refusal(synthetic, tmp_path, monkeypatch):
+    leaf = tmp_path / "regular"
+    leaf.write_bytes(b"file")
+    with pytest.raises(runtime.GrypeRuntimeError) as raised:
+        runtime.Directory(leaf)
+    assert raised.value.filesystem_reason == "directory_not_safe"
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        assert handle.prepare_phase is None
+        with monkeypatch.context() as scoped:
+            previous = runtime.Directory.entry
+
+            def observing(directory, name):
+                value = previous(directory, name)
+                return SimpleNamespace(st_mode=stat.S_IFIFO) if name == "grype" else value
+            scoped.setattr(runtime.Directory, "entry", observing)
+            with pytest.raises(runtime.GrypeRuntimeError) as raised:
+                handle.budget_tree()
+            assert raised.value.filesystem_reason == "tree_unexpected"
+            assert raised.value.prepare_phase is None
 
 
 @pytest.mark.parametrize("mutation", ["platform", "url", "hash", "bytes", "version", "commit", "checksum", "schema"])
