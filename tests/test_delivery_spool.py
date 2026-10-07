@@ -7,10 +7,11 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from queue_fakes import admission_fake
 from shadai_agent import delivery_spool as vendored
 from shadai_agent import main as agent
 
@@ -36,6 +37,53 @@ def spool(tmp_path, monkeypatch):
 def test_standalone_vendor_is_exact_stdlib_copy():
     assert Path(vendored.__file__).read_bytes() == Path(delivery_spool.__file__).read_bytes()
     assert "shadai." not in Path(vendored.__file__).read_text()
+
+
+@pytest.mark.parametrize("failure", ["503", "lost_reply"])
+def test_legacy_agent_parent_is_immutable_until_every_child_confirms(spool, monkeypatch, failure):
+    header = {"hostname": "synthetic", "timestamp": datetime.now(UTC).isoformat(), "agent_version": "old"}
+    body = {**header, "processes": [{"name": f"p{i}"} for i in range(500)],
+            "extensions": [{"id": f"ext{i}"} for i in range(500)]}
+    payload = json.dumps(body, indent=2).encode()
+    spool.enqueue(payload, event_count=1000)
+    requests_seen, failures = [], [True]
+    def post(*args, **kwargs):
+        child = kwargs["data"]
+        requests_seen.append(child)
+        batch = json.loads(child)
+        if batch["extensions"] and failures[0]:
+            if failure == "lost_reply":
+                raise agent.requests.ConnectionError("synthetic uncertain response")
+            return SimpleNamespace(status_code=503)
+        return SimpleNamespace(status_code=200, json=lambda: {
+            "received": sum(len(batch.get(section, [])) for section in agent.SECTIONS)})
+    monkeypatch.setattr(agent.requests, "post", post)
+    config = SimpleNamespace(server_url="https://synthetic.test", api_key="synthetic", ca_bundle=None)
+    assert agent.drain_spool(spool, config, limit=1) == 0
+    spool.clock = lambda: delivery_spool.time.time() + 300
+    [pending] = spool.claim(limit=1)
+    assert pending.payload == payload and spool.stats().get("delivered_events", 0) == 0
+    spool.retry(pending, delay=0)
+    failures[0] = False
+    assert agent.drain_spool(spool, config, limit=1) == 1000
+    assert spool.stats()["pending"] == 0 and spool.stats()["delivered_events"] == 1000
+    assert requests_seen[:2] == requests_seen[2:]
+    assert all({key: json.loads(child)[key] for key in header} == header for child in requests_seen)
+
+
+def test_agent_oversized_legacy_record_never_acks_or_discards_original(spool, monkeypatch):
+    body = {"hostname": "synthetic", "timestamp": datetime.now(UTC).isoformat(),
+            "processes": [{"name": "synthetic", "extra": "x" * (agent.MAX_BODY_BYTES + 1)}]}
+    payload = json.dumps(body).encode()
+    spool.enqueue(payload, event_count=1)
+    wire = Mock()
+    monkeypatch.setattr(agent.requests, "post", wire)
+    config = SimpleNamespace(server_url="https://synthetic.test", api_key="synthetic", ca_bundle=None)
+    assert agent.drain_spool(spool, config, limit=1) == 0
+    assert spool.stats().get("delivered_events", 0) == 0 and spool.stats()["quarantined_events"] == 1
+    retained = spool.db.execute("SELECT payload FROM batches").fetchone()[0]
+    assert retained == payload
+    wire.assert_not_called()
 
 
 def test_actual_rollback_journal_disappearance_preserves_payload(spool):
@@ -555,7 +603,7 @@ def test_network_rotation_to_different_collector_cannot_deliver_backlog(spool):
 
 async def test_syslog_redis_outage_retains_only_prepared_metadata_and_survives_restart(spool):
     pipe = SimpleNamespace(xadd=lambda *args: None, execute=AsyncMock(side_effect=OSError("offline")))
-    redis = SimpleNamespace(pipeline=lambda **kwargs: pipe)
+    redis = admission_fake(SimpleNamespace(pipeline=lambda **kwargs: pipe), pipe)
     collector = SyslogCollector("test-squid", SquidAccessLogParser(), redis, spool=spool)
     event = CanonicalEvent(tenant_id="test-org", source_type="proxy", domain="api.openai.com",
                            url_path="/private/prompt", user_agent="private-ua", process_path="private-exe")

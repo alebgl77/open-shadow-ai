@@ -1,0 +1,112 @@
+# Pilot defaults, not availability or capacity commitments. Tune with measured
+# traffic and the runbook; never fill missing quantities with zero.
+groups:
+  - name: shadai-operations
+    interval: 30s
+    rules:
+      - alert: ShadaiMetricsTargetDown
+        expr: up{job="open-shadow-ai"} == 0 or absent(up{job="open-shadow-ai"})
+        for: 2m
+        labels: {severity: critical, owner: platform}
+        annotations:
+          summary: Authenticated metrics target unavailable
+          runbook: docs/production-monitoring.md
+      - alert: ShadaiOperationalSnapshotUnavailable
+        expr: |
+          up{job="open-shadow-ai"} == 1
+          unless on(job, instance) shadai_operations_redis_available{job="open-shadow-ai"} == 1
+        for: 2m
+        labels: {severity: critical, owner: platform}
+        annotations:
+          summary: Operational Redis snapshot unavailable or absent
+          runbook: docs/production-monitoring.md
+      - alert: ShadaiWorkerPublicationMissing
+        # Ten fixed stage/stream pairs in utils.operations.STAGES. Count also
+        # detects an omitted row, even when its freshness series is absent.
+        expr: |
+          (
+            (shadai_group_present{job="open-shadow-ai"}
+             unless on(job, instance, stage, stream) shadai_worker_state_fresh{job="open-shadow-ai"} == 1)
+            or
+            (up{job="open-shadow-ai"} == 1
+             unless on(job, instance) count by(job, instance) (shadai_worker_state_fresh{job="open-shadow-ai"}) == 10)
+          )
+          and on(job, instance) up{job="open-shadow-ai"} == 1
+          and on(job, instance) shadai_operations_redis_available{job="open-shadow-ai"} == 1
+        for: 2m
+        labels: {severity: warning, owner: pipeline}
+        annotations:
+          summary: Worker publication stale, missing or incomplete
+          runbook: docs/production-monitoring.md
+      - alert: ShadaiQueueEvidenceMissing
+        expr: |
+          (shadai_worker_state_fresh{job="open-shadow-ai"} == 1
+           unless on(job, instance, stage, stream)
+           (
+             shadai_group_present{job="open-shadow-ai"} == 1
+             and on(job, instance, stage, stream) shadai_group_pending_messages{job="open-shadow-ai"} >= 0
+             and on(job, instance, stage, stream) shadai_group_undelivered_known{job="open-shadow-ai"} == 1
+             and on(job, instance, stage, stream) shadai_group_undelivered_messages{job="open-shadow-ai"} >= 0
+             and on(job, instance, stage, stream) (time() - shadai_worker_last_poll_at_seconds{job="open-shadow-ai"}) <= 90
+             and on(job, instance, stage, stream) (time() - shadai_worker_last_poll_at_seconds{job="open-shadow-ai"}) >= 0
+             and on(job, instance, stage, stream) shadai_worker_counters_since_seconds{job="open-shadow-ai"} <= time()
+           ))
+          and on(job, instance) up{job="open-shadow-ai"} == 1
+          and on(job, instance) shadai_operations_redis_available{job="open-shadow-ai"} == 1
+        for: 2m
+        labels: {severity: warning, owner: pipeline}
+        annotations:
+          summary: Queue health unknown despite a fresh heartbeat
+          runbook: docs/production-monitoring.md
+      - alert: ShadaiBacklogBlocked
+        expr: |
+          (shadai_group_pending_messages{job="open-shadow-ai"}
+           + on(job, instance, stage, stream) shadai_group_undelivered_messages{job="open-shadow-ai"}) > 0
+          and on(job, instance, stage, stream)
+          (time() - (shadai_worker_last_progress_at_seconds{job="open-shadow-ai"}
+                     or on(job, instance, stage, stream) shadai_worker_counters_since_seconds{job="open-shadow-ai"})) > 300
+          and on(job, instance, stage, stream) shadai_group_undelivered_known{job="open-shadow-ai"} == 1
+          and on(job, instance, stage, stream) shadai_worker_state_fresh{job="open-shadow-ai"} == 1
+          and on(job, instance) up{job="open-shadow-ai"} == 1
+          and on(job, instance) shadai_operations_redis_available{job="open-shadow-ai"} == 1
+        for: 5m
+        labels: {severity: critical, owner: pipeline}
+        annotations:
+          summary: Known backlog has no recorded forward progress
+          runbook: docs/production-monitoring.md
+      - alert: ShadaiOldPendingWork
+        expr: |
+          shadai_group_oldest_pending_age_seconds{job="open-shadow-ai"} > 900
+          and on(job, instance, stage, stream) shadai_group_pending_messages{job="open-shadow-ai"} > 0
+          and on(job, instance, stage, stream) shadai_worker_state_fresh{job="open-shadow-ai"} == 1
+          and on(job, instance) up{job="open-shadow-ai"} == 1
+          and on(job, instance) shadai_operations_redis_available{job="open-shadow-ai"} == 1
+        for: 5m
+        labels: {severity: warning, owner: pipeline}
+        annotations:
+          summary: Pending acknowledgement exceeds the pilot age budget
+          runbook: docs/production-monitoring.md
+      - alert: ShadaiQueueRetriesIncreasing
+        expr: |
+          increase(shadai_queue_retryable_failures_total{job="open-shadow-ai"}[5m]) >= 5
+          and on(job, instance, stage, stream) changes(shadai_worker_counters_since_seconds{job="open-shadow-ai"}[5m]) == 0
+          and on(job, instance, stage, stream) shadai_worker_state_fresh{job="open-shadow-ai"} == 1
+          and on(job, instance) up{job="open-shadow-ai"} == 1
+          and on(job, instance) shadai_operations_redis_available{job="open-shadow-ai"} == 1
+        for: 2m
+        labels: {severity: warning, owner: pipeline}
+        annotations:
+          summary: Retryable queue failures are increasing
+          runbook: docs/production-monitoring.md
+      - alert: ShadaiDeadLettersIncreasing
+        expr: |
+          increase(shadai_queue_deadlettered_total{job="open-shadow-ai"}[5m]) > 0
+          and on(job, instance, stage, stream) changes(shadai_worker_counters_since_seconds{job="open-shadow-ai"}[5m]) == 0
+          and on(job, instance, stage, stream) shadai_worker_state_fresh{job="open-shadow-ai"} == 1
+          and on(job, instance) up{job="open-shadow-ai"} == 1
+          and on(job, instance) shadai_operations_redis_available{job="open-shadow-ai"} == 1
+        for: 1m
+        labels: {severity: warning, owner: pipeline}
+        annotations:
+          summary: New physical dead-letter operations detected
+          runbook: docs/production-monitoring.md

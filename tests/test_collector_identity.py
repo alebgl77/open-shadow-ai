@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
+from queue_fakes import admission_fake
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -59,7 +60,7 @@ async def collector_console(tmp_path, monkeypatch, identity_sessions):
     app.dependency_overrides[get_current_user] = current_actor
     monkeypatch.setattr(collectors, "postgres_session_factory", lambda: sessions)
     pipe = SimpleNamespace(xadd=Mock(), execute=AsyncMock())
-    redis = SimpleNamespace(pipeline=Mock(return_value=pipe))
+    redis = admission_fake(SimpleNamespace(pipeline=Mock(return_value=pipe)), pipe)
     monkeypatch.setattr("shadai.api.ingestion.get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr("shadai.api.agent.get_redis", AsyncMock(return_value=redis))
     async with AsyncClient(
@@ -443,7 +444,8 @@ async def test_endpoint_empty_snapshot_contact_scope_stable_retry_uuid_and_faile
     assert json.loads(payloads[0]["data"])["collector_id"] == "sensor-1"
     previous = (await console.client.get("/api/v1/collectors")).json()["items"][0]["last_contact_at"]
     console.pipe.execute.side_effect = RuntimeError("redis unavailable")
-    assert (await console.client.post("/api/v1/agent/telemetry", json=snapshot, headers=headers)).status_code == 500
+    response = await console.client.post("/api/v1/agent/telemetry", json=snapshot, headers=headers)
+    assert response.status_code == 503 and response.headers["Retry-After"] == "5"
     assert (await console.client.get("/api/v1/collectors")).json()["items"][0]["last_contact_at"] == previous
     dns = await enroll(console, "dns-only")
     assert (

@@ -45,7 +45,9 @@ services:
       redis: {condition: service_healthy}
 
   postgres:
-    image: postgres:16-alpine
+    image: shadai/postgres:16.15-maintained.1
+    pull_policy: build
+    build: {context: ., dockerfile: deploy/service-builds/Dockerfile.postgres}
     restart: unless-stopped
     environment:
       POSTGRES_DB: shadai
@@ -61,7 +63,9 @@ services:
       retries: 12
 
   clickhouse:
-    image: clickhouse/clickhouse-server:25.8-alpine
+    image: shadai/clickhouse:25.8.33.6-maintained.1
+    pull_policy: build
+    build: {context: ., dockerfile: deploy/service-builds/Dockerfile.clickhouse}
     restart: unless-stopped
     environment:
       CLICKHOUSE_DB: shadai
@@ -83,7 +87,9 @@ services:
       retries: 18
 
   redis:
-    image: redis:7-alpine
+    image: shadai/redis:7.4.11-maintained.1
+    pull_policy: build
+    build: {context: ., dockerfile: deploy/service-builds/Dockerfile.redis}
     restart: unless-stopped
     secrets: [redis_password]
     volumes: [redis_data:/data]
@@ -130,6 +136,12 @@ services:
     <<: *runtime
     build: {context: ., dockerfile: docker/Dockerfile.worker}
     command: [python, -m, shadai.workers.ingest]
+    healthcheck:
+      test: [CMD, python, /app/entrypoint.py, python, -m, shadai.workers.probe, readiness, --stage, ingest]
+      interval: 15s
+      timeout: 6s
+      retries: 12
+      start_period: 20s
     depends_on:
       migrate: {condition: service_completed_successfully}
       clickhouse: {condition: service_healthy}
@@ -139,6 +151,12 @@ services:
     <<: *runtime
     build: {context: ., dockerfile: docker/Dockerfile.worker}
     command: [python, -m, shadai.workers.correlate]
+    healthcheck:
+      test: [CMD, python, /app/entrypoint.py, python, -m, shadai.workers.probe, readiness, --stage, correlation]
+      interval: 15s
+      timeout: 6s
+      retries: 12
+      start_period: 20s
     depends_on:
       migrate: {condition: service_completed_successfully}
       clickhouse: {condition: service_healthy}
@@ -148,6 +166,12 @@ services:
     <<: *runtime
     build: {context: ., dockerfile: docker/Dockerfile.worker}
     command: [python, -m, shadai.workers.purge]
+    healthcheck:
+      test: [CMD, python, /app/entrypoint.py, python, -m, shadai.workers.probe, readiness, --stage, purge]
+      interval: 15s
+      timeout: 6s
+      retries: 12
+      start_period: 20s
     depends_on:
       migrate: {condition: service_completed_successfully}
       clickhouse: {condition: service_healthy}

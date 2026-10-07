@@ -1,0 +1,11 @@
+{
+  "locks": {
+    "agent.txt": "c1eaa67b945da2d41563527c7d6e17e2047d069793e4e3255c716e072048b3a2",
+    "build.txt": "3ac86ee92027c5c3b69e3e36eeae73176bfdabf3a527113d83d2a07d395c84e5",
+    "development.txt": "ca5018d9351560ea03d9fe30442f1ba6bedb3117b0f0a8fdb07fcfd2898ae1b6",
+    "runtime.txt": "fdcc0411dda84d4f4edeaa6cc9598d667cc67dccb2991a5a5a1b29c953dc89fa",
+    "tools.txt": "e0a99f638b720cb5385372bb0be9f11ffd65d21ceaa8587f6f53b365f3ecd3fa"
+  },
+  "source_sha256": "82140331da3337f274b3e010b423352b4d9379fed4690fdb02f07e57138d2fee",
+  "uv_version": "0.11.16"
+}

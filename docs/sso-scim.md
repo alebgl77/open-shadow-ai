@@ -29,6 +29,8 @@ sequenceDiagram
 
 Use a single HTTPS origin, such as `https://ai-inventory.example.com`, serving the frontend and its existing `/api/` proxy. No additional public port is needed. The API must reach its stores and the identity provider's discovery, token and signing-key endpoints with certificate verification enabled. Redis stores short-lived login state and session handoffs.
 
+Enabled OIDC also requires shared Redis admission before login state or provider discovery: defaults are 10 starts per peer per fixed minute, 120 per installation, 4 simultaneous starts and a 12-second total deadline. See [SSO admission](sso-admission.md) for configuration bounds, generic `429`/`503` responses, proxy trust, owned cleanup and TTL fallback.
+
 | Purpose | URL at the public origin |
 |---|---|
 | Provider metadata | `/api/v1/auth/providers` |

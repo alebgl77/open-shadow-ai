@@ -16,6 +16,7 @@ from shadai.models.detection import DetectionORM
 from shadai.models.evidence_identity import EvidenceIdentityORM
 from shadai.models.receipts import CorrelationReceiptORM, IngestReceiptORM
 from shadai.utils.privacy import identity_cutoff, refresh_identity_counts, sanitize_evidence
+from shadai.workers.probe import ProcessProbe
 
 logger = structlog.get_logger()
 
@@ -242,6 +243,11 @@ async def run_personal_scrub(args):
 
 
 async def run_purge_worker():
+    async with ProcessProbe("purge") as probe:
+        await _run_purge_worker(probe)
+
+
+async def _run_purge_worker(probe):
     config = load_config()
     if not config.retention.purge_enabled:
         logger.info("purge_disabled")
@@ -250,9 +256,16 @@ async def run_purge_worker():
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     ch = init_clickhouse(config.database)
     try:
+        from sqlalchemy import text
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+        await asyncio.to_thread(ch.execute, "SELECT 1")
+        probe.mark_initialized()
         while True:
             try:
-                await purge_once(config, sessions, ch)
+                async with probe.phase("purge"):
+                    await purge_once(config, sessions, ch)
+                probe.successful_cycle()
                 logger.info("purge_cycle_complete")
             except Exception as exc:
                 logger.error("purge_failed", error_type=type(exc).__name__)

@@ -6,7 +6,7 @@ import json
 import logging
 import signal
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -26,10 +26,13 @@ logger = logging.getLogger("shadai-agent")
 
 _running = True
 
-# Mirrors the API's TelemetryBatch bound per list and stays under its 2 MiB request limit.
+# Shared Redis admission bounds the TOTAL converted observations. Keep the
+# existing per-list/body limits as well, including send-time legacy recovery.
 MAX_RECORDS_PER_LIST = 500
+MAX_RECORDS_PER_BATCH = 500
 MAX_BODY_BYTES = 1_500_000
 SECTIONS = ("processes", "containers", "local_ai_hits", "extensions")
+LEGACY_SECTIONS = (*SECTIONS, "model_files")
 WIRE_FIELDS = {
     "processes": ("name", "parent", "username", "listening_port"),
     "containers": ("name", "image", "port"),
@@ -76,27 +79,36 @@ def conform(record: dict) -> dict:
     return record
 
 
-def split_batches(header: dict, sections: dict[str, list[dict]]) -> list[dict]:
+def split_batches(header: dict, sections: dict[str, list[dict]], *, preserve: bool = False) -> list[dict]:
     """Split one snapshot into API-sized batches that share its hostname and timestamp."""
 
+    section_names = LEGACY_SECTIONS if preserve else SECTIONS
+
     def empty():
-        return {**header, **{section: [] for section in SECTIONS}}
+        return {**header, **{section: [] for section in section_names}}
 
     base_size = len(json.dumps(empty()))
-    batches, current, size = [], None, 0
-    for section in SECTIONS:
+    batches, current, size, total = [], None, 0, 0
+    for section in section_names:
         for collected in sections.get(section, []):
-            record = conform({field: collected[field] for field in WIRE_FIELDS[section] if field in collected})
+            if not isinstance(collected, dict):
+                raise AgentDeliveryError("delivery_batch_bounds", retryable=False)
+            record = collected if preserve else conform(
+                {field: collected[field] for field in WIRE_FIELDS[section] if field in collected})
             record_size = len(json.dumps(record, default=str)) + 2
             if base_size + record_size > MAX_BODY_BYTES:
+                if preserve:
+                    raise AgentDeliveryError("delivery_batch_bounds", retryable=False)
                 logger.warning(f"Skipping one oversized {section} record")
                 continue
-            if current is None or len(current[section]) >= MAX_RECORDS_PER_LIST or size + record_size > MAX_BODY_BYTES:
+            if (current is None or total >= MAX_RECORDS_PER_BATCH or
+                    len(current[section]) >= MAX_RECORDS_PER_LIST or size + record_size > MAX_BODY_BYTES):
                 current = empty()
                 batches.append(current)
-                size = base_size
+                size, total = base_size, 0
             current[section].append(record)
             size += record_size
+            total += 1
     return batches or [empty()]
 
 
@@ -106,7 +118,40 @@ class AgentDeliveryError(RuntimeError):
         self.retryable = retryable
 
 
+def delivery_payloads(payload: bytes) -> list[bytes]:
+    """Split old retained parents at send time without changing their stored bytes.
+
+    Every child preserves original snapshot headers and raw item fields. New
+    capture sanitization must never rewrite an old, possibly delivered UUID.
+    """
+    try:
+        if len(payload) > 2 * 1024 * 1024:
+            raise ValueError()
+        original = json.loads(payload)
+        if not isinstance(original, dict) or any(
+                not isinstance(original.get(section, []), list) for section in LEGACY_SECTIONS):
+            raise ValueError()
+        count = sum(len(original.get(section, [])) for section in LEGACY_SECTIONS)
+        if count <= MAX_RECORDS_PER_BATCH and len(payload) <= MAX_BODY_BYTES:
+            return [payload]
+        header = {key: value for key, value in original.items() if key not in LEGACY_SECTIONS}
+        children = split_batches(header, original, preserve=True)
+        result = [json.dumps(child, ensure_ascii=False, separators=(",", ":")).encode("utf8") for child in children]
+        if any(len(child) > MAX_BODY_BYTES for child in result):
+            raise ValueError()
+        return result
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        raise AgentDeliveryError("delivery_batch_bounds", retryable=False) from None
+
+
 def send_once(url: str, payload: bytes, headers: dict, verify) -> int:
+    accepted = 0
+    for child in delivery_payloads(payload):
+        accepted += _send_wire_once(url, child, headers, verify)
+    return accepted
+
+
+def _send_wire_once(url: str, payload: bytes, headers: dict, verify) -> int:
     try:
         response = requests.post(url, data=payload, headers=headers, timeout=30, verify=verify, allow_redirects=False)
     except requests.RequestException:
@@ -238,7 +283,8 @@ def main():
             scoped = discover_binding(config, spool)
             if scoped is not None:
                 drain_spool(spool, config)
-            header = {"hostname": config.hostname, "agent_version": "0.1.0", "timestamp": datetime.now(UTC).isoformat()}
+            header = {"hostname": config.hostname, "agent_version": "0.1.0",
+                      "timestamp": datetime.now(timezone.utc).isoformat()}  # noqa: UP017 - Python 3.10
             sections: dict[str, list[dict]] = {}
 
             # Collect processes

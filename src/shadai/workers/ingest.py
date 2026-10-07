@@ -21,7 +21,9 @@ from shadai.database import init_clickhouse
 from shadai.engine.catalog_loader import load_database_catalog
 from shadai.engine.matcher import AMBIGUOUS_MATCH_FIELD, CatalogMatcher
 from shadai.models.receipts import IngestReceiptORM
+from shadai.utils.queue_admission import admit_records
 from shadai.utils.queueing import prepare_queued_event, queue_fields
+from shadai.workers.probe import ProcessProbe
 from shadai.workers.streams import StreamConsumer
 
 logger = structlog.get_logger()
@@ -37,9 +39,10 @@ async def load_ready_matcher(session):
 
 
 class EventProcessor:
-    def __init__(self, redis, clickhouse, session_factory, matcher):
+    def __init__(self, redis, clickhouse, session_factory, matcher, *, settings=None):
         self.redis, self.clickhouse = redis, clickhouse
         self.session_factory, self.matcher = session_factory, matcher
+        self.settings = settings
 
     async def __call__(self, data):
         # Streams carry only events prepared at an ingestion boundary, where untrusted match
@@ -71,17 +74,14 @@ class EventProcessor:
                 columns = ", ".join(values)
                 await asyncio.to_thread(self.clickhouse.execute, f"INSERT INTO events ({columns}) VALUES", [values])
                 if match:
-                    await self.redis.xadd(
-                        "matches",
-                        {
+                    await admit_records(self.redis, [{"stream": "matches", "fields": {
                             **queue_fields(event.model_dump_json(), payload_field="event",
                                            accepted_at=event.timestamp if "accepted_at" not in data else
                                            datetime.fromisoformat(data["accepted_at"])),
                             "catalog_item_id": match.catalog_item_id,
                             "match_field": match.matched_field,
                             "match_confidence": str(match.match_confidence),
-                        },
-                    )
+                    }}], settings=self.settings)
                 session.add(IngestReceiptORM(event_id=event.event_id))
 
 
@@ -92,27 +92,36 @@ async def run_ingest_worker(worker_id=None):
     engine = create_async_engine(config.database.postgres_url, pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     ch = init_clickhouse(config.database)
-    consumer = StreamConsumer(redis, GROUP_NAME, worker_id or f"ingest-{os.getpid()}", STREAMS, operational=True)
+    consumer = StreamConsumer(redis, GROUP_NAME, worker_id or f"ingest-{os.getpid()}", STREAMS,
+                              operational=True, settings=config.redis_queue)
     heartbeat = None
     try:
-        await consumer.initialize()
-        heartbeat = asyncio.create_task(consumer.operations.heartbeat())
-        async with sessions() as session:
-            matcher = await load_ready_matcher(session)
-        processor = EventProcessor(redis, ch, sessions, matcher)
-        last_reload = time.monotonic()
-        while True:
-            try:
-                if time.monotonic() - last_reload >= config.catalog.reload_interval_seconds:
-                    async with sessions() as session:
-                        processor.matcher = await load_ready_matcher(session)
-                    last_reload = time.monotonic()
-                for stream, messages in await consumer.read():
-                    for message_id, data in messages:
-                        await consumer.process(stream, message_id, data, processor)
-            except Exception as exc:
-                logger.error("ingest_loop_failed", error_type=type(exc).__name__)
-                await asyncio.sleep(2)
+        async with ProcessProbe('ingest') as probe:
+            consumer.probe = probe
+            await consumer.initialize()
+            heartbeat = asyncio.create_task(consumer.operations.heartbeat())
+            async with sessions() as session:
+                matcher = await load_ready_matcher(session)
+            processor = EventProcessor(redis, ch, sessions, matcher, settings=config.redis_queue)
+            probe.mark_initialized()
+            last_reload = time.monotonic()
+            while True:
+                try:
+                    if time.monotonic() - last_reload >= config.catalog.reload_interval_seconds:
+                        async with sessions() as session:
+                            processor.matcher = await load_ready_matcher(session)
+                        last_reload = time.monotonic()
+                    completed = True
+                    for stream, messages in await consumer.read():
+                        for message_id, data in messages:
+                            completed = await consumer.process(stream, message_id, data, processor) and completed
+                    if completed:
+                        probe.successful_cycle()
+                except Exception as exc:
+                    logger.error("ingest_loop_failed", error_type=type(exc).__name__)
+                    async with probe.phase('blocked'):
+                        await asyncio.sleep(2)
+                    probe.set_phase('blocked')
     finally:
         if heartbeat:
             heartbeat.cancel()

@@ -6,14 +6,15 @@ import os
 import subprocess
 import sys
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import pytest
-import redis.asyncio as aioredis
+from queue_integration_fixtures import queue_redis as _queue_redis  # noqa: F401
 
 from shadai.config import load_config
 from shadai.utils import operations
+from shadai.utils.queue_admission import SCHEMA_KEY
 from shadai.utils.queueing import PermanentMessageError
+from shadai.workers.redis_lifecycle import reconcile, refs_key
 from shadai.workers.replay import replay_deadletters
 from shadai.workers.streams import ACK_SUCCESS, StreamConsumer
 
@@ -51,11 +52,10 @@ asyncio.run(run())
 """
 
 
-async def test_real_cross_process_counts_poison_replay_and_no_partial_ack_on_bad_publication(monkeypatch):
+async def test_real_cross_process_counts_poison_replay_and_no_partial_ack_on_bad_publication(monkeypatch, queue_redis):
     config = load_config()
-    redis = aioredis.from_url(config.database.redis_url, decode_responses=True)
-    unique = uuid4().hex
-    group, stream = 'operations-test-' + unique, 'operations-stream-' + unique
+    redis = queue_redis
+    group, stream = 'ingest_group', 'events:dns'
     dlq = 'deadletter:' + group
     monkeypatch.setattr(operations, 'STAGES', {'synthetic': (group, (stream,))})
     key = operations.operation_key(group, stream)
@@ -63,11 +63,12 @@ async def test_real_cross_process_counts_poison_replay_and_no_partial_ack_on_bad
     consumer = StreamConsumer(redis, group, 'reader', [stream], operational=True, max_attempts=2)
     try:
         await consumer.initialize()
+        await reconcile(redis, execute=True, legacy_writers_stopped=True, settings=config.redis_queue)
         fields = {'data': '{"event_id":"synthetic-immutable"}', 'accepted_at': '2026-10-06T00:00:00+00:00'}
         identifier = await redis.xadd(stream, fields)
         retries.append(f'retries:{group}:{stream}:{identifier}')
         await redis.xreadgroup(group, 'crashed', {stream: '>'}, count=1)
-        environment = {**os.environ, 'SHADAI_OPERATIONS_REDIS_URL': config.database.redis_url}
+        environment = {**os.environ, 'SHADAI_OPERATIONS_REDIS_URL': redis.queue_test_url}
         process = await asyncio.to_thread(subprocess.run, [sys.executable, '-c', CHILD, group, stream, identifier],
                                           env=environment, capture_output=True, text=True, timeout=30, check=False)
         assert process.returncode == 0, 'Isolated worker subprocess failed'
@@ -109,9 +110,8 @@ async def test_real_cross_process_counts_poison_replay_and_no_partial_ack_on_bad
         await redis.xreadgroup(group, 'reader', {stream: '>'}, count=1)
         await redis.hset(key, 'acknowledged', 'malformed')
         with pytest.raises(Exception):
-            await redis.eval(ACK_SUCCESS, 2, stream, key, group, first[0]['replay_id'])
+            await redis.eval(ACK_SUCCESS, 4, stream, refs_key(stream), SCHEMA_KEY, key, group, first[0]['replay_id'])
         assert (await redis.xpending(stream, group))['pending'] == 1
         assert await redis.xrange(stream, first[0]['replay_id'], first[0]['replay_id'])
     finally:
         await redis.delete(stream, dlq, key, *retries, *markers)
-        await redis.aclose()

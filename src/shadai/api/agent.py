@@ -72,7 +72,6 @@ async def receive_telemetry(
         sources.add("browser")
     principal.require_sources(sources or {"endpoint"})
     received_at = datetime.now(UTC)
-    redis = await get_redis()
     events: list[CanonicalEvent] = []
     from shadai.api.ingestion import prepare_event
 
@@ -143,13 +142,17 @@ async def receive_telemetry(
             raise HTTPException(status_code=422, detail="Invalid telemetry event") from None
         events[index] = event
 
-    # Push to Redis
-    pipe = redis.pipeline()
-    from shadai.utils.queueing import queue_event
+    from shadai.utils.queue_admission import admit_records
+    from shadai.utils.queueing import queue_fields
 
-    for event in events:
-        queue_event(pipe, event, accepted_at=received_at)
-    await pipe.execute()
+    try:
+        redis = await get_redis()
+        await admit_records(redis, [{"stream": f"events:{event.source_type}",
+                                     "fields": queue_fields(event.model_dump_json(), accepted_at=received_at)}
+                                    for event in events])
+    except Exception:
+        raise HTTPException(status_code=503, detail="Queue temporarily unavailable",
+                            headers={"Retry-After": "5"}) from None
     principal.contact(batch.timestamp if events else None)
 
     return {"received": len(events), "hostname": batch.hostname}

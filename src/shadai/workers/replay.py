@@ -5,38 +5,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import re
 
 import redis.asyncio as aioredis
 
-from shadai.api.ingestion import SOURCE_TYPES
 from shadai.config import load_config, validate_security
-from shadai.utils.operations import COUNT_OPERATION, operation_key
-
-GROUP_STREAMS = {"ingest_group": tuple("events:" + source for source in SOURCE_TYPES),
-                 "correlate_group": ("matches",)}
-STREAM_ID = re.compile(r"^[0-9]{1,20}-[0-9]{1,20}$")
-
-# Dedup pointer replays atomically. Only server-side stream fields are copied.
-REPLAY = COUNT_OPERATION + """
-if redis.call('EXISTS', KEYS[3]) == 1 then return {'already_replayed', redis.call('GET', KEYS[3])} end
-local original = redis.call('XRANGE', KEYS[1], ARGV[1], ARGV[1], 'COUNT', 1)
-if #original == 0 then return {'missing_source', ''} end
-local fields = original[1][2]
-if KEYS[4] then check_operation(KEYS[4], 'replayed') end
-local id = redis.call('XADD', KEYS[1], '*', unpack(fields))
-redis.call('SET', KEYS[3], id, 'EX', 31536000)
-if KEYS[4] then record_operation(KEYS[4], 'replayed') end
-return {'replayed', id}
-"""
+from shadai.utils.operations import operation_key
+from shadai.utils.queue_admission import GROUP_STREAMS, SCHEMA_KEY, queue_settings
+from shadai.workers.redis_lifecycle import REPLAY, STREAM_ID, refs_key
 
 
 async def replay_deadletters(redis, group: str, *, start: str = "0-0", end: str = "+", limit: int = 100,
-                             execute: bool = False, operational: bool = False) -> list[dict]:
+                             execute: bool = False, operational: bool = False, settings=None) -> list[dict]:
     if group not in GROUP_STREAMS or not 1 <= limit <= 500:
         raise ValueError("Invalid replay group or limit")
     if not STREAM_ID.fullmatch(start) or (end != "+" and not STREAM_ID.fullmatch(end)):
         raise ValueError("Invalid dead-letter ID selector")
+    settings = queue_settings(settings)
     dlq = "deadletter:" + group
     pointers = await redis.xrange(dlq, min=start, max=end, count=limit)
     results = []
@@ -51,7 +35,11 @@ async def replay_deadletters(redis, group: str, *, start: str = "0-0", end: str 
         else:
             marker = f"replayed:{group}:{pointer_id}"
             keys = (operation_key(group, stream),) if operational else ()
-            status, replay_id = await redis.eval(REPLAY, 3 + len(keys), stream, dlq, marker, *keys, message_id)
+            expected = [item for pair in pointer.items() for item in pair]
+            status, replay_id = await redis.eval(REPLAY, 5 + len(keys), stream, dlq, marker,
+                                                refs_key(stream), SCHEMA_KEY, *keys, pointer_id, message_id,
+                                                settings.stream_max_entries, settings.admission_max_batch_bytes,
+                                                json.dumps(expected, separators=(",", ":")))
             row.update({"status": status, "replay_id": replay_id})
         if row["status"] != "invalid_pointer":
             row.update({"stream": stream, "message_id": message_id})
@@ -77,10 +65,12 @@ async def run(args):
     redis = aioredis.from_url(config.database.redis_url, decode_responses=True)
     try:
         rows = await replay_deadletters(redis, args.group, start=args.start, end=args.end,
-                                       limit=args.limit, execute=args.execute, operational=True)
+                                       limit=args.limit, execute=args.execute, operational=True,
+                                       settings=config.redis_queue)
         for row in rows:
             print(json.dumps(row, separators=(",", ":")))
-        return int(any(row["status"] in {"missing_source", "invalid_pointer"} for row in rows))
+        failures = {"missing_source", "invalid_pointer", "missing_pointer", "changed_pointer", "invalid_state", "full"}
+        return int(any(row["status"] in failures for row in rows))
     finally:
         await redis.aclose()
 

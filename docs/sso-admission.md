@@ -1,0 +1,23 @@
+# Admission du démarrage SSO
+
+Quand OIDC est activé, `GET /api/v1/auth/sso/login` exige une admission atomique Redis avant de créer un état de connexion ou de consulter le fournisseur. Les réplicas d’une même installation doivent partager Redis, `tenant_id` et les réglages ci-dessous. OIDC désactivé renvoie `404` sans accéder à Redis.
+
+| Variable | Défaut | Limites |
+|---|---:|---|
+| `OIDC_LOGIN_PEER_LIMIT` | 10 par minute | 1–1 000 |
+| `OIDC_LOGIN_INSTALLATION_LIMIT` | 120 par minute | 1–10 000, au moins le quota par pair |
+| `OIDC_LOGIN_CONCURRENCY` | 4 | 1–64 |
+| `OIDC_LOGIN_TIMEOUT_SECONDS` | 12 s | 1–30 s |
+| `OIDC_LOGIN_LEASE_SECONDS` | 15 s | Au moins le délai total + 3 s ; maximum 60 s |
+
+Les minutes sont des fenêtres fixes définies par `Redis TIME`, communes aux réplicas. Une admission consomme les quotas définitivement, même si le fournisseur échoue ou si la requête est annulée. Les refus ne créent ni compteur par pair, ni bail, ni état OIDC et ne déclenchent aucune découverte du fournisseur. Un quota atteint ou une concurrence saturée renvoie un message générique `429`, `Retry-After` entre 1 et 60 secondes, `Cache-Control: no-store` et `Referrer-Policy: no-referrer`. Redis indisponible, des types ou valeurs corrompus et un refus mémoire renvoient `503` avant l’état et le fournisseur. Les erreurs du fournisseur conservent le renvoi `303` vers le chemin fixe `/login?sso_error=failed`, sans détails du fournisseur.
+
+Le pair est exclusivement l’adresse IP normalisée de `request.client.host`. Une adresse absente ou invalide rejoint le compartiment constant `unknown`. Le code d’admission ne lit ni `Forwarded`, ni `X-Forwarded-For`. Uvicorn ou un autre serveur peut toutefois déterminer cette valeur ASGI à sa frontière de confiance : si les en-têtes proxy sont activés, n’autoriser que les proxys explicitement fiables et faire écraser les en-têtes reçus par l’ingress. Utiliser `--no-proxy-headers` si le pair transport strict est requis ; tous les clients derrière un même proxy peuvent alors partager son quota.
+
+Chaque installation utilise exactement trois clés fixes sous `oidc:admission:<SHA-256 du tenant_id>` : un hash `meta` de minute et compteur, un hash `peers` de compteurs indexés par SHA-256 du pair et un ensemble ordonné `leases` de jetons aléatoires générés côté serveur. Le nombre de champs pairs est borné par le quota d’installation ; les baux actifs sont bornés par la concurrence. Le Lua vérifie tous les types et toutes les plages numériques avant sa première écriture. Celle-ci charge le compteur fixe d’installation ; aucune allocation par pair ne la précède. Les hashes ont une expiration de 120 s et la clé des baux expire après la durée du bail + 1 s. Aucun secret ou identifiant du navigateur ne figure dans ces clés.
+
+Le budget monotone commence avant l’admission, comprend l’attente Redis, la création d’état et toute la découverte, y compris une réponse qui progresse lentement. Chaque étape utilise seulement le temps restant. Un échec ou une annulation supprime uniquement l’état dont le stockage a confirmé la réussite et dont la liaison navigateur correspond encore ; il libère seulement son propre bail. Les deux opérations de nettoyage sont indépendantes, protégées de l’annulation et bornées chacune à 2 s, en parallèle ; elles peuvent donc ajouter jusqu’à 2 s au temps de réponse. La sortie réussie conserve l’état navigateur et libère le bail.
+
+Si Redis est hors ligne, si un accusé de stockage est perdu, si le nettoyage expire ou si le processus s’arrête, les TTL constituent le recours ; une suppression immédiate n’est pas garantie. L’état reste valable au maximum 300 s comme auparavant. Le bail borne l’activité coopérative de l’application, pas un traitement distant déjà lancé chez le fournisseur après la mort du processus. Cette protection porte sur le démarrage SSO ; elle ne remplace pas les protections réseau générales. Aucune mise en cache de découverte n’est ajoutée.
+
+La suite `tests/test_sso_admission.py` couvre le modèle atomique et les contrats HTTP ; `tests/test_oidc.py` conserve les parcours signés, PKCE, nonce, cookies, doublons et CSRF. `tests/test_sso_admission_integration.py` exerce le vrai Lua sur deux connexions indépendantes, 50 appels concurrents, quotas, baux, corruption, panne, refus mémoire, délai, annulation et expiration. Elle est collectée par le job Compose existant avec `SHADAI_INTEGRATION=1` ; sans ce drapeau, elle est explicitement ignorée. Docker étant arrêté sur l’hôte local de cette modification, ces cas Redis réels doivent passer en CI avant acceptation. La qualification du proxy, du fournisseur réel, du dimensionnement et de l’environnement cible reste à effectuer.

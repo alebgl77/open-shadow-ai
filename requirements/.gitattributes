@@ -1,0 +1,2 @@
+# Lock manifests fingerprint these bytes on Linux and Windows.
+*.txt text eol=lf

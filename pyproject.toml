@@ -41,16 +41,19 @@ dev = [
 line-length = 120
 target-version = "py312"
 
+[tool.ruff.per-file-target-version]
+"agent/**/*.py" = "py310"
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["integration: requires explicitly enabled disposable PostgreSQL, Redis and ClickHouse services"]
+markers = ["integration: requires explicitly enabled disposable PostgreSQL, Redis and ClickHouse services", "redis_pressure: requires the explicitly requested isolated 32MiB Redis pressure/AOF lab"]
 
 [build-system]
-requires = ["setuptools>=75.0"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

@@ -1,0 +1,35 @@
+services:
+  node-exporter:
+    image: shadai/node-exporter:1.12.1-maintained.1
+    pull_policy: build
+    build: {context: ., dockerfile: deploy/service-builds/Dockerfile.node-exporter}
+    user: '65534:65534'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.disable-defaults
+      - --collector.meminfo
+      - --collector.filesystem
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker|var/lib/containers)($|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    networks: [host-monitoring]
+  host-prometheus:
+    image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+    user: '65534:65534'
+    read_only: true
+    tmpfs: [/prometheus]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./deploy/host-monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/host-monitoring/rules.yaml:/etc/prometheus/host-rules.yaml:ro
+    networks: [host-monitoring]
+networks:
+  host-monitoring: {internal: true}

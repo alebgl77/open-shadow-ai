@@ -2,14 +2,14 @@
 
 import os
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import pytest
-import redis.asyncio as aioredis
+from queue_integration_fixtures import queue_redis as _queue_redis  # noqa: F401
 
 from shadai.config import load_config
 from shadai.utils.queueing import PermanentMessageError
-from shadai.workers.replay import REPLAY
+from shadai.workers.redis_lifecycle import reconcile
+from shadai.workers.replay import replay_deadletters
 from shadai.workers.streams import StreamConsumer
 
 pytestmark = [
@@ -18,17 +18,17 @@ pytestmark = [
 ]
 
 
-async def test_real_redis_extended_outage_poison_atomicity_and_replay():
+async def test_real_redis_extended_outage_poison_atomicity_and_replay(queue_redis):
     config = load_config()
-    redis = aioredis.from_url(config.database.redis_url, decode_responses=True)
-    unique = uuid4().hex
-    stream, group = "test-delivery:" + unique, "test-delivery-group:" + unique
-    dlq, marker = "deadletter:" + group, "replayed:test-delivery:" + unique
+    redis = queue_redis
+    stream, group = "events:dns", "ingest_group"
+    dlq, marker = "deadletter:" + group, ""
     now = [1_800_000_000.0]
     consumer = StreamConsumer(redis, group, "recovered", [stream], reclaim_ms=0, clock=lambda: now[0])
     retry_keys = []
     try:
         await consumer.initialize()
+        await reconcile(redis, execute=True, legacy_writers_stopped=True, settings=config.redis_queue)
         fields = {"data": '{"event_id":"immutable-synthetic"}', "accepted_at": "2026-10-06T00:00:00+00:00"}
         message_id = await redis.xadd(stream, fields)
         retry_key = f"retries:{group}:{stream}:{message_id}"
@@ -60,13 +60,16 @@ async def test_real_redis_extended_outage_poison_atomicity_and_replay():
         pointers = await redis.xrange(dlq)
         assert len(pointers) == 1 and pointers[0][1]["message_id"] == poison_id
 
-        first = await redis.eval(REPLAY, 3, stream, dlq, marker, poison_id)
-        second = await redis.eval(REPLAY, 3, stream, dlq, marker, poison_id)
-        assert first[0] == "replayed" and second == ["already_replayed", first[1]]
-        assert (await redis.xrange(stream, first[1], first[1]))[0][1] == fields
+        marker = f"replayed:{group}:{pointers[0][0]}"
+        first = (await replay_deadletters(redis, group, execute=True, settings=config.redis_queue))[0]
+        second = (await replay_deadletters(redis, group, execute=True, settings=config.redis_queue))[0]
+        assert first["status"] == "replayed" and second["status"] == "already_replayed"
+        assert first["replay_id"] == second["replay_id"]
+        assert (await redis.xrange(stream, first["replay_id"], first["replay_id"]))[0][1] == fields
         assert await redis.xlen(stream) == 2
         await redis.xdel(stream, poison_id)
-        assert await redis.eval(REPLAY, 3, stream, dlq, marker + ":missing", poison_id) == ["missing_source", ""]
+        await redis.delete(marker)
+        missing = await replay_deadletters(redis, group, execute=True, settings=config.redis_queue)
+        assert missing[0]["status"] == "missing_source"
     finally:
-        await redis.delete(stream, dlq, marker, marker + ":missing", *retry_keys)
-        await redis.aclose()
+        await redis.delete(stream, dlq, *([marker] if marker else []), *retry_keys)

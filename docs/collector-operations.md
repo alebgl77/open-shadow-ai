@@ -42,9 +42,11 @@ During rotation, provision the new key to the same private key file, restart/rel
 
 The shared `AGENT_API_KEY` remains enabled by default for compatibility (`security.allow_legacy_agent_key: true`, `ALLOW_LEGACY_AGENT_KEY=true`). Its provenance is `legacy:unattributed`; it cannot claim an enrolled identity or send attributed heartbeats. Enroll and verify all HTTP producers before setting `security.allow_legacy_agent_key: false` or `ALLOW_LEGACY_AGENT_KEY=false` on the API. Base Compose reads the mounted YAML; environment overrides require an explicit API/worker environment entry in your private override and are not inferred from `.env`. Never supply an empty `IDENTITY_RETENTION_DAYS`. This setting does not authenticate syslog senders. The base bootstrap still creates six secrets; a disabled legacy key need not be distributed to clients.
 
+HTTP ingestion and endpoint telemetry use shared exact Redis entry admission. A full or wrong-type destination returns generic `503` with `Retry-After: 5`, without validated collector contact or partial admission of that request. Clients must retain uncertain bytes, including a lost reply after a successful write. Collector spools acknowledge only after all Redis chunks return positive IDs; Entra reports full collection only after every chunk confirms. Stable source/snapshot identity is required for retries. Redis queue bootstrap, reference indexes, replay and explicit encrypted archive/discard retention are separate from local spool TTL and database purging; follow [queue retention](queue-retention.md) before advertising the deployment ready.
+
 ## Configure private persistent queues
 
-Endpoint, network and syslog collectors retain prepared batches in a standard-library SQLite spool before delivery. Entra uses its own queueing flow; these spool guarantees do not apply to it or to the AD exporter's retained JSON files.
+Endpoint, network and syslog collectors retain prepared batches in a standard-library SQLite spool before delivery. Entra retains rejected prepared chunks in process memory and retries them before collecting a new inventory; it has no crash-durable spool. These SQLite spool guarantees do not apply to it or to the AD exporter's retained JSON files.
 
 | Setting | Default | Maximum |
 |---|---|---|
@@ -75,6 +77,8 @@ python -m shadai.collectors.network --sensor-id office-mirror --format zeek-tls 
 Syslog uses the same four keys inside each source's `config` in `config/sources.yaml`; it has no separate spool CLI flags. The supplied example uses `/var/lib/shadai/syslog/dns-pilot`. Compose mounts the named `syslog_spool` volume at `/var/lib/shadai`, and the collector image creates that parent owned by UID/GID 10001 with mode `0700`. The root filesystem remains read-only. Container replacement preserves this named volume; `docker compose down --volumes` deletes it and is appropriate only for disposable test projects.
 
 On Unix, spool directories/files are private (`0700`/`0600`) and owned by the running account, with trusted ancestors. Windows leaf files/directories allow only the current user, SYSTEM and Administrators; ancestor owners must also be trusted (the exact TrustedInstaller system SID is allowed on ancestors). Ancestor checks include permissions that allow replacement. Unsafe owners, symlinks, reparse points and hardlinks are rejected. An ACL failure is a refusal to use that path. Provision a trusted private path; do not weaken the guard, grant broad rights or reuse another principal's queue. For the SYSTEM Windows installer, use a protected path inside the approved installation tree and validate it under the actual task identity.
+
+Windows ACL checks invoke the fixed system PowerShell executable with one child-only `PSMODULEPATH` pointing to its system modules. All inherited casing variants are removed from that child environment; the parent environment stays unchanged. This prevents inherited module-path collisions from breaking native ACL checks. A missing system ACL module or an unsafe existing parent still causes refusal and requires resolving that deployment prerequisite.
 
 Spool metadata is plaintext on the client disk. Protect backups and host access, and apply local retention separately from server pseudonymization. Changing server privacy settings does not scrub queued client bytes.
 

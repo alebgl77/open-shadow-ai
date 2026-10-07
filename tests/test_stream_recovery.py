@@ -1,5 +1,7 @@
 """Stateful outage/backoff and controlled replay tests with a disposable Redis model."""
 
+import asyncio
+import json
 from collections import defaultdict
 from unittest.mock import AsyncMock
 
@@ -20,6 +22,8 @@ class MemoryRedis:
         self.sequence = 100
         self.expiry = {}
         self.fresh = []
+        self.refs = defaultdict(dict)
+        self.schema = "1"
 
     async def hgetall(self, key):
         return dict(self.state.get(key, {}))
@@ -42,11 +46,14 @@ class MemoryRedis:
             self.expiry[key] = 604800
             return [attempts, poison]
         if script == DEADLETTER:
-            stream, dlq, retry_key, group, message_id, error_type, attempts = values
+            stream, dlq, retry_key, refkey, schema, group, message_id, error_type, attempts, cap = values
             if (stream, message_id) not in self.pending:
                 return 0
             if dlq in self.markers:  # Wrong type simulates Redis atomic-script failure.
                 raise RuntimeError("WRONGTYPE")
+            if len(self.streams[dlq]) >= int(cap):
+                return -1
+            self.refs[refkey][message_id] = self.refs[refkey].get(message_id, 0) + 1
             self.sequence += 1
             self.streams[dlq][f"{self.sequence}-0"] = {
                 "stream": stream, "message_id": message_id, "error_type": error_type, "attempts": attempts,
@@ -55,19 +62,26 @@ class MemoryRedis:
             self.state.pop(retry_key, None)
             return 1
         if script == ACK_SUCCESS:
-            stream, group, message_id = values
+            stream, refkey, schema, group, message_id = values
             if (stream, message_id) not in self.pending:
                 return 0
             self.pending.remove((stream, message_id))
-            if len(self.groups.get(stream, [])) == 1:
+            if len(self.groups.get(stream, [])) == 1 and self.schema == "1" and not self.refs[refkey].get(message_id):
                 self.streams[stream].pop(message_id, None)
             return 1
         if script == REPLAY:
-            stream, dlq, marker, message_id = values
+            stream, dlq, marker, refkey, schema, pointer_id, message_id, cap, maxbytes, expected = values
+            pointer = self.streams[dlq].get(pointer_id)
+            if pointer is None:
+                return ["missing_pointer", ""]
+            if [item for pair in pointer.items() for item in pair] != json.loads(expected):
+                return ["changed_pointer", ""]
             if marker in self.markers:
                 return ["already_replayed", self.markers[marker]]
             if message_id not in self.streams[stream]:
                 return ["missing_source", ""]
+            if len(self.streams[stream]) >= int(cap):
+                return ["full", ""]
             self.sequence += 1
             replay_id = f"{self.sequence}-0"
             self.streams[stream][replay_id] = dict(self.streams[stream][message_id])
@@ -78,6 +92,9 @@ class MemoryRedis:
     async def xautoclaim(self, stream, *args, **kwargs):
         return ["0-0", [(identifier, self.streams[stream][identifier])
                          for source, identifier in sorted(self.pending) if source == stream], []]
+
+    async def xgroup_createconsumer(self, *args):
+        return 1
 
     async def xreadgroup(self, *args, **kwargs):
         fresh, self.fresh = self.fresh, []
@@ -185,3 +202,78 @@ async def test_replay_rejects_injection_before_redis(options):
     with pytest.raises(ValueError):
         await replay_deadletters(redis, **options)
     redis.xrange.assert_not_called()
+
+
+def polling_redis():
+    redis = AsyncMock()
+    redis.xgroup_createconsumer.return_value = 1
+    redis.xautoclaim.return_value = ["0-0", [], []]
+    redis.xreadgroup.return_value = []
+    return redis
+
+
+@pytest.mark.parametrize("result", [0, 1])
+async def test_consumer_registers_each_stream_once_before_its_first_claim(result):
+    redis = polling_redis()
+    redis.xgroup_createconsumer.return_value = result
+    consumer = StreamConsumer(redis, "group", "consumer", ["first", "second"])
+    await consumer.read()
+    await consumer.read()
+    assert [call[0] for call in redis.mock_calls] == [
+        "xgroup_createconsumer", "xautoclaim", "xgroup_createconsumer", "xautoclaim", "xreadgroup",
+        "xautoclaim", "xautoclaim", "xreadgroup"
+    ]
+    assert [call.args for call in redis.xgroup_createconsumer.await_args_list] == [
+        ("first", "group", "consumer"), ("second", "group", "consumer")
+    ]
+    assert consumer.registered_streams == {"first", "second"}
+    other = StreamConsumer(redis, "group", "consumer", ["first"])
+    await other.read()
+    assert redis.xgroup_createconsumer.await_count == 3
+
+
+class IntegerAlias(int):
+    pass
+
+
+@pytest.mark.parametrize("bad", [True, False, IntegerAlias(0), IntegerAlias(1), 2, -1, None, "1", 1.0, []])
+async def test_bad_registration_does_not_claim_or_mark_stream(bad):
+    redis = polling_redis()
+    redis.xgroup_createconsumer.return_value = bad
+    consumer = StreamConsumer(redis, "group", "consumer", ["stream"])
+    with pytest.raises(ValueError, match="registration result"):
+        await consumer.read()
+    assert consumer.registered_streams == set()
+    redis.xautoclaim.assert_not_called()
+    redis.xreadgroup.assert_not_called()
+    redis.xgroup_createconsumer.return_value = 1
+    await consumer.read()
+    assert redis.xgroup_createconsumer.await_count == 2
+
+
+@pytest.mark.parametrize("kind", [OSError, asyncio.CancelledError])
+async def test_partial_registration_preserves_success_and_original_failure(kind):
+    redis = polling_redis()
+    error = kind("private registration failure")
+    redis.xgroup_createconsumer.side_effect = [1, error, 0]
+    consumer = StreamConsumer(redis, "group", "consumer", ["first", "second"])
+    with pytest.raises(kind) as caught:
+        await consumer.read()
+    assert caught.value is error and consumer.registered_streams == {"first"}
+    assert redis.xautoclaim.await_count == 1
+    redis.xreadgroup.assert_not_called()
+    await consumer.read()
+    assert [call.args[0] for call in redis.xgroup_createconsumer.await_args_list] == ["first", "second", "second"]
+    assert consumer.registered_streams == {"first", "second"}
+
+
+async def test_initializer_creates_groups_without_registering_or_polling():
+    redis = polling_redis()
+    consumer = StreamConsumer(redis, "group", "qualification-initializer", ["first", "second"])
+    await consumer.initialize()
+    assert [call.args for call in redis.xgroup_create.await_args_list] == [("first", "group"), ("second", "group")]
+    assert all(call.kwargs == {"id": "0", "mkstream": True} for call in redis.xgroup_create.await_args_list)
+    assert consumer.registered_streams == set()
+    redis.xgroup_createconsumer.assert_not_called()
+    redis.xautoclaim.assert_not_called()
+    redis.xreadgroup.assert_not_called()

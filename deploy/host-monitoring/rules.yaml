@@ -1,0 +1,18 @@
+groups:
+  - name: shadai-host-physical
+    rules:
+      - alert: ShadaiHostMemoryPressure
+        expr: (node_memory_MemAvailable_bytes{job="shadai-host-physical"} / node_memory_MemTotal_bytes{job="shadai-host-physical"}) < 0.10
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Mémoire disponible hôte inférieure à 10 %'}
+      - alert: ShadaiHostFilesystemPressure
+        expr: (node_filesystem_avail_bytes{job="shadai-host-physical",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{job="shadai-host-physical",fstype!~"tmpfs|overlay"}) < 0.10
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'Espace disponible du système de fichiers inférieur à 10 %'}
+      - alert: ShadaiHostPhysicalUnknown
+        expr: up{job="shadai-host-physical"} == 0 or absent(up{job="shadai-host-physical"})
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: 'Mesures physiques hôte indisponibles'}

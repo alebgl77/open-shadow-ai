@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "scope": "disposable_lab",
+  "installation": "synthetic-lab",
+  "run": "mandatory-ci-smoke",
+  "scenarios": ["baseline", "pause_ingest", "correlation_outage", "reclaim", "cold_restore", "redis_pressure", "probes", "physical"],
+  "load": {"total_events": 1000, "events_per_second": 10, "batch_size": 10, "concurrency": 2, "request_timeout_seconds": 5, "drain_timeout_seconds": 120, "seed": 62747},
+  "limits": {"max_wall_seconds": 1500, "max_requests": 500, "max_request_bytes": 2097152, "max_disk_bytes": 10737418240}
+}
