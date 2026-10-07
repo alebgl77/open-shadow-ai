@@ -16,7 +16,7 @@ import tarfile
 import threading
 import time
 import weakref
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -388,6 +388,182 @@ def test_tree_regular_file_at_exact_size_limit_remains_accepted(synthetic, monke
             handle.budget_tree()
         handle.check_files()
     assert not list(synthetic.scratch.iterdir())
+
+
+@contextmanager
+def reported_tree_stats(monkeypatch, changes):
+    previous = runtime.Directory.entry
+
+    def observing(directory, name):
+        value = previous(directory, name)
+        change = changes.get(directory.path / name)
+        if change is None:
+            return value
+        fields = {key: getattr(value, key) for key in dir(value) if key.startswith("st_")}
+        fields.update(change)
+        return SimpleNamespace(**fields)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(runtime.Directory, "entry", observing)
+        yield
+
+
+@pytest.mark.parametrize("location", ["", "home", "tmp", "cache", "database", "database/6"])
+def test_sqlite_tree_cap_uses_only_private_basename_and_final_shape_still_refuses(synthetic, monkeypatch, location):
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        path = handle.path / location / "vulnerability.db"
+        created = not path.exists()
+        if created:
+            path.write_bytes(b"owned test bytes")
+        original = path.read_bytes()
+        try:
+            with reported_tree_stats(monkeypatch, {path: {"st_size": 3 * 1024 * runtime.CHUNK}}):
+                handle.budget_tree()
+            if created:
+                with pytest.raises(runtime.GrypeRuntimeError) as raised:
+                    handle.check_files()
+                assert raised.value.code in {"filesystem", "database"}
+                assert path.read_bytes() == original
+            else:
+                handle.check_files()
+        finally:
+            if created:
+                path.unlink()  # The test disposes only the file it created, not runtime cleanup.
+    assert not list(synthetic.scratch.iterdir())
+
+
+@pytest.mark.parametrize("relative", ["grype", "asset.tar.gz", "grype.json", "database/6/import.json"])
+def test_other_tree_files_keep_two_gib_cap(synthetic, monkeypatch, relative):
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        path = handle.path / relative
+        with reported_tree_stats(monkeypatch, {path: {"st_size": 3 * 1024 * runtime.CHUNK}}):
+            with pytest.raises(runtime.GrypeRuntimeError) as raised:
+                handle.budget_tree()
+            assert raised.value.args == ("filesystem",)
+            assert raised.value.filesystem_reason == "tree_file_oversize"
+        handle.check_files()
+
+
+@pytest.mark.parametrize("sqlite_bytes,asset_bytes,error", [
+    (runtime.MAX_WORKSPACE, 0, None),
+    (runtime.MAX_WORKSPACE + 1, 0, "filesystem"),
+    (3 * 1024 * runtime.CHUNK, 1024 * runtime.CHUNK, None),
+    (3 * 1024 * runtime.CHUNK, 1024 * runtime.CHUNK + 1, "byte_budget"),
+])
+def test_sqlite_tree_cap_preserves_exact_per_file_and_aggregate_bounds(
+        synthetic, monkeypatch, sqlite_bytes, asset_bytes, error):
+    assert runtime.MAX_SQLITE_DB_FILE == runtime.MAX_WORKSPACE == 4 * 1024 * runtime.CHUNK
+    assert runtime.MAX_DB_FILE == 2 * 1024 * runtime.CHUNK
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        # Report sizes only: no multi-GiB files or allocations are created.
+        changes = {path: {"st_size": 0} for path in handle.path.rglob("*") if path.is_file()}
+        changes[handle.cache / "6" / "vulnerability.db"] = {"st_size": sqlite_bytes}
+        changes[handle.path / "asset.tar.gz"] = {"st_size": asset_bytes}
+        with reported_tree_stats(monkeypatch, changes):
+            if error is None:
+                handle.budget_tree()
+            else:
+                with pytest.raises(runtime.GrypeRuntimeError) as raised:
+                    handle.budget_tree()
+                assert raised.value.args == (error,)
+                if error == "filesystem":
+                    assert raised.value.filesystem_reason == "tree_file_oversize"
+        handle.check_files()
+
+
+@pytest.mark.parametrize("mode,links,reason", [(stat.S_IFIFO, 1, "tree_nonregular"),
+                                             (stat.S_IFREG, 0, "tree_unlinked"),
+                                             (stat.S_IFREG, 2, "tree_hardlink")])
+def test_sqlite_cap_never_relaxes_type_or_link_guards(synthetic, monkeypatch, mode, links, reason):
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        path = handle.cache / "6" / "vulnerability.db"
+        with reported_tree_stats(monkeypatch, {path: {"st_mode": mode, "st_nlink": links}}):
+            with pytest.raises(runtime.GrypeRuntimeError) as raised:
+                handle.budget_tree()
+            assert raised.value.args == ("filesystem",) and raised.value.filesystem_reason == reason
+        handle.check_files()
+
+
+def test_sqlite_update_adoption_and_file_guard_use_same_cap_without_new_commands(synthetic, tmp_path, monkeypatch):
+    previous_run, previous_adopt = runtime.run, runtime.Runtime.adopt_database
+
+    def running(command, **kwargs):
+        result = previous_run(command, **kwargs)
+        if "update" in command:
+            path = kwargs["cwd"] / "database" / "6" / "vulnerability.db"
+            with reported_tree_stats(monkeypatch, {path: {"st_size": 3 * 1024 * runtime.CHUNK}}):
+                kwargs["monitor"]()
+        return result
+
+    def adopting(handle):
+        path = handle.cache / "6" / "vulnerability.db"
+        with reported_tree_stats(monkeypatch, {path: {"st_size": 3 * 1024 * runtime.CHUNK}}):
+            previous_adopt(handle)
+
+    monkeypatch.setattr(runtime, "run", running)
+    monkeypatch.setattr(runtime.Runtime, "adopt_database", adopting)
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        assert handle.db_guards["vulnerability.db"].limit == runtime.MAX_SQLITE_DB_FILE
+        assert all(guard.limit == runtime.MAX_DB_FILE for name, guard in handle.db_guards.items()
+                   if name != "vulnerability.db")
+        assert handle.binary_guard.limit == runtime.MAX_BINARY
+        assert handle.archive_guard.limit == len(synthetic.archive)
+        assert handle.config_guard.limit == runtime.CHUNK
+        handle.run_query(QUERY, tmp_path / "bounded-query.json")
+        handle.assert_unchanged()
+        assert [call[3:] for call in synthetic.calls[1:]] == [
+            ("version", "-o", "json"), ("db", "update"), ("db", "status", "-o", "json"),
+            ("--platform", "linux/amd64", "-o", "json", QUERY),
+        ]
+    assert not list(synthetic.scratch.iterdir())
+
+
+@pytest.mark.parametrize("name,size", [("vulnerability.db", runtime.MAX_WORKSPACE + 1),
+                                      ("import.json", 3 * 1024 * runtime.CHUNK),
+                                      ("last_update_check", 3 * 1024 * runtime.CHUNK)])
+def test_sqlite_adoption_refuses_oversize_without_adopting_or_deleting_unknown(synthetic, monkeypatch, name, size):
+    previous = runtime.Runtime.adopt_database
+    errors, rejected = [], []
+
+    def adopting(handle):
+        path = handle.cache / "6" / name
+        rejected.append((path, path.read_bytes()))
+        with reported_tree_stats(monkeypatch, {path: {"st_size": size}}):
+            try:
+                previous(handle)
+            except runtime.GrypeRuntimeError as error:
+                errors.append(error)
+                raise
+
+    monkeypatch.setattr(runtime.Runtime, "adopt_database", adopting)
+    with pytest.raises(runtime.GrypeRuntimeError) as raised:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("oversize adoption must not yield")
+    assert raised.value is errors[0] and raised.value.args == ("database",)
+    assert raised.value.prepare_phase == "adopt_database"
+    assert raised.value.__notes__ == ["owned_cleanup_failed"]
+    assert rejected[0][0].read_bytes() == rejected[0][1]
+
+
+def test_sqlite_cap_preserves_tree_entry_count_and_deadline(synthetic, monkeypatch):
+    assert runtime.MAX_ENTRIES == 128 and runtime.WALL_SECONDS == 600 and runtime.MAX_QUERIES == 32
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        files = []
+        try:
+            for ordinal in range(runtime.MAX_ENTRIES):
+                path = handle.path / "tmp" / str(ordinal)
+                path.write_bytes(b"")
+                files.append(path)
+            with pytest.raises(runtime.GrypeRuntimeError, match="byte_budget"):
+                handle.budget_tree()
+        finally:
+            for path in files:
+                path.unlink()
+        with monkeypatch.context() as scoped:
+            scoped.setattr(handle, "deadline", time.monotonic() - 1)
+            with pytest.raises(runtime.GrypeRuntimeError, match="deadline"):
+                handle.budget_tree()
+        handle.check_files()
 
 
 @pytest.mark.parametrize("mutation", ["platform", "url", "hash", "bytes", "version", "commit", "checksum", "schema"])

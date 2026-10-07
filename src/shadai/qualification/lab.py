@@ -86,7 +86,44 @@ PROBE_STEPS = {
 PROBE_CHECKPOINTS = {"probes_" + section + "_" + step
                      for section, steps in PROBE_STEPS.items() for step in steps}
 PROBE_SERVICES = {"ingest-worker", "probe-ingest-peer", "migrate", "redis", "clickhouse"}
-DIAGNOSTIC_CHECKPOINTS = PRESSURE_CHECKPOINTS | PHYSICAL_CHECKPOINTS | PROBE_CHECKPOINTS
+COLD_INSPECTOR_STEPS = {"run", "guard_inspect", "name_inspect", "identity", "wait", "logs", "result",
+                        "remove_inspect", "remove"}
+COLD_STEPS = {
+    "entry": {"budget"},
+    "writers_stop": {"registry", "inspect", "stop", "reinspect"},
+    "seed_pending": COLD_INSPECTOR_STEPS | {"pel"},
+    "inventory_source": COLD_INSPECTOR_STEPS,
+    "stores_stop": {"registry", "inspect", "stop", "reinspect"},
+    "export": PRESSURE_STEPS["export"] | {"budget", "registry", "capability", "archive", "name", "result",
+                                          "copy_budget", "copy_size", "retained", "hash"},
+    "manifest": {"write"},
+    "secrets": {"verify"},
+    "import": PRESSURE_STEPS["import"] | {"retained", "registry", "capability", "archive", "result"},
+    "stores_start": {"guard_inspect", "up", "discover_list", "discover_inspect", "discover_identity", "discover_save"},
+    "inventory_restore": COLD_INSPECTOR_STEPS,
+    "inventory_compare": {"read_source", "read_restore", "compare"},
+    "writers_start": {"guard_inspect", "up", "discover_list", "discover_inspect", "discover_identity", "discover_save"},
+    "readiness": {"deadline", "port", "request", "wait"},
+    "fresh_send": {"send"},
+    "fresh_accepted": {"verify"},
+    "fresh_verify": COLD_INSPECTOR_STEPS | {"drain", "deadline", "sleep"},
+    "fresh_receipts": {"verify"},
+    "record": {"write"},
+}
+COLD_CHECKPOINTS = {"cold_restore_" + section + "_" + step
+                    for section, steps in COLD_STEPS.items() for step in steps}
+COLD_SERVICES = WRITERS | STORES | {"inspector"}
+COLD_OPERATIONS = {
+    "guard_inspect": "container_inspect", "name_inspect": "container_inspect", "source_inspect": "container_inspect",
+    "stopped_inspect": "container_inspect", "worker_inspect": "container_inspect", "capture": "container_inspect",
+    "inspect": "container_inspect", "reinspect": "container_inspect", "copy_inspect": "container_inspect",
+    "remove_inspect": "container_inspect", "volume_absence": "volume_inspect", "volume_inspect": "volume_inspect",
+    "volume_capture": "volume_inspect", "volume_create": "volume_create", "create": "container_create",
+    "start": "container_start", "stop": "container_stop", "wait": "container_wait", "logs": "container_logs",
+    "copy": "container_cp", "remove": "container_rm", "run": "compose_run", "up": "compose_up",
+    "discover_list": "container_list", "discover_inspect": "container_inspect",
+}
+DIAGNOSTIC_CHECKPOINTS = PRESSURE_CHECKPOINTS | PHYSICAL_CHECKPOINTS | PROBE_CHECKPOINTS | COLD_CHECKPOINTS
 EXPORT_ARCHIVE_LIMIT = 1073741824
 EXPORT_METADATA_MARGIN = 10485760
 EXPORT_SNAPSHOT_CODE = """import resource,runpy,sys
@@ -195,6 +232,49 @@ def probe_failure_evidence(exc, checkpoint, operation, service, last_completed, 
     return value
 
 
+def cold_failure_evidence(exc, checkpoint, operation, service, last_completed):
+    if type(exc) is DockerOperationError:
+        if type(exc.checkpoint) is str and exc.checkpoint in COLD_CHECKPOINTS:
+            checkpoint = exc.checkpoint
+        if type(exc.operation) is str and exc.operation in DOCKER_OPERATION_NAMES:
+            operation = exc.operation
+        if type(exc.last_completed) is str and exc.last_completed in COLD_CHECKPOINTS:
+            last_completed = exc.last_completed
+    value = failure_evidence(exc, "cold_restore", checkpoint)
+    for field in ("checkpoint", "operation", "last_completed"):
+        value.pop(field, None)
+    value["stage"] = checkpoint if type(checkpoint) is str and checkpoint in COLD_CHECKPOINTS else "unknown"
+    if type(checkpoint) is str and checkpoint in COLD_CHECKPOINTS:
+        value["stage"] = value["checkpoint"] = checkpoint
+        value["operation"] = operation if type(operation) is str and operation in DOCKER_OPERATION_NAMES else "unknown"
+        if type(service) is str and service in COLD_SERVICES:
+            value["service"] = service
+        if type(last_completed) is str and last_completed in COLD_CHECKPOINTS:
+            value["last_completed"] = last_completed
+    return value
+
+
+def closed_cold_evidence(value):
+    if type(value) is not dict or any(type(key) is not str for key in value):
+        return False
+    enums = {"phase": {"cold_restore"}, "stage": COLD_CHECKPOINTS | {"unknown"},
+             "checkpoint": COLD_CHECKPOINTS, "operation": DOCKER_OPERATION_NAMES, "service": COLD_SERVICES,
+             "last_completed": COLD_CHECKPOINTS, "code": DOCKER_FAILURE_CODES | {"qualification_error", "exception"},
+             "error_type": {"DockerOperationError", "QualificationError", "AssertionError", "ValueError", "TypeError",
+                            "KeyError", "JSONDecodeError", "PermissionError", "FileNotFoundError", "OSError",
+                            "RuntimeError", "KeyboardInterrupt", "SystemExit", "TimeoutExpired", "UnexpectedError"}}
+    if (not {"phase", "stage", "code", "error_type"} <= value.keys()
+            or not value.keys() <= enums.keys() | {"returncode"}):
+        return False
+    for key, item in value.items():
+        if key == "returncode":
+            if type(item) is not int or not -255 <= item <= 255:
+                return False
+        elif type(item) is not str or item not in enums[key]:
+            return False
+    return True
+
+
 class Docker:
     def __init__(self, context, *, runner=subprocess.run):
         if not context or any(char.isspace() for char in context):
@@ -260,8 +340,67 @@ class Laboratory:
         self.probe_operation = "unknown"
         self.probe_service = None
         self.probe_reason = self.probe_secondary_reason = None
+        self.cold_section = self.cold_service = self.cold_target_service = self.cold_primary = None
+        self.cold_operation = "unknown"
+
+    def cold_checkpoint(self, step, *, operation=None, service=None):
+        section = getattr(self, "cold_section", None)
+        if (type(section) is not str or section not in COLD_STEPS or type(step) is not str
+                or step not in COLD_STEPS[section]):
+            return False
+        self.stage = "cold_restore_" + section + "_" + step
+        self.docker.checkpoint = self.stage
+        operation = COLD_OPERATIONS.get(step, "unknown") if operation is None else operation
+        self.cold_operation = operation if type(operation) is str and operation in DOCKER_OPERATION_NAMES else "unknown"
+        if service is None:
+            service = "ingest-worker" if step == "worker_inspect" else self.cold_target_service
+        self.cold_service = service if type(service) is str and service in COLD_SERVICES else None
+        return True
+
+    def cold_phase(self, section, step, *, service=None):
+        self.cold_section = section if type(section) is str and section in COLD_STEPS else None
+        self.cold_target_service = service if type(service) is str and service in COLD_SERVICES else None
+        self.cold_checkpoint(step)
+
+    def cold_failure(self, exc, *, secondary=False):
+        # Diagnostics must never replace the exception or cancellation being handled.
+        try:
+            value = cold_failure_evidence(exc, self.stage, self.cold_operation, self.cold_service,
+                                          getattr(self.docker, "last_completed", None))
+            if not closed_cold_evidence(value):
+                return
+            if self.failure is None:
+                if len(canonical_bytes(value)) <= 2048:
+                    self.failure = self.cold_primary = value
+            elif (secondary and self.failure is self.cold_primary and closed_cold_evidence(self.failure)
+                  and "secondary" not in self.failure):
+                candidate = {**self.failure, "secondary": [value]}
+                if len(canonical_bytes(candidate)) <= 2048:
+                    self.failure = self.cold_primary = candidate
+        except BaseException:
+            pass
+
+    @contextmanager
+    def cold_diagnostics(self, section):
+        previous = (self.cold_section, self.stage, getattr(self.docker, "checkpoint", None),
+                    self.cold_operation, self.cold_service, self.cold_target_service,
+                    getattr(self.docker, "last_completed", None))
+        self.cold_phase(section, "budget" if type(section) is str and section == "entry" else "registry")
+        try:
+            yield
+        except BaseException as exc:
+            self.cold_failure(exc)
+            raise
+        finally:
+            (self.cold_section, self.stage, self.docker.checkpoint, self.cold_operation,
+             self.cold_service, self.cold_target_service, last_completed) = previous
+            if self.cold_section is None:
+                self.docker.last_completed = last_completed
 
     def probe_checkpoint(self, step, *, operation="unknown", service=None):
+        if self.cold_checkpoint("registry" if type(step) is str and step == "worker_registry" else step,
+                                operation=operation, service=service):
+            return
         section = self.probe_section
         if type(section) is str and section in PROBE_STEPS and type(step) is str and step in PROBE_STEPS[section]:
             self.stage = "probes_" + section + "_" + step
@@ -299,6 +438,8 @@ class Laboratory:
              self.probe_operation, self.probe_service, self.probe_reason, self.probe_secondary_reason) = previous
 
     def pressure_checkpoint(self, step):
+        if self.cold_checkpoint(step):
+            return
         if self.probe_section == "witness":
             operation = {"worker_inspect": "container_inspect", "capture": "container_inspect",
                          "inspect": "container_inspect", "create": "container_create", "start": "container_start",
@@ -313,6 +454,8 @@ class Laboratory:
             self.physical_checkpoint(step)
 
     def physical_checkpoint(self, step):
+        if self.cold_checkpoint(step):
+            return
         section = getattr(self, "physical_section", None)
         if type(section) is str and section in PHYSICAL_STEPS and type(step) is str and step in PHYSICAL_STEPS[section]:
             self.stage = "physical_" + section + "_" + step
@@ -592,6 +735,7 @@ class Laboratory:
         # stdout. Resolve our generated name, then use only the verified ID.
         self.physical_checkpoint("name_inspect")
         inspected = self.docker.inspect("container", name)
+        self.cold_checkpoint("identity", service="inspector")
         record = resource_identity(
             "container", inspected, self.journal.value["run_id"], role, self.journal.value["projects"][role]
         )
@@ -608,11 +752,14 @@ class Laboratory:
             code = self.docker.call("container", "wait", identifier, timeout=180)
             self.physical_checkpoint("logs")
             output = self.docker.call("container", "logs", identifier)
+            self.cold_checkpoint("result", service="inspector")
             if int(code) != 0:
                 raise QualificationError("Lab inspector failed its requested proof")
             return json.loads(output.splitlines()[-1])
         except BaseException as exc:
             primary = exc
+            if type(self.cold_section) is str and self.cold_section in COLD_STEPS:
+                self.cold_failure(exc)
             if self.physical_section is not None and self.failure is None:
                 self.failure = failure_evidence(exc, "physical", self.stage)
             raise
@@ -620,6 +767,8 @@ class Laboratory:
             try:
                 self.remove(record)
             except BaseException as secondary:
+                if type(self.cold_section) is str and self.cold_section in COLD_STEPS:
+                    self.cold_failure(secondary, secondary=primary is not None)
                 if primary is None or self.physical_section is None:
                     raise
                 self.physical_secondary(primary, secondary)
@@ -632,25 +781,33 @@ class Laboratory:
         if record["kind"] == "volume" and not volumes:
             return
         self.pressure_checkpoint("remove_inspect")
+        if type(record) is dict:
+            self.cold_checkpoint("remove_inspect", operation=docker_operation((record.get("kind"), "inspect")))
         inspected = self.docker.inspect(record["kind"], record["id"], absent=True)
         if inspected is not None:
             verify_resource(record, inspected)
             self.pressure_checkpoint("remove")
+            if type(record) is dict:
+                self.cold_checkpoint("remove", operation=docker_operation((record.get("kind"), "rm")))
             self.docker.call(record["kind"], "rm", record["id"])
         self.journal.value["resources"] = [item for item in self.journal.value["resources"] if item != record]
         self.journal.save()
 
     def wait_ready(self, role="source"):
+        self.cold_checkpoint("deadline", operation="unknown")
         deadline = self.local_deadline(120)
+        self.cold_checkpoint("port", operation="unknown")
         port = self.compose("port", "api", "8443", role=role)
         if not port.startswith("127.0.0.1:"):
             raise QualificationError("Lab API is not published on an ephemeral loopback port")
         url = "http://" + port
         transport = HttpTransport()
         while time.monotonic() < deadline:
+            self.cold_checkpoint("request", operation="unknown")
             status, _, error = transport.request(url + "/ready", deadline=deadline, timeout=3)
             if status == 200 and error == "none":
                 return url
+            self.cold_checkpoint("wait", operation="unknown")
             self.sleep(min(1, max(0, deadline - time.monotonic())))
         raise QualificationError("Lab API readiness prerequisite failed")
 
@@ -674,11 +831,13 @@ class Laboratory:
             self.sender = None
 
     def drain(self, case, role="source"):
+        self.cold_checkpoint("deadline", operation="unknown")
         deadline = self.local_deadline(self.profile["load"]["drain_timeout_seconds"])
         while time.monotonic() < deadline:
             result = self.inspector("verify_load", case=case, role=role)
             if not (result["missing"] or result["missing_receipts"] or result["missing_correlations"]):
                 return result
+            self.cold_checkpoint("sleep", operation="unknown")
             self.sleep(min(2, max(0, deadline - time.monotonic())))
         raise AssertionError("Accepted logical events did not reach receipts and correlation within the budget")
 
@@ -826,8 +985,13 @@ class Laboratory:
         for scenario in ("reclaim", "redis_pressure", "probes", "physical", "cold_restore"):
             if scenario in self.profile["scenarios"] and scenario not in completed:
                 self.journal.phase(scenario)
-                self.remaining()
-                getattr(self, "experiment_" + scenario)(url)
+                if scenario == "cold_restore":
+                    with self.cold_diagnostics("entry"):
+                        self.remaining()
+                        getattr(self, "experiment_" + scenario)(url)
+                else:
+                    self.remaining()
+                    getattr(self, "experiment_" + scenario)(url)
 
     def experiment_reclaim(self, url):
         self.change("stop", {"clickhouse"})
@@ -860,6 +1024,7 @@ class Laboratory:
         """Capture an owned creation even when its CLI response fails or is cancelled."""
         project = self.journal.value["projects"]["source"]
         suffix = r"_export_[0-9a-f]{32}" if kind == "volume" else r"-export-[0-9a-f]{32}"
+        self.cold_checkpoint("name", operation="unknown")
         if kind not in {"container", "volume"} or not re.fullmatch(re.escape(project) + suffix, name) or \
                 (kind == "container" and (type(image) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", image))):
             raise QualificationError("Export resource creation contract is invalid")
@@ -873,6 +1038,8 @@ class Laboratory:
             self.docker.call(*args)
         except BaseException as error:
             primary = error
+            if type(self.cold_section) is str and self.cold_section in COLD_STEPS:
+                self.cold_failure(error)
             if self.pressure_section == "export" and self.failure is None:
                 self.failure = failure_evidence(error, "redis_pressure", self.stage)
         try:
@@ -891,6 +1058,8 @@ class Laboratory:
         except BaseException as secondary:
             if primary is None:
                 raise
+            if type(self.cold_section) is str and self.cold_section in COLD_STEPS:
+                self.cold_failure(secondary, secondary=True)
             primary.add_note("owned_export_capture_failed")
             if self.pressure_section == "export":
                 self.pressure_secondary(primary, secondary)
@@ -929,6 +1098,7 @@ class Laboratory:
             "python",
         ]
         for capability in caps:
+            self.cold_checkpoint("capability", operation="unknown")
             if capability not in {"DAC_READ_SEARCH", "CHOWN", "FOWNER"}:
                 raise QualificationError("Unapproved archive helper capability")
             args.extend(["--cap-add", capability])
@@ -944,6 +1114,7 @@ class Laboratory:
                 ]
             )
         if archive:
+            self.cold_checkpoint("archive", operation="unknown")
             path = self.directory / archive
             if path.is_symlink() or path.parent != self.directory or not path.is_file():
                 raise QualificationError("Archive must be a regular owned-run file")
@@ -974,7 +1145,9 @@ class Laboratory:
         self.pressure_checkpoint("logs")
         output = self.docker.call("container", "logs", record["id"])
         if code != 0:
+            self.cold_checkpoint("result", operation="unknown")
             raise QualificationError("Archive helper failed")
+        self.cold_checkpoint("result", operation="unknown")
         self.probe_checkpoint("result")
         result = json.loads(output.splitlines()[-1])
         self.probe_completed()
@@ -984,13 +1157,16 @@ class Laboratory:
             destination = self.directory / copy_archive
             if destination.exists() or destination.is_symlink():
                 raise QualificationError("Archive destination already exists")
+            self.cold_checkpoint("copy_budget", operation="unknown")
             if type(result.get("bytes")) is not int or not 0 < result["bytes"] <= self.artifact_remaining():
                 raise QualificationError("Cold archive exceeds cumulative remaining artifact budget")
             self.pressure_checkpoint("copy")
             self.docker.call("container", "cp", record["id"] + ":/export/archive.tar", str(destination))
+            self.cold_checkpoint("copy_size", operation="unknown")
             if destination.is_symlink() or destination.stat().st_size != result["bytes"]:
                 raise QualificationError("Copied archive size differs from the owned helper proof")
             destination.chmod(0o600)
+            self.cold_checkpoint("retained", operation="unknown")
             self.retained_bytes()
         self.remove(record)
         return result
@@ -1012,6 +1188,7 @@ class Laboratory:
     def archive_store(self, service):
         from shadai.qualification.snapshot import digest_file
 
+        self.cold_checkpoint("budget", operation="unknown")
         archive_limit = min(self.artifact_remaining(), EXPORT_ARCHIVE_LIMIT)
         available = archive_limit - EXPORT_METADATA_MARGIN
         if available <= 0:
@@ -1048,6 +1225,7 @@ class Laboratory:
         )
         result = self.helper_result(record, copy_archive=name)
         self.pressure_checkpoint("validate")
+        self.cold_checkpoint("hash", operation="unknown")
         if digest_file(self.directory / name) != result["sha256"]:
             raise QualificationError("Copied cold archive does not match the helper manifest")
         self.remove(output, volumes=True)
@@ -1063,6 +1241,7 @@ class Laboratory:
             or archive.stat().st_size != source["bytes"]
         ):
             raise QualificationError("Import archive differs from its exact owned size proof")
+        self.cold_checkpoint("retained", operation="unknown")
         self.retained_bytes()
         suffix = {
             "postgres": "pg_data",
@@ -1118,13 +1297,25 @@ class Laboratory:
         return record
 
     def experiment_cold_restore(self, url):
+        with self.cold_diagnostics("writers_stop"):
+            return self._experiment_cold_restore(url)
+
+    def _experiment_cold_restore(self, url):
         self.change("stop", WRITERS)
+        self.cold_phase("seed_pending", "run", service="inspector")
         fixture = self.inspector("seed_pending")
+        self.cold_checkpoint("pel", operation="unknown")
         assert fixture["pel_witnessed"]
+        self.cold_phase("inventory_source", "run", service="inspector")
         self.inspector("inventory", case="source")
+        self.cold_phase("stores_stop", "registry")
         self.change("stop", STORES)
         before = time.monotonic()
-        archives = {service: self.archive_store(service) for service in sorted(STORES)}
+        archives = {}
+        for service in sorted(STORES):
+            self.cold_phase("export", "budget", service=service)
+            archives[service] = self.archive_store(service)
+        self.cold_phase("manifest", "write")
         atomic_json(
             self.directory / "cold-manifest.json",
             {
@@ -1136,27 +1327,59 @@ class Laboratory:
                 "pending_fixture": fixture,
             },
         )
+        self.cold_phase("secrets", "verify")
         self.verify_secrets()
         for service, archive in archives.items():
+            self.cold_phase("import", "validate", service=service)
             self.fresh_restore_volume(archive, service=service)
+        self.cold_phase("stores_start", "up")
+        primary = None
         try:
             self.compose("up", "-d", "--wait", "--wait-timeout", "180", *sorted(STORES), role="restore", timeout=180)
+        except BaseException as exc:
+            primary = exc
+            self.cold_failure(exc)
+            raise
         finally:
-            self.discover("restore")
+            try:
+                self.discover("restore")
+            except BaseException as secondary:
+                self.cold_failure(secondary, secondary=primary is not None)
+                raise
+        self.cold_phase("inventory_restore", "run", service="inspector")
         self.inspector("inventory", case="restore", role="restore")
+        self.cold_phase("inventory_compare", "read_source")
         source = json.loads((self.directory / "source-inventory.json").read_text())
+        self.cold_checkpoint("read_restore", operation="unknown")
         restored = json.loads((self.directory / "restore-inventory.json").read_text())
+        self.cold_checkpoint("compare", operation="unknown")
         assert source == restored, "Exact cold source/restore inventories differ before worker startup"
+        self.cold_phase("writers_start", "up")
+        primary = None
         try:
             self.compose("up", "-d", *sorted(WRITERS), role="restore", timeout=180)
+        except BaseException as exc:
+            primary = exc
+            self.cold_failure(exc)
+            raise
         finally:
-            self.discover("restore")
+            try:
+                self.discover("restore")
+            except BaseException as secondary:
+                self.cold_failure(secondary, secondary=primary is not None)
+                raise
+        self.cold_phase("readiness", "deadline")
         restored_url = self.wait_ready("restore")
         # Reclaimed pending work and a fresh scoped event must both persist after startup.
+        self.cold_phase("fresh_send", "send")
         fresh = self.send(restored_url, "restored-fresh", total=10)
+        self.cold_phase("fresh_accepted", "verify")
         self.verify_fresh_restore(fresh)
+        self.cold_phase("fresh_verify", "drain", service="inspector")
         verification = self.drain("restored-fresh", "restore")
+        self.cold_phase("fresh_receipts", "verify")
         self.verify_fresh_restore(fresh, verification)
+        self.cold_phase("record", "write")
         self.record(
             "cold_restore",
             exact_inventory_before_workers=True,

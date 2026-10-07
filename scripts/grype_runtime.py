@@ -34,6 +34,7 @@ MAX_JSON = 128 * CHUNK
 MAX_BINARY = 256 * CHUNK
 MAX_DB_FILE = 2 * 1024 * CHUNK
 MAX_WORKSPACE = 4 * 1024 * CHUNK
+MAX_SQLITE_DB_FILE = MAX_WORKSPACE
 MAX_ENTRIES = 128
 MAX_QUERIES = 32
 WALL_SECONDS = 600
@@ -781,9 +782,10 @@ class Runtime:
                     if count > MAX_ENTRIES:
                         raise GrypeRuntimeError("byte_budget")
                     value = directory.entry(name)
+                    file_limit = MAX_SQLITE_DB_FILE if name == "vulnerability.db" else MAX_DB_FILE
                     if stat.S_ISDIR(value.st_mode):
                         pending.append(directory.path / name)
-                    elif stat.S_ISREG(value.st_mode) and value.st_nlink == 1 and value.st_size <= MAX_DB_FILE:
+                    elif stat.S_ISREG(value.st_mode) and value.st_nlink == 1 and value.st_size <= file_limit:
                         total += value.st_size
                     else:
                         reason = "tree_nonregular" if not stat.S_ISREG(value.st_mode) else \
@@ -897,7 +899,9 @@ class Runtime:
         database = self.directory(self.cache / "6")
         for name in database.names():
             database.chmod(name, 0o400)
-        self.db_guards = {name: self.guard(self.cache / "6" / name, MAX_DB_FILE) for name in database.names()}
+        self.db_guards = {name: self.guard(self.cache / "6" / name,
+                                         MAX_SQLITE_DB_FILE if name == "vulnerability.db" else MAX_DB_FILE)
+                          for name in database.names()}
         self.file_table = {"6/" + name: guard.sha256 for name, guard in sorted(self.db_guards.items())}
         self.table_sha256 = hashlib.sha256(canonical(self.file_table)).hexdigest()
         self.prepare_phase = "status"
@@ -924,7 +928,8 @@ class Runtime:
         names = directory.names()
         for name in sorted(names & DB_FILES):
             value = directory.entry(name)
-            if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or value.st_size > MAX_DB_FILE:
+            file_limit = MAX_SQLITE_DB_FILE if name == "vulnerability.db" else MAX_DB_FILE
+            if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or value.st_size > file_limit:
                 raise GrypeRuntimeError("database")
             self.created.append((directory, name, identity(value), False))
         if cache_names != {"6"} or not {"vulnerability.db", "import.json"} <= names or names - DB_FILES:
