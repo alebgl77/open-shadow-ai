@@ -96,6 +96,13 @@ These [rule fixtures](../deploy/monitoring/tests/alerts.test.yaml) run on synthe
 time series; they need no secrets, network, stores or production services.
 They cover firing/nonfiring and duration boundaries, target recovery, missing
 series, idle versus missing evidence, old pending work, resets and epoch changes.
+Promtool rule unit tests create a temporary TSDB, so their test containers need
+writable `/tmp` even with a read-only root filesystem. Both CI invocations use an
+ephemeral `/tmp` tmpfs bounded to 128 MiB with `rw,noexec,nosuid,nodev,size=128m`;
+fixtures stay read-only and network access remains disabled. Native CI validation
+of this change remains pending. The cause of the earlier native failure is
+unconfirmed.
+
 On a Linux CI host with the selected image already available:
 
 ```bash

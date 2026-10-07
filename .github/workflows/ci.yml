@@ -467,7 +467,7 @@ jobs:
       - name: Validate separate physical monitoring rules with the pinned real promtool
         run: |
           image="$(python scripts/verify-image-pins.py --reference prometheus)"
-          docker --context default run --rm --network none --read-only --entrypoint /bin/promtool --mount "type=bind,src=$PWD/deploy/host-monitoring,dst=/workspace/deploy/host-monitoring,readonly" "$image" test rules /workspace/deploy/host-monitoring/tests/rules.test.yaml
+          docker --context default run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m --entrypoint /bin/promtool --mount "type=bind,src=$PWD/deploy/host-monitoring,dst=/workspace/deploy/host-monitoring,readonly" "$image" test rules /workspace/deploy/host-monitoring/tests/rules.test.yaml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

@@ -72,13 +72,25 @@ def test_prometheus_loads_the_read_only_rule_mount_without_public_ports():
         'type': 'Bearer', 'credentials_file': '/run/secrets/shadai_metrics_token'}
 
 
-def test_ci_promtool_scratch_is_bounded_and_keeps_container_and_rules_private():
+PROMTOOL_CI_CASES = [
+    ('compose-integration', ['docker', 'run', '--rm'], 'monitoring', 'alerts.test.yaml', 'prometheus_image'),
+    ('production-qualification', ['docker', '--context', 'default', 'run', '--rm'],
+     'host-monitoring', 'rules.test.yaml', 'image'),
+]
+
+
+def ci_promtool_command(job, image_variable):
     workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
-    commands = [shlex.split(line) for step in workflow['jobs']['compose-integration']['steps']
-                for line in step.get('run', '').splitlines()
-                if line.strip().startswith('docker run ') and '--entrypoint /bin/promtool' in line]
-    command, = commands
-    assert command[:3] == ['docker', 'run', '--rm']
+    run, = [step['run'] for step in workflow['jobs'][job]['steps']
+            if '--entrypoint /bin/promtool' in step.get('run', '')]
+    assert f'{image_variable}="$(python scripts/verify-image-pins.py --reference prometheus)"' in run
+    command, = [shlex.split(line) for line in run.splitlines()
+                if line.strip().startswith('docker ') and '--entrypoint /bin/promtool' in line]
+    return command
+
+
+def assert_ci_promtool_scratch(command, prefix, directory, fixture, image_variable):
+    assert command[:len(prefix)] == prefix
     assert command.count('--network') == 1 and command[command.index('--network') + 1] == 'none'
     assert '--read-only' in command and not any(value.startswith(('--privileged', '--cap-add')) for value in command)
     assert command.count('--tmpfs') == 1
@@ -87,8 +99,44 @@ def test_ci_promtool_scratch_is_bounded_and_keeps_container_and_rules_private():
     assert command.count('--entrypoint') == 1 and command[command.index('--entrypoint') + 1] == '/bin/promtool'
     assert command.count('--mount') == 1
     assert set(command[command.index('--mount') + 1].split(',')) == {
-        'type=bind', 'src=$PWD/deploy/monitoring', 'dst=/workspace/deploy/monitoring', 'readonly'}
-    assert command[-4:] == ['$prometheus_image', 'test', 'rules', '/workspace/deploy/monitoring/tests/alerts.test.yaml']
+        'type=bind', f'src=$PWD/deploy/{directory}', f'dst=/workspace/deploy/{directory}', 'readonly'}
+    assert command[-4:] == [f'${image_variable}', 'test', 'rules', f'/workspace/deploy/{directory}/tests/{fixture}']
+
+
+@pytest.mark.parametrize('job,prefix,directory,fixture,image_variable', PROMTOOL_CI_CASES)
+def test_ci_promtool_scratch_is_bounded_and_keeps_container_and_rules_private(
+        job, prefix, directory, fixture, image_variable):
+    reference = yaml.safe_load((ROOT / 'requirements/images.json').read_text())['prometheus']['reference']
+    assert reference == ('prom/prometheus:v3.15.0@sha256:'
+                         'efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e')
+    compose = yaml.safe_load((ROOT / 'docker-compose.monitoring.yml').read_text())
+    assert compose['services']['prometheus']['image'] == reference
+    command = ci_promtool_command(job, image_variable)
+    assert_ci_promtool_scratch(command, prefix, directory, fixture, image_variable)
+
+
+@pytest.mark.parametrize('job,prefix,directory,fixture,image_variable', PROMTOOL_CI_CASES)
+@pytest.mark.parametrize('defect', ['tmpfs_missing', 'tmpfs_permissions', 'tmpfs_unbounded',
+                                  'network', 'root_writable', 'rules_writable'])
+def test_ci_promtool_scratch_contract_refuses_unsafe_mutations(
+        job, prefix, directory, fixture, image_variable, defect):
+    command = ci_promtool_command(job, image_variable)
+    if defect == 'tmpfs_missing':
+        position = command.index('--tmpfs')
+        del command[position:position + 2]
+    elif defect == 'tmpfs_permissions':
+        command[command.index('--tmpfs') + 1] = '/tmp:rw,exec,suid,dev,size=128m'
+    elif defect == 'tmpfs_unbounded':
+        command[command.index('--tmpfs') + 1] = '/tmp:rw,noexec,nosuid,nodev'
+    elif defect == 'network':
+        command[command.index('--network') + 1] = 'bridge'
+    elif defect == 'root_writable':
+        command.remove('--read-only')
+    else:
+        position = command.index('--mount') + 1
+        command[position] = command[position].replace(',readonly', '')
+    with pytest.raises(AssertionError):
+        assert_ci_promtool_scratch(command, prefix, directory, fixture, image_variable)
 
 
 def test_promtool_rule_scenarios():
