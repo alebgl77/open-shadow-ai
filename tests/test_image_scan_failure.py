@@ -69,9 +69,17 @@ def test_actual_grype_prepare_error_is_exact_type_and_fixed_code(harness, monkey
     assert not (harness.output / "redis.metadata.json").exists()
 
 
-def test_actual_prepare_fixed_phase_and_filesystem_reason_are_unsigned_and_bound_to_real_type(harness, monkeypatch):
-    error = GRYPE.GrypeRuntimeError("filesystem", filesystem_reason="home_nonempty")
-    error.prepare_phase = "check_files"
+@pytest.mark.parametrize("phase,reason", [
+    ("check_files", "home_nonempty"),
+    ("update", "tree_nonregular"),
+    ("update", "tree_unlinked"),
+    ("update", "tree_hardlink"),
+    ("update", "tree_file_oversize"),
+])
+def test_actual_prepare_fixed_phase_and_filesystem_reason_are_unsigned_and_bound_to_real_type(
+        harness, monkeypatch, phase, reason):
+    error = GRYPE.GrypeRuntimeError("filesystem", filesystem_reason=reason)
+    error.prepare_phase = phase
     error.add_note("owned_cleanup_failed")
     original = SCAN.script
 
@@ -87,7 +95,7 @@ def test_actual_prepare_fixed_phase_and_filesystem_reason_are_unsigned_and_bound
         harness.run()
     assert raised.value is error and error.args == ("filesystem",)
     value = failure(harness.output)
-    assert value["prepare_phase"] == "check_files" and value["filesystem_reason"] == "home_nonempty"
+    assert value["prepare_phase"] == phase and value["filesystem_reason"] == reason
     assert value["stage"] == "grype_prepare" and value["secondary"] == ["owned_cleanup_failed"]
     assert harness.calls[-1] == "cleanup" and harness.state.grype_calls == ["prepare"]
     assert not (harness.output / "redis.metadata.json").exists()

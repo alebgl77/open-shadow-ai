@@ -54,6 +54,7 @@ PREPARE_PHASES = frozenset({
 })
 FILESYSTEM_REASONS = frozenset({
     "directory_not_safe", "file_not_regular", "hardlink", "tree_unexpected", "root_unexpected",
+    "tree_nonregular", "tree_unlinked", "tree_hardlink", "tree_file_oversize",
     "home_nonempty", "tmp_nonempty", "cache_unexpected", "identity_drift", "syscall",
 })
 TEMPLATE = {
@@ -785,7 +786,10 @@ class Runtime:
                     elif stat.S_ISREG(value.st_mode) and value.st_nlink == 1 and value.st_size <= MAX_DB_FILE:
                         total += value.st_size
                     else:
-                        raise GrypeRuntimeError("filesystem", filesystem_reason="tree_unexpected")
+                        reason = "tree_nonregular" if not stat.S_ISREG(value.st_mode) else \
+                            "tree_unlinked" if value.st_nlink == 0 else \
+                            "tree_hardlink" if value.st_nlink != 1 else "tree_file_oversize"
+                        raise GrypeRuntimeError("filesystem", filesystem_reason=reason)
                     if total > MAX_WORKSPACE:
                         raise GrypeRuntimeError("byte_budget")
             finally:

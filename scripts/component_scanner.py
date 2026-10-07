@@ -34,6 +34,7 @@ FAILURE_PREPARE_PHASES = frozenset({
 })
 FAILURE_FILESYSTEM_REASONS = frozenset({
     "directory_not_safe", "file_not_regular", "hardlink", "tree_unexpected", "root_unexpected",
+    "tree_nonregular", "tree_unlinked", "tree_hardlink", "tree_file_oversize",
     "home_nonempty", "tmp_nonempty", "cache_unexpected", "identity_drift", "syscall",
 })
 FAILURE_TYPES = {

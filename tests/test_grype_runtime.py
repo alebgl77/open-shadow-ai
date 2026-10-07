@@ -328,8 +328,66 @@ def test_directory_and_tree_specific_diagnostics_preserve_refusal(synthetic, tmp
             scoped.setattr(runtime.Directory, "entry", observing)
             with pytest.raises(runtime.GrypeRuntimeError) as raised:
                 handle.budget_tree()
-            assert raised.value.filesystem_reason == "tree_unexpected"
+            assert raised.value.filesystem_reason == "tree_nonregular"
             assert raised.value.prepare_phase is None
+
+
+@pytest.mark.parametrize("mode,links,size,reason", [
+    (stat.S_IFIFO, 1, 0, "tree_nonregular"),
+    (stat.S_IFREG, 0, 1, "tree_unlinked"),
+    (stat.S_IFREG, 2, 1, "tree_hardlink"),
+    (stat.S_IFREG, 1, runtime.MAX_DB_FILE + 1, "tree_file_oversize"),
+])
+def test_update_tree_refusal_identifies_exact_stat_branch_and_preserves_primary(
+        synthetic, monkeypatch, mode, links, size, reason):
+    previous = runtime.run
+    errors = []
+
+    def running(command, **kwargs):
+        if "update" not in command:
+            return previous(command, **kwargs)
+        with monkeypatch.context() as scoped:
+            entry = runtime.Directory.entry
+
+            def observing(directory, name):
+                value = entry(directory, name)
+                if directory.path == kwargs["cwd"] and name == "grype":
+                    return SimpleNamespace(st_mode=mode, st_nlink=links, st_size=size)
+                return value
+
+            scoped.setattr(runtime.Directory, "entry", observing)
+            try:
+                kwargs["monitor"]()
+            except runtime.GrypeRuntimeError as error:
+                errors.append(error)
+                raise
+        pytest.fail("unsafe tree must refuse before update completes")
+
+    monkeypatch.setattr(runtime, "run", running)
+    with pytest.raises(runtime.GrypeRuntimeError) as raised:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert raised.value is errors[0]
+    assert raised.value.args == ("filesystem",) and raised.value.__cause__ is None
+    assert raised.value.prepare_phase == "update" and raised.value.filesystem_reason == reason
+    assert len(synthetic.calls) == 2 and not list(synthetic.scratch.iterdir())
+
+
+def test_tree_regular_file_at_exact_size_limit_remains_accepted(synthetic, monkeypatch):
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        with monkeypatch.context() as scoped:
+            entry = runtime.Directory.entry
+
+            def observing(directory, name):
+                value = entry(directory, name)
+                if directory.path == handle.path and name == "grype":
+                    return SimpleNamespace(st_mode=stat.S_IFREG, st_nlink=1, st_size=runtime.MAX_DB_FILE)
+                return value
+
+            scoped.setattr(runtime.Directory, "entry", observing)
+            handle.budget_tree()
+        handle.check_files()
+    assert not list(synthetic.scratch.iterdir())
 
 
 @pytest.mark.parametrize("mutation", ["platform", "url", "hash", "bytes", "version", "commit", "checksum", "schema"])
