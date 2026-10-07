@@ -1916,3 +1916,182 @@ def test_fake_global_clock_counts_download_and_version_and_preserves_cleanup(syn
         with runtime.prepared_grype(**synthetic.args):
             pytest.fail("must not yield")
     assert clock.now == 601 and not list(synthetic.scratch.iterdir())
+
+
+@pytest.mark.parametrize("kind", runtime.FILESYSTEM_OS_ERRORS, ids=lambda kind: kind.__name__)
+def test_filesystem_exception_category_every_trusted_os_identity(kind):
+    primary = kind()
+    assert type(primary) is kind
+    primary.errno = errno.ENOENT
+    primary.filename = "private-path-canary"
+    assert runtime.filesystem_exception(primary) == {"family": "os_error", "errno": "not_found"}
+
+
+@pytest.mark.parametrize("kind", runtime.FILESYSTEM_TAR_ERRORS, ids=lambda kind: kind.__name__)
+def test_filesystem_exception_category_every_trusted_tar_identity_without_attribute_reads(kind):
+    primary = kind("private-message-canary")
+    class RefusingDict(dict):
+        def get(self, *args):
+            pytest.fail("tar attributes must not be read")
+    primary.__dict__ = RefusingDict()
+    assert runtime.filesystem_exception(primary) == {"family": "tar_error", "errno": "unavailable"}
+
+
+@pytest.mark.parametrize("name,category", [
+    ("ENOENT", "not_found"), ("EACCES", "permission"), ("EPERM", "permission"), ("EROFS", "permission"),
+    ("ENOSPC", "resource_limit"), ("EDQUOT", "resource_limit"), ("EMFILE", "resource_limit"),
+    ("ENFILE", "resource_limit"), ("ENOMEM", "resource_limit"), ("EBUSY", "busy"), ("EAGAIN", "busy"),
+    ("EWOULDBLOCK", "busy"), ("ETXTBSY", "busy"), ("EINTR", "interrupted"), ("EIO", "io"), ("EINVAL", "invalid"),
+])
+def test_filesystem_exception_category_exact_builtin_errno_mapping(name, category):
+    primary = OSError()
+    value = getattr(errno, name, None)
+    primary.errno = value
+    assert runtime.filesystem_exception(primary) == {
+        "family": "os_error", "errno": category if type(value) is int else "unavailable"}
+
+
+@pytest.mark.parametrize("kind", ["none", "bool", "float", "string", "int-subclass", "poison", "unknown-int"])
+def test_filesystem_exception_category_bad_errno_never_calls_protocol(kind):
+    calls = []
+    def refused(*args):
+        calls.append(True)
+        raise KeyboardInterrupt()
+    alias = type("ErrnoAlias", (int,), {name: refused for name in ("__hash__", "__eq__", "__int__", "__str__")})
+    poison = type("ErrnoPoison", (), {name: refused for name in ("__hash__", "__eq__", "__int__", "__str__")})
+    values = {"none": None, "bool": True, "float": 2.0, "string": "private-canary",
+              "int-subclass": alias(errno.ENOENT), "poison": poison(), "unknown-int": -123456789}
+    primary = OSError()
+    primary.errno = values[kind]
+    assert runtime.filesystem_exception(primary) == {"family": "os_error",
+        "errno": "other" if kind == "unknown-int" else "unavailable"}
+    assert calls == []
+
+
+@pytest.mark.parametrize("base", [OSError, tarfile.TarError, Exception])
+def test_filesystem_exception_category_hostile_subclass_and_metaclass_are_never_inspected(base):
+    calls = []
+    class HostileMeta(type):
+        def __hash__(cls):
+            calls.append("hash")
+            raise KeyboardInterrupt()
+        def __eq__(cls, other):
+            calls.append("eq")
+            raise KeyboardInterrupt()
+    class Hostile(base, metaclass=HostileMeta):
+        def __getattribute__(self, name):
+            calls.append("attribute")
+            raise KeyboardInterrupt()
+    primary = Hostile("private-message-canary")
+    assert runtime.filesystem_exception(primary) == {"family": "unavailable", "errno": "unavailable"}
+    assert calls == []
+
+
+@pytest.mark.parametrize("family", ["os", "tar", "subclass"])
+def test_filesystem_exception_category_snapshot_before_cleanup_and_original_conversion(
+    synthetic, monkeypatch, family
+):
+    primary = OSError() if family == "os" else tarfile.ReadError("private-canary") if family == "tar" else \
+        type("UntrustedOS", (OSError,), {})()
+    primary.errno = errno.ENOENT
+    previous_cleanup = runtime.Runtime.cleanup
+    calls = []
+    def prepare(handle):
+        handle.prepare_phase = "update"
+        calls.append("prepare")
+        raise primary
+    def cleanup(handle):
+        calls.append("cleanup")
+        primary.errno = errno.EACCES
+        previous_cleanup(handle)
+    monkeypatch.setattr(runtime.Runtime, "prepare", prepare)
+    monkeypatch.setattr(runtime.Runtime, "cleanup", cleanup)
+    with pytest.raises(runtime.GrypeRuntimeError) as caught:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    converted = caught.value
+    assert converted.code == "filesystem" and converted.args == ("filesystem",)
+    assert converted.prepare_phase == "update" and converted.filesystem_reason == "syscall"
+    expected = {"os": ("os_error", "not_found"), "tar": ("tar_error", "unavailable"),
+                "subclass": ("unavailable", "unavailable")}[family]
+    assert converted.filesystem_exception == dict(zip(("family", "errno"), expected))
+    assert converted.__cause__ is None and converted.__suppress_context__ is True
+    assert calls == ["prepare", "cleanup"] and primary.errno == errno.EACCES
+
+
+@pytest.mark.parametrize("kind", [KeyboardInterrupt, SystemExit, runtime.GrypeRuntimeError])
+def test_filesystem_exception_category_original_primary_identity_is_unchanged(synthetic, monkeypatch, kind):
+    primary = kind("private-canary") if kind is not runtime.GrypeRuntimeError else kind("database")
+    calls = []
+    def prepare(handle):
+        handle.prepare_phase = "update"
+        raise primary
+    monkeypatch.setattr(runtime.Runtime, "prepare", prepare)
+    monkeypatch.setattr(runtime.Runtime, "cleanup", lambda handle: calls.append("cleanup"))
+    with pytest.raises(kind) as caught:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert caught.value is primary and "filesystem_exception" not in primary.__dict__
+    assert calls == ["cleanup"]
+
+
+@pytest.mark.parametrize("kind", [OSError, ValueError, KeyboardInterrupt, SystemExit])
+def test_filesystem_exception_category_historical_cleanup_replacement_is_preserved(synthetic, monkeypatch, kind):
+    primary, cleanup = OSError(), kind("private-cleanup-canary")
+    primary.errno = errno.ENOENT
+    def prepare(handle):
+        handle.prepare_phase = "update"
+        raise primary
+    def refuse(handle):
+        raise cleanup
+    monkeypatch.setattr(runtime.Runtime, "prepare", prepare)
+    monkeypatch.setattr(runtime.Runtime, "cleanup", refuse)
+    with pytest.raises(kind) as caught:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert caught.value is cleanup and "filesystem_exception" not in cleanup.__dict__
+
+
+def test_filesystem_exception_category_historical_cleanup_note_and_conversion_unchanged(synthetic, monkeypatch):
+    primary = OSError()
+    primary.errno = errno.ENOENT
+    def prepare(handle):
+        handle.prepare_phase = "update"
+        raise primary
+    def refuse(handle):
+        raise runtime.GrypeRuntimeError("owned_cleanup_failed")
+    monkeypatch.setattr(runtime.Runtime, "prepare", prepare)
+    monkeypatch.setattr(runtime.Runtime, "cleanup", refuse)
+    with pytest.raises(runtime.GrypeRuntimeError) as caught:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert primary.__notes__ == ["owned_cleanup_failed"]
+    assert "__notes__" not in caught.value.__dict__  # Historical converted-exception behavior.
+    assert caught.value.filesystem_exception == {"family": "os_error", "errno": "not_found"}
+
+
+@pytest.mark.parametrize("kind", [ValueError, KeyboardInterrupt, SystemExit])
+def test_filesystem_exception_category_optional_snapshot_failure_preserves_conversion(synthetic, monkeypatch, kind):
+    primary = OSError()
+    primary.errno = errno.ENOENT
+    def prepare(handle):
+        handle.prepare_phase = "update"
+        raise primary
+    def refuse(*args):
+        raise kind("private-canary")
+    monkeypatch.setattr(runtime.Runtime, "prepare", prepare)
+    monkeypatch.setattr(runtime, "filesystem_exception", refuse)
+    with pytest.raises(runtime.GrypeRuntimeError) as caught:
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert caught.value.args == ("filesystem",) and caught.value.filesystem_exception is None
+
+
+def test_filesystem_exception_category_after_prepare_does_not_fabricate_phase(synthetic):
+    with pytest.raises(runtime.GrypeRuntimeError) as caught:
+        with runtime.prepared_grype(**synthetic.args) as handle:
+            assert handle.prepare_phase is None
+            raise OSError(errno.ENOENT, "private-canary")
+    assert caught.value.prepare_phase is None
+    assert caught.value.filesystem_exception == {"family": "os_error", "errno": "not_found"}
+    assert not list(synthetic.scratch.iterdir())

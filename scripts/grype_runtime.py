@@ -4,6 +4,7 @@ Every query uses one freshly downloaded, validated and byte-frozen database.
 The caller binds identifiers to its subject and validates advisory coverage.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -58,6 +59,25 @@ FILESYSTEM_REASONS = frozenset({
     "tree_nonregular", "tree_unlinked", "tree_hardlink", "tree_file_oversize",
     "home_nonempty", "tmp_nonempty", "cache_unexpected", "identity_drift", "syscall",
 })
+FILESYSTEM_OS_ERRORS = (
+    OSError, BlockingIOError, ChildProcessError, ConnectionError, BrokenPipeError, ConnectionAbortedError,
+    ConnectionRefusedError, ConnectionResetError, FileExistsError, FileNotFoundError, InterruptedError,
+    IsADirectoryError, NotADirectoryError, PermissionError, ProcessLookupError, TimeoutError,
+)
+FILESYSTEM_TAR_ERRORS = (
+    tarfile.TarError, tarfile.ExtractError, tarfile.ReadError, tarfile.CompressionError, tarfile.StreamError,
+    tarfile.HeaderError, tarfile.EmptyHeaderError, tarfile.TruncatedHeaderError, tarfile.EOFHeaderError,
+    tarfile.InvalidHeaderError, tarfile.SubsequentHeaderError,
+)
+FILESYSTEM_ERRNO_CATEGORIES = {
+    value: category for name, category in (
+        ("ENOENT", "not_found"), ("EACCES", "permission"), ("EPERM", "permission"), ("EROFS", "permission"),
+        ("ENOSPC", "resource_limit"), ("EDQUOT", "resource_limit"), ("EMFILE", "resource_limit"),
+        ("ENFILE", "resource_limit"), ("ENOMEM", "resource_limit"), ("EBUSY", "busy"), ("EAGAIN", "busy"),
+        ("EWOULDBLOCK", "busy"), ("ETXTBSY", "busy"), ("EINTR", "interrupted"), ("EIO", "io"),
+        ("EINVAL", "invalid"),
+    ) if type(value := getattr(errno, name, None)) is int
+}
 TEMPLATE = {
     "check-for-app-update": False, "add-cpes-if-none": False, "only-fixed": False, "only-notfixed": False,
     "ignore-states": "", "ignore": [], "exclude": [], "vex-documents": [], "vex-add": [],
@@ -73,6 +93,18 @@ class GrypeRuntimeError(ValueError):
         self.prepare_phase = None
         self.filesystem_reason = filesystem_reason
         super().__init__(self.code)
+
+
+def filesystem_exception(primary):
+    """Read only a trusted builtin errno slot; no exception payload or subclass protocol."""
+    kind = type(primary)
+    if any(kind is trusted for trusted in FILESYSTEM_OS_ERRORS):
+        value = OSError.errno.__get__(primary, kind)
+        return {"family": "os_error", "errno": FILESYSTEM_ERRNO_CATEGORIES.get(value, "other")
+                if type(value) is int else "unavailable"}
+    if any(kind is trusted for trusted in FILESYSTEM_TAR_ERRORS):
+        return {"family": "tar_error", "errno": "unavailable"}
+    return {"family": "unavailable", "errno": "unavailable"}
 
 
 def identity(value):
@@ -1057,6 +1089,11 @@ def prepared_grype(*, scratch_parent: Path, manifest_path: Path, config_path: Pa
         handle.prepare()
         yield handle
     except BaseException as primary:
+        detail = None
+        try:
+            detail = filesystem_exception(primary)
+        except BaseException:
+            pass
         try:
             handle.cleanup()
         except GrypeRuntimeError:
@@ -1064,6 +1101,7 @@ def prepared_grype(*, scratch_parent: Path, manifest_path: Path, config_path: Pa
         if isinstance(primary, (OSError, tarfile.TarError)):
             converted = GrypeRuntimeError("filesystem", filesystem_reason="syscall")
             converted.prepare_phase = handle.prepare_phase
+            converted.filesystem_exception = detail
             raise converted from None
         raise
     else:

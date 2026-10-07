@@ -38,6 +38,10 @@ FAILURE_FILESYSTEM_REASONS = frozenset({
     "tree_nonregular", "tree_unlinked", "tree_hardlink", "tree_file_oversize",
     "home_nonempty", "tmp_nonempty", "cache_unexpected", "identity_drift", "syscall",
 })
+FAILURE_FILESYSTEM_FAMILIES = frozenset({"os_error", "tar_error", "unavailable"})
+FAILURE_FILESYSTEM_ERRNOS = frozenset({
+    "not_found", "permission", "resource_limit", "busy", "interrupted", "io", "invalid", "other", "unavailable",
+})
 FAILURE_TYPES = {
     ValueError: "ValueError", OSError: "OSError", PermissionError: "PermissionError",
     FileNotFoundError: "FileNotFoundError", FileExistsError: "FileExistsError", TimeoutError: "TimeoutError",
@@ -46,22 +50,40 @@ FAILURE_TYPES = {
 }
 
 
+def valid_filesystem_exception(value):
+    if (type(value) is not dict or any(type(key) is not str for key in value)
+            or value.keys() != {"family", "errno"}
+            or type(value["family"]) is not str or value["family"] not in FAILURE_FILESYSTEM_FAMILIES
+            or type(value["errno"]) is not str or value["errno"] not in FAILURE_FILESYSTEM_ERRNOS):
+        return False
+    return value["family"] == "os_error" or value["errno"] == "unavailable"
+
+
 def validate_failure_diagnostic(value):
     """Failure diagnostics are a closed, unsigned schema with no exception payload."""
     required = {"schema", "kind", "status", "accepted", "stage", "error_type", "code", "secondary"}
     if type(value) is not dict or any(type(key) is not str for key in value) or \
-            not required <= set(value) or set(value) - required - {"prepare_phase", "filesystem_reason"} or \
+            not required <= set(value) or set(value) - required - {"prepare_phase", "filesystem_reason",
+                                                                "filesystem_exception"} or \
             type(value["schema"]) is not int or type(value["accepted"]) is not bool or \
             any(type(value[key]) is not str for key in ("kind", "status", "stage", "error_type", "code")) or \
             type(value["secondary"]) is not list or \
             any(type(note) is not str for note in value["secondary"]):
         raise ValueError("Invalid unsigned scanner failure diagnostic")
+    # Validate every optional scalar and nested value before any dependent context check.
+    if ("prepare_phase" in value and (type(value["prepare_phase"]) is not str
+            or value["prepare_phase"] not in FAILURE_PREPARE_PHASES)
+            or "filesystem_reason" in value and (type(value["filesystem_reason"]) is not str
+            or value["filesystem_reason"] not in FAILURE_FILESYSTEM_REASONS)
+            or "filesystem_exception" in value and not valid_filesystem_exception(value["filesystem_exception"])):
+        raise ValueError("Invalid unsigned scanner failure diagnostic")
     if "prepare_phase" in value and (value["error_type"] != "GrypeRuntimeError" or
-            value["stage"] != "grype_prepare" or type(value["prepare_phase"]) is not str or
-            value["prepare_phase"] not in FAILURE_PREPARE_PHASES) or \
+            value["stage"] != "grype_prepare") or \
             "filesystem_reason" in value and (value["error_type"] != "GrypeRuntimeError" or
-            value["code"] != "filesystem" or type(value["filesystem_reason"]) is not str or
-            value["filesystem_reason"] not in FAILURE_FILESYSTEM_REASONS):
+            value["code"] != "filesystem") or \
+            "filesystem_exception" in value and (value["stage"] != "grype_prepare"
+            or value["error_type"] != "GrypeRuntimeError" or value["code"] != "filesystem"
+            or "prepare_phase" not in value or value.get("filesystem_reason") != "syscall"):
         raise ValueError("Invalid unsigned scanner failure diagnostic")
     if value["schema"] != 1 or value["kind"] != "image-scan-failure" or value["status"] != "diagnostic-only" or \
             value["accepted"] or \
@@ -122,6 +144,11 @@ class FailureDiagnostic:
                         self.first["prepare_phase"] = phase
                     if code == "filesystem" and type(reason) is str and reason in FAILURE_FILESYSTEM_REASONS:
                         self.first["filesystem_reason"] = reason
+                    detail = attributes.get("filesystem_exception")
+                    if (self.stage == "grype_prepare" and type(phase) is str and phase in FAILURE_PREPARE_PHASES
+                            and code == "filesystem" and type(reason) is str and reason == "syscall"
+                            and valid_filesystem_exception(detail)):
+                        self.first["filesystem_exception"] = dict(detail)
 
     @contextmanager
     def context(self, context):
@@ -140,6 +167,15 @@ class FailureDiagnostic:
         self.capture(primary)
         value = {"schema": 1, "kind": "image-scan-failure", "status": "diagnostic-only", "accepted": False,
                  **self.first, "secondary": sorted(self.secondary)}
+        if "filesystem_exception" in value:
+            previous = {key: item for key, item in value.items() if key != "filesystem_exception"}
+            validate_failure_diagnostic(previous)
+            if (not valid_filesystem_exception(value["filesystem_exception"])
+                    or value["stage"] != "grype_prepare" or value["error_type"] != "GrypeRuntimeError"
+                    or value["code"] != "filesystem" or "prepare_phase" not in value
+                    or value.get("filesystem_reason") != "syscall"
+                    or len((json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")) > 2048):
+                value = previous
         validate_failure_diagnostic(value)
         data = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
         parent = Path(output)
