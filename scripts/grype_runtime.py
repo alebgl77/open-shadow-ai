@@ -37,6 +37,7 @@ MAX_WORKSPACE = 4 * 1024 * CHUNK
 MAX_ENTRIES = 128
 MAX_QUERIES = 32
 WALL_SECONDS = 600
+ASSET_MEMBERS = frozenset({"grype", "LICENSE", "README.md", "CHANGELOG.md"})
 DB_URL = "https://grype.anchore.io/databases"
 DB_FILES = {"vulnerability.db", "import.json", "last_update_check"}
 ANCHORED = os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
@@ -577,7 +578,7 @@ def validate_manifest(value, platform):
 
 class AssetTarInfo(tarfile.TarInfo):
     def _proc_member(self, archive):
-        if self.type not in {tarfile.REGTYPE, tarfile.AREGTYPE} or self.name not in {"grype", "LICENSE", "README.md"}:
+        if self.type not in {tarfile.REGTYPE, tarfile.AREGTYPE} or self.name not in ASSET_MEMBERS:
             raise GrypeRuntimeError("archive")
         limit = MAX_BINARY if self.name == "grype" else CHUNK
         if self.size < 0 or self.size > limit:
@@ -814,7 +815,7 @@ class Runtime:
                 tarfile.open(fileobj=source, mode="r|gz", tarinfo=AssetTarInfo) as members:
             for member in members:
                 remaining(self.deadline)
-                if member.name in seen or len(seen) >= 3:
+                if member.name in seen or len(seen) >= len(ASSET_MEMBERS):
                     raise GrypeRuntimeError("archive")
                 seen.add(member.name)
                 if member.name != "grype":

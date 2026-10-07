@@ -83,7 +83,7 @@ def test_lab_sleep_and_probe_clip_same_remaining_budget(tmp_path, monkeypatch):
         inspect=lambda *a: {},
         runner=lambda *a, **k: timeouts.append(k["timeout"]) or SimpleNamespace(returncode=0),
     )
-    assert lab.probe_status({"id": "owned"}, "liveness")
+    assert lab.probe_status({"id": "owned", "service": "ingest-worker"}, "liveness")
     assert timeouts == [0.25]
     with pytest.raises(QualificationError, match="wall budget"):
         lab.sleep(32)

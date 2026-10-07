@@ -3,6 +3,7 @@
 import copy
 import errno
 import gc
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -208,6 +209,63 @@ def test_extended_headers_refused_before_hidden_payload_allocation(format):
     data = asset_bytes([("x" * 200, tarfile.REGTYPE, b"payload")], format=format)
     with pytest.raises(runtime.GrypeRuntimeError, match="archive"):
         tarfile.open(fileobj=io.BytesIO(data), mode="r|gz", tarinfo=runtime.AssetTarInfo)
+
+
+def test_official_four_regular_member_layout_extracts_only_binary(synthetic, monkeypatch):
+    entries = [("CHANGELOG.md", tarfile.REGTYPE, b"changelog"), ("LICENSE", tarfile.REGTYPE, b"license"),
+               ("README.md", tarfile.REGTYPE, b"readme"), ("grype", tarfile.REGTYPE, b"synthetic binary")]
+    synthetic.archive = asset_bytes(entries)
+    monkeypatch.setattr(runtime, "PINS", {name: (hashlib.sha256(synthetic.archive).hexdigest(), len(synthetic.archive))
+                                         for name in runtime.PINS})
+    synthetic.args["manifest_path"].write_bytes(runtime.canonical(manifest()))
+    with runtime.prepared_grype(**synthetic.args) as handle:
+        assert (handle.path / "grype").read_bytes() == b"synthetic binary"
+        assert not any((handle.path / name).exists() for name in ("CHANGELOG.md", "LICENSE", "README.md"))
+        assert runtime.ASSET_MEMBERS == {name for name, _, _ in entries}
+    assert not list(synthetic.scratch.iterdir())
+
+
+@pytest.mark.parametrize("kind", [tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.DIRTYPE,
+                                 tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME,
+                                 tarfile.GNUTYPE_LONGLINK, tarfile.GNUTYPE_SPARSE])
+def test_changelog_nonregular_and_extended_headers_refused_before_processing(kind, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("extended member handler must never run")
+    monkeypatch.setattr(tarfile.TarInfo, "_proc_pax", forbidden)
+    monkeypatch.setattr(tarfile.TarInfo, "_proc_gnulong", forbidden)
+    monkeypatch.setattr(tarfile.TarInfo, "_proc_sparse", forbidden)
+    data = asset_bytes([("CHANGELOG.md", kind, b"payload")])
+    with pytest.raises(runtime.GrypeRuntimeError, match="archive"):
+        tarfile.open(fileobj=io.BytesIO(data), mode="r|gz", tarinfo=runtime.AssetTarInfo)
+
+
+@pytest.mark.parametrize("name", ["../CHANGELOG.md", "/CHANGELOG.md", "sub/CHANGELOG.md", "CHANGELOG.md/child",
+                                 "Changelog.md", "OTHER.md"])
+def test_changelog_allowlist_does_not_accept_other_paths_or_names(name):
+    data = asset_bytes([(name, tarfile.REGTYPE, b"payload")])
+    with pytest.raises(runtime.GrypeRuntimeError, match="archive"):
+        tarfile.open(fileobj=io.BytesIO(data), mode="r|gz", tarinfo=runtime.AssetTarInfo)
+
+
+def test_changelog_size_guard_refuses_header_before_reading_body():
+    header = tarfile.TarInfo("CHANGELOG.md")
+    header.size = runtime.CHUNK + 1
+    data = gzip.compress(header.tobuf(format=tarfile.USTAR_FORMAT) + b"\0" * 1024)
+    with pytest.raises(runtime.GrypeRuntimeError, match="byte_budget"):
+        tarfile.open(fileobj=io.BytesIO(data), mode="r|gz", tarinfo=runtime.AssetTarInfo)
+
+
+@pytest.mark.parametrize("fifth", ["CHANGELOG.md", "grype", "unexpected.md"])
+def test_fifth_or_duplicate_changelog_refuses_before_execution_and_cleans(synthetic, monkeypatch, fifth):
+    names = ["CHANGELOG.md", "LICENSE", "README.md", "grype", fifth]
+    synthetic.archive = asset_bytes([(name, tarfile.REGTYPE, b"payload") for name in names])
+    monkeypatch.setattr(runtime, "PINS", {name: (hashlib.sha256(synthetic.archive).hexdigest(), len(synthetic.archive))
+                                         for name in runtime.PINS})
+    synthetic.args["manifest_path"].write_bytes(runtime.canonical(manifest()))
+    with pytest.raises(runtime.GrypeRuntimeError, match="archive"):
+        with runtime.prepared_grype(**synthetic.args):
+            pytest.fail("must not yield")
+    assert len(synthetic.calls) == 1 and not list(synthetic.scratch.iterdir())
 
 
 @pytest.mark.parametrize("entries", [[("grype", tarfile.REGTYPE, b"one"), ("grype", tarfile.REGTYPE, b"two")],
