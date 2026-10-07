@@ -10,7 +10,7 @@
 
 Understand which AI services and tools appear in your environment, where each signal came from, and what it can actually prove. Bring together network metadata, endpoint inventory and Microsoft directory signals in an interface built for investigation.
 
-[Get started](#get-started) · [Deployment](docs/deployment.md) · [Production qualification](docs/production-qualification.md) · [Collector operations](docs/collector-operations.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Français](README.fr.md)
+[Get started](#get-started) · [Deployment](docs/deployment.md) · [Production qualification](docs/production-qualification.md) · [Collector operations](docs/collector-operations.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Roadmap](docs/roadmap.md) · [Français](README.fr.md)
 
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
 
@@ -31,6 +31,10 @@ Three silent French diagrams explain the AI footprint, evidence levels and colle
 - **Progressive adoption.** Start with one log source or a small managed-device pilot.
 - **An open catalog.** Review and contribute the signatures behind classifications.
 - **Honest gaps.** A missing signal remains unknown; a DNS request is not a prompt or a bill.
+
+## Where we are heading
+
+See the footprint. Understand the risk. Keep control. The [six-step roadmap](docs/roadmap.md) (in French) sets out richer discovery, agent visibility, optional local analysis, investigations that cite evidence, deliberate usage controls and continuous qualification. Each future step has measurable delivery gates; candidate technologies remain proposals for evaluation.
 
 ## Try the interface
 
