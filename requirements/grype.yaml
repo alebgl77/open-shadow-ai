@@ -9,6 +9,7 @@
   "vex-documents": [],
   "vex-add": [],
   "include-matcher-suppressions": true,
+  "match-upstream-kernel-headers": true,
   "fail-on-severity": "",
   "db": {
     "update-url": "https://grype.anchore.io/databases",

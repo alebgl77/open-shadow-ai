@@ -139,7 +139,10 @@ def synthetic(tmp_path, monkeypatch):
 
 def test_valid_runtime_preserves_binary_db_and_raw_receipts_and_cleans(synthetic, tmp_path):
     output = tmp_path / "query.json"
+    assert json.loads((SOURCE.parent.parent / "requirements/grype.yaml").read_bytes()) == runtime.TEMPLATE
     with runtime.prepared_grype(**synthetic.args) as handle:
+        rendered = json.loads((handle.path / "grype.json").read_bytes())
+        assert rendered["match-upstream-kernel-headers"] is True and rendered["ignore"] == []
         assert handle.configuration is None
         with pytest.raises(runtime.GrypeRuntimeError, match="configuration_unobserved"):
             handle.assert_unchanged()
@@ -147,6 +150,7 @@ def test_valid_runtime_preserves_binary_db_and_raw_receipts_and_cleans(synthetic
         assert json.loads(output.read_bytes()) == report
         assert (handle.path / "grype").read_bytes() == b"synthetic\r\n\x1abinary"
         receipt = handle.assert_unchanged()
+        assert receipt["configuration"]["match-upstream-kernel-headers"] is True
         assert receipt["database"]["status"] == handle.database_status
         assert set(receipt["database"]["files"]) == {"6/vulnerability.db", "6/import.json", "6/last_update_check"}
         table_sha = hashlib.sha256(runtime.canonical(receipt["database"]["files"])).hexdigest()
@@ -809,6 +813,56 @@ def test_effective_configuration_filters_refused(tmp_path, key, value):
     config[key] = value
     with pytest.raises(runtime.GrypeRuntimeError, match="config"):
         runtime.validate_configuration(config, cache, "linux/amd64")
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_pinned_producer_kernel_header_suppression_branch_keeps_empty_ignore_required(tmp_path, enabled):
+    # Grype 6f8d854 cmd/grype/cli/commands/root.go:114-118,146-147;
+    # these are producer rules, not permission to accept ignored findings.
+    rules = [{"vulnerability": "", "include-aliases": False, "reason": "", "namespace": "",
+              "fix-state": "", "package": {"name": name, "version": "", "language": "", "type": kind,
+                                            "location": "", "upstream-name": upstream},
+              "vex-status": "", "vex-justification": "", "match-type": "exact-indirect-match"}
+             for name, upstream, kind in [("kernel-headers", "kernel", "rpm"),
+                                          ("linux(-.*)?-headers-.*", "linux.*", "deb"),
+                                          ("linux-libc-dev", "linux", "deb"),
+                                          ("linux-kbuild-.*", "linux.*", "deb")]]
+    cache = tmp_path / "database"
+    config = configuration(cache)
+    config["match-upstream-kernel-headers"] = enabled
+    if not enabled:
+        config["ignore"].extend(rules)
+    before = runtime.canonical(config)
+    assert len(config["ignore"]) == (0 if enabled else 4)
+    if enabled:
+        runtime.validate_configuration(config, cache, "linux/amd64")
+    else:
+        with pytest.raises(runtime.GrypeRuntimeError, match="config"):
+            runtime.validate_configuration(config, cache, "linux/amd64")
+        config["match-upstream-kernel-headers"] = True
+        with pytest.raises(runtime.GrypeRuntimeError, match="config"):
+            runtime.validate_configuration(config, cache, "linux/amd64")
+        config["match-upstream-kernel-headers"] = enabled
+    assert runtime.canonical(config) == before
+
+
+@pytest.mark.parametrize("mutation", ["absent", "false", "zero", "one", "string", "integer_subclass"])
+def test_kernel_header_matching_requires_present_exact_true_boolean(tmp_path, mutation):
+    class IntegerAlias(int):
+        pass
+
+    cache = tmp_path / "database"
+    config = configuration(cache)
+    if mutation == "absent":
+        config.pop("match-upstream-kernel-headers")
+    else:
+        config["match-upstream-kernel-headers"] = {
+            "false": False, "zero": 0, "one": 1, "string": "true", "integer_subclass": IntegerAlias(1),
+        }[mutation]
+    before = runtime.canonical(config)
+    with pytest.raises(runtime.GrypeRuntimeError, match="config"):
+        runtime.validate_configuration(config, cache, "linux/amd64")
+    assert runtime.canonical(config) == before
 
 
 @pytest.mark.parametrize("key,value", [("cache-dir", "/foreign/db"), ("auto-update", True),

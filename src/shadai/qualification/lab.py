@@ -25,6 +25,7 @@ from shadai.qualification.journal import (
 )
 from shadai.qualification.load import LoadSender
 from shadai.qualification.schemas import SCENARIOS, QualificationError, canonical_bytes, report
+from shadai.qualification.snapshot import EXPORT_REASONS, EXPORT_STEPS, parse_export_diagnostic
 from shadai.workers.probe import READINESS_REASONS, SECONDARY_REASONS, parse_readiness_diagnostic
 
 SERVICES = {
@@ -131,7 +132,9 @@ limit=int(sys.argv[1])
 if limit <= 0: raise ValueError('archive_limit')
 resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit))
 sys.argv=['shadai.qualification',*sys.argv[2:]]
-runpy.run_module('shadai.qualification',run_name='__main__')
+from shadai.qualification.snapshot import export_diagnostics
+with export_diagnostics() as diagnostic:
+    runpy.run_module('shadai.qualification',run_name='__main__',init_globals={'print':diagnostic.print})
 """
 FAILURE_STAGES |= DIAGNOSTIC_CHECKPOINTS
 DOCKER_OPERATIONS = {
@@ -264,14 +267,25 @@ def closed_cold_evidence(value):
                             "KeyError", "JSONDecodeError", "PermissionError", "FileNotFoundError", "OSError",
                             "RuntimeError", "KeyboardInterrupt", "SystemExit", "TimeoutExpired", "UnexpectedError"}}
     if (not {"phase", "stage", "code", "error_type"} <= value.keys()
-            or not value.keys() <= enums.keys() | {"returncode"}):
+            or not value.keys() <= enums.keys() | {"returncode", "helper_exit_status", "helper_step", "helper_reason"}):
         return False
     for key, item in value.items():
         if key == "returncode":
             if type(item) is not int or not -255 <= item <= 255:
                 return False
+        elif key == "helper_exit_status":
+            if type(item) is not int or not 1 <= item <= 255:
+                return False
+        elif key in {"helper_step", "helper_reason"}:
+            choices = EXPORT_STEPS if key == "helper_step" else EXPORT_REASONS
+            if type(item) is not str or item not in choices:
+                return False
         elif type(item) is not str or item not in enums[key]:
             return False
+    if ({"helper_exit_status", "helper_step", "helper_reason"} & value.keys()
+            and (value.get("checkpoint") != "cold_restore_export_result"
+                 or not {"helper_step", "helper_reason"} <= value.keys())):
+        return False
     return True
 
 
@@ -377,6 +391,35 @@ class Laboratory:
                 candidate = {**self.failure, "secondary": [value]}
                 if len(canonical_bytes(candidate)) <= 2048:
                     self.failure = self.cold_primary = candidate
+        except BaseException:
+            pass
+
+    def cold_export_failure(self, exc, code, output):
+        # Only already-failed helpers use the existing bounded capture. No raw output is retained.
+        try:
+            if (type(self.stage) is not str or self.stage != "cold_restore_export_result"
+                    or self.failure is not None):
+                return
+            self.cold_failure(exc)
+            if self.failure is not self.cold_primary or not closed_cold_evidence(self.failure):
+                return
+            diagnostic = parse_export_diagnostic(output)
+            from shadai.qualification.snapshot import closed_export_diagnostic
+
+            if not closed_export_diagnostic(diagnostic):
+                return
+            value = {**self.failure, "helper_step": diagnostic["step"], "helper_reason": diagnostic["reason"]}
+            if type(code) is int and 1 <= code <= 255:
+                value["helper_exit_status"] = code
+            if diagnostic["secondary"]:
+                point = diagnostic["secondary"][0]
+                value["secondary"] = [{**self.failure, "helper_step": point["step"],
+                                       "helper_reason": point["reason"]}]
+            primary = {key: item for key, item in value.items() if key != "secondary"}
+            if (closed_cold_evidence(primary)
+                    and all(closed_cold_evidence(item) for item in value.get("secondary", []))
+                    and len(canonical_bytes(value)) <= 2048):
+                self.failure = self.cold_primary = value
         except BaseException:
             pass
 
@@ -1146,7 +1189,9 @@ class Laboratory:
         output = self.docker.call("container", "logs", record["id"])
         if code != 0:
             self.cold_checkpoint("result", operation="unknown")
-            raise QualificationError("Archive helper failed")
+            error = QualificationError("Archive helper failed")
+            self.cold_export_failure(error, code, output)
+            raise error
         self.cold_checkpoint("result", operation="unknown")
         self.probe_checkpoint("result")
         result = json.loads(output.splitlines()[-1])

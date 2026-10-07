@@ -61,7 +61,7 @@ FILESYSTEM_REASONS = frozenset({
 TEMPLATE = {
     "check-for-app-update": False, "add-cpes-if-none": False, "only-fixed": False, "only-notfixed": False,
     "ignore-states": "", "ignore": [], "exclude": [], "vex-documents": [], "vex-add": [],
-    "include-matcher-suppressions": True, "fail-on-severity": "",
+    "include-matcher-suppressions": True, "match-upstream-kernel-headers": True, "fail-on-severity": "",
     "db": {"update-url": DB_URL, "auto-update": False, "validate-by-hash-on-start": True,
            "validate-age": True, "max-allowed-built-age": "24h", "require-update-check": True},
 }

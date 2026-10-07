@@ -318,11 +318,15 @@ def run_installed(arguments) -> None:
     report = {"wheel_sha256": digest(wheel), "checkout_module_sha256": modules, "workers": [],
               "offline_require_hashes": True, "native_guards_mocked": False, "passed": False}
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
+    active_wait = None
 
-    def execute(argv, *, cwd=None):
+    def execute(argv, *, phase, cwd=None):
+        nonlocal active_wait
         environment = clean_environment()
         environment.update(TMP=str(root), TEMP=str(root), TMPDIR=str(root))
+        active_wait = (phase, 120)
         result = subprocess.run(argv, cwd=cwd, env=environment, capture_output=True, text=True, timeout=120)
+        active_wait = None
         if result.returncode:
             report["failed_command"] = {"argv": argv, "returncode": result.returncode,
                                         "stdout": result.stdout[-2048:], "stderr": result.stderr[-2048:]}
@@ -330,17 +334,19 @@ def run_installed(arguments) -> None:
         return result.stdout
 
     try:
+        active_wait = ("private_directory", 15) if os.name == "nt" else None
         private_directory(root)
+        active_wait = None
         environment = root / "environment"
-        execute([sys.executable, "-I", "-m", "venv", str(environment)])
+        execute([sys.executable, "-I", "-m", "venv", str(environment)], phase="venv")
         python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         requirement = root / "exact-agent.txt"
         requirement.write_text(f"shadai-agent @ {wheel.as_uri()} --hash=sha256:{digest(wheel)}\n", encoding="utf8")
         execute([str(python), "-I", "-m", "pip", "--cache-dir", str(root / "pip-cache"),
                  "install", "--no-index", "--find-links", str(wheelhouse),
                  "--only-binary=:all:", "--require-hashes", "-r", str(wheelhouse / "build.txt"),
-                 "-r", str(wheelhouse / "agent.txt"), "-r", str(requirement)])
-        execute([str(python), "-I", "-m", "pip", "check"])
+                 "-r", str(wheelhouse / "agent.txt"), "-r", str(requirement)], phase="offline_install")
+        execute([str(python), "-I", "-m", "pip", "check"], phase="dependency_check")
         expected = root / "expected.json"
         expected.write_text(json.dumps({"modules": modules, "wheel_sha256": digest(wheel)}), encoding="utf8")
 
@@ -349,7 +355,7 @@ def run_installed(arguments) -> None:
             argv = [str(python), "-I", str(Path(__file__).resolve()), "--worker", phase,
                     "--environment", str(environment), "--expected", str(expected), "--spool", str(spool),
                     "--scenario", scenario]
-            result = json.loads(execute(argv, cwd=environment))
+            result = json.loads(execute(argv, phase="worker", cwd=environment))
             report["workers"].append(result)
             return result
 
@@ -363,6 +369,11 @@ def run_installed(arguments) -> None:
         report["passed"] = True
     except Exception as error:
         report["failure_type"] = type(error).__name__
+        if (type(error) is subprocess.TimeoutExpired and type(active_wait) is tuple and len(active_wait) == 2
+                and type(active_wait[0]) is str and type(active_wait[1]) is int
+                and active_wait in (("private_directory", 15), ("venv", 120), ("offline_install", 120),
+                                    ("dependency_check", 120), ("worker", 120))):
+            report["timeout_phase"], report["timeout_seconds"] = active_wait
         raise
     finally:
         arguments.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf8")
