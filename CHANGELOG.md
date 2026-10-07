@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.3.0 preview — 2026-10-07
+
+Server and console component versions are 0.3.0; the standalone endpoint agent remains 0.1.0. This preview targets controlled pilots, with one organization per deployment. Fresh CI and signing evidence for the release commit remain required before publication.
+
+- Endpoint, network and syslog collectors gain bounded persistent delivery queues, scoped enrollment and credential rotation, restart recovery and explicit dead-letter replay. Redis admission and indexed retention distinguish pending work from retained replay originals.
+- Passive DNS/TLS/QUIC/HTTP metadata imports and the Network view expose naming evidence alongside inventory and supplied instrumented events; passive observations cannot establish prompt content, model choice, tokens or bills.
+- Existing optional SSO/SCIM gains bounded login admission and Redis-pressure refusal. Timestamped identity membership, bounded cleanup and optional pseudonymization define privacy and retention boundaries.
+- Per-process startup, liveness and readiness probes distinguish a running worker from actual dependency and processing progress. Kubernetes remains an external-store profile requiring target acceptance.
+- Hash-locked Python dependencies, pinned build inputs and maintained service recipes accompany native amd64/arm64 OCI, SBOM/provenance and strict advisory coverage gates. Signing-job archive revalidation installs the same hash-locked build toolchain first; cross-attempt evidence rejection remains strict.
+- The isolated qualification lab rehearses Redis pressure, pending-work recovery and cold backup/restore with exact inventory comparisons and fresh writes. Its owned exporter is built before physical measurements, then starts without build or pull.
+
+Review the [upgrade procedure](docs/deployment.md#updates) and [queue retention](docs/queue-retention.md). PostgreSQL migrations 004/005 add scoped collectors and timestamped membership; 005 clears historical identity arrays and counts whose observation age cannot be proved. Lab results establish neither production certification nor HA, deployment RPO/RTO or universal detection accuracy. The unfixed node-exporter GO-2026-5932 finding remains visible with UNKNOWN severity; see [delivery gates](docs/production-delivery.md) and [qualification boundaries](docs/production-qualification.md).
+
 - Console sessions use an HttpOnly, SameSite=Strict cookie instead of a token held in page memory, so a reload no longer signs users out. The cookie is `__Host-` prefixed and Secure on every host except `localhost` (`SESSION_COOKIE_SECURE` overrides). Cookie-authenticated writes must carry the session's `X-CSRF-Token`; `GET /api/v1/auth/session` restores the session after a reload. API clients keep using bearer tokens.
 - Signing out waits for the server to revoke the session and delete its cookie; if the server cannot be reached, the console says the session is still active instead of reporting a sign-out that a reload would undo.
 - Collection endpoints (detections, catalog, policies, users) also answer without a trailing slash. The redirect they used to send was built from the internal scheme and host, which broke the console behind TLS-terminating proxies.
