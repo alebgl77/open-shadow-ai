@@ -8,7 +8,13 @@
 
 Open Shadow AI rassemble des métadonnées réseau, des inventaires de postes et des informations Microsoft dans une interface d'investigation auto-hébergée. Le projet vise une installation par organisation, de la startup au pilote d'un parc géré.
 
+[Démarrage](#démarrage) · [Roadmap](docs/roadmap.md) · [Déploiement](docs/deployment.md) · [Architecture](docs/architecture.md) · [English](README.md)
+
 Logiciel en phase de développement : les packages Docker/Kubernetes et les scripts sont fournis pour évaluation. Un déploiement réel Docker, Kubernetes, AD ou Entra nécessite une validation opérationnelle. Aucune certification ou couverture exhaustive n'est revendiquée.
+
+## La suite : voir l’IA, garder la maîtrise
+
+La [roadmap en six étapes](docs/roadmap.md) dessine une découverte enrichie, la visibilité des agents, une analyse locale facultative, un copilote qui cite ses preuves, des usages encadrés et une qualification continue. Chaque étape future a des critères mesurables ; les technologies proposées restent à évaluer.
 
 ## La découverte en mouvement
 
