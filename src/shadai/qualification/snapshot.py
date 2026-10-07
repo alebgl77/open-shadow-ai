@@ -176,6 +176,18 @@ def safe_name(name):
     return str(path)
 
 
+def _allowed_archive_mode(item):
+    mode = item.mode
+    if type(mode) is not int or mode < 0 or mode > 0o3777:
+        return False
+    if mode <= 0o777:
+        return True
+    if type(item) is not tarfile.TarInfo:
+        return False
+    kind = item.type
+    return type(kind) is bytes and kind == tarfile.DIRTYPE
+
+
 def validate_members(members, max_bytes):
     if len(members) > 100000:
         export_refusal("file_budget")
@@ -185,7 +197,7 @@ def validate_members(members, max_bytes):
         name = safe_name(item.name)
         if (
             (metadata_duplicate := name in names)
-            or (metadata_mode := (False if 0 <= item.mode <= 0o777 else True))
+            or (metadata_mode := not _allowed_archive_mode(item))
             or (metadata_uid := (False if 0 <= item.uid < 2**32 - 1 else True))
             or (metadata_gid := (False if 0 <= item.gid < 2**32 - 1 else True))
             or item.size < 0

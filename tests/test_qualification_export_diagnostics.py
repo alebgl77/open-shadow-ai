@@ -548,7 +548,7 @@ def test_comparison_truth_alias_is_evaluated_once_without_extra_classification()
                 with snapshot.export_capture():
                     snapshot.validate_members([ObservedMember(**values)], 1024)
             assert diagnostic.envelope() == envelope("validate", reason)
-        assert truth.calls == 1
+        assert truth.calls == (0 if reason == "metadata_mode" else 1)
 
 
 def test_metadata_primary_survives_cleanup_cancel_and_one_secondary():
@@ -583,7 +583,7 @@ def test_legacy_and_refined_reasons_remain_closed_private_bounded_and_lab_accept
         assert lab.failure["helper_reason"] == reason and closed_cold_evidence(lab.failure)
 
 
-def test_original_metadata_predicate_restored_by_only_four_pure_bool_annotations():
+def test_metadata_predicate_preserves_order_with_only_the_explicit_mode_policy_change():
     tree = ast.parse(Path(snapshot.__file__).read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "validate_members")
     guard = next(node for node in ast.walk(function) if isinstance(node, ast.If)
@@ -595,8 +595,11 @@ def test_original_metadata_predicate_restored_by_only_four_pure_bool_annotations
     class Reversal(ast.NodeTransformer):
         def visit_NamedExpr(self, node):
             targets.append(node.target.id)
+            if node.target.id == "metadata_mode":
+                expected = ast.parse("not _allowed_archive_mode(item)", mode="eval").body
+                assert ast.dump(node.value) == ast.dump(expected)
+                return node.value
             comparisons = {
-                "metadata_mode": "0 <= item.mode <= 0o777",
                 "metadata_uid": "0 <= item.uid < 2**32 - 1",
                 "metadata_gid": "0 <= item.gid < 2**32 - 1",
             }
@@ -607,7 +610,7 @@ def test_original_metadata_predicate_restored_by_only_four_pure_bool_annotations
             return node.value
 
     restored = Reversal().visit(guard.test)
-    original = ast.parse("name in names or not 0 <= item.mode <= 0o777 or not 0 <= item.uid < 2**32 - 1 "
+    original = ast.parse("name in names or not _allowed_archive_mode(item) or not 0 <= item.uid < 2**32 - 1 "
                          "or not 0 <= item.gid < 2**32 - 1 or item.size < 0", mode="eval").body
     assert targets == ["metadata_duplicate", "metadata_mode", "metadata_uid", "metadata_gid"]
     assert ast.dump(restored) == ast.dump(original)
@@ -645,7 +648,7 @@ def test_lower_chain_truth_matches_original_conditional_guard_without_second_eva
     item = ObservedMember(**{field: Scalar()})
     with snapshot.export_diagnostics() as diagnostic:
         snapshot.export_checkpoint("validate")
-        if case == "all_true":
+        if case == "all_true" and field != "mode":
             assert snapshot.validate_members([item], 1024) == 0
             assert diagnostic.primary is None
             assert item.reads == ["mode", "uid", "gid", "size", "size"]
@@ -657,4 +660,38 @@ def test_lower_chain_truth_matches_original_conditional_guard_without_second_eva
             assert caught.value.args == ("Duplicate or unsafe archive metadata",)
             assert diagnostic.envelope() == envelope("validate", "metadata_" + field)
             assert item.reads == ["mode", "uid", "gid"][:["mode", "uid", "gid"].index(field) + 1]
-    assert calls == (["lower", "upper"] if case in {"upper_false", "all_true"} else ["lower"])
+    assert calls == ([] if field == "mode" else
+                     ["lower", "upper"] if case in {"upper_false", "all_true"} else ["lower"])
+
+
+@pytest.mark.parametrize("field", ["uid", "gid"])
+@pytest.mark.parametrize("step", ["lower", "upper"])
+@pytest.mark.parametrize("kind", [KeyboardInterrupt, SystemExit])
+def test_uid_gid_comparison_cancellation_still_preserves_exact_truth_order_and_identity(field, step, kind):
+    calls, error = [], kind(CANARY)
+
+    class Truth:
+        def __init__(self, label):
+            self.label = label
+
+        def __bool__(self):
+            calls.append(self.label)
+            if self.label == step:
+                raise error
+            return True
+
+    class Scalar:
+        def __ge__(self, other):
+            return Truth("lower")
+
+        def __lt__(self, other):
+            return Truth("upper")
+
+    with snapshot.export_diagnostics() as diagnostic:
+        snapshot.export_checkpoint("validate")
+        with pytest.raises(kind) as caught:
+            with snapshot.export_capture():
+                snapshot.validate_members([ObservedMember(**{field: Scalar()})], 1024)
+        assert caught.value is diagnostic.exception is error
+        assert diagnostic.envelope() == envelope("validate")
+    assert calls == (["lower"] if step == "lower" else ["lower", "upper"])
