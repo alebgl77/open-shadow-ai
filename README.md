@@ -2,6 +2,8 @@
 
 # Open Shadow AI
 
+[English](README.md) | [Français](README.fr.md) | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/alebgl77/open-shadow-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/alebgl77/open-shadow-ai/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
@@ -10,9 +12,13 @@
 
 Understand which AI services and tools appear in your environment, where each signal came from, and what it can actually prove. Bring together network metadata, endpoint inventory and Microsoft directory signals in an interface built for investigation.
 
-[Get started](#get-started) · [Deployment](docs/deployment.md) · [Production qualification](docs/production-qualification.md) · [Collector operations](docs/collector-operations.md) · [Microsoft & Active Directory](docs/microsoft.md) · [SSO & SCIM](docs/sso-scim.md) · [Architecture](docs/architecture.md) · [Roadmap](docs/roadmap.md) · [Français](README.fr.md)
+[Expert implementation handbook](docs/en/README.md) · [Get started](#get-started) · [Documentation and language coverage](docs/README.md) · [Deployment (English reference)](docs/deployment.md) · [Production qualification (English reference)](docs/production-qualification.md) · [Collector operations (English reference)](docs/collector-operations.md) · [Microsoft & Active Directory (English reference)](docs/microsoft.md) · [SSO & SCIM (English reference)](docs/sso-scim.md) · [Architecture (English reference)](docs/architecture.md) · [Roadmap (English reference)](docs/roadmap.md)
 
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
+
+The backend is development preview **0.3.0**; the standalone endpoint agent is **0.1.0**. The English, French and Simplified Chinese handbooks provide equivalent implementation procedures. Detailed references and historical validation records retain their stated language and source-specific scope.
+
+The console offers English, French and Simplified Chinese before and after sign-in. A validated browser-local language preference is separate from authentication; English is the default when no preference is available or storage is blocked. Raw source data and machine/API identifiers retain their original values. See [language coverage](docs/README.md).
 
 ![Open Shadow AI investigation dashboard with synthetic demo data](docs/assets/dashboard-desktop.webp)
 
@@ -22,7 +28,7 @@ Three silent French diagrams explain the AI footprint, evidence levels and colle
 
 ![Illustrative network, endpoint and AD/Entra signals converging into LLM, code, media and API categories; synthetic data](docs/assets/motion/footprint.gif)
 
-[Explore all three diagrams](docs/motion.md) · [Open/download the MP4](docs/assets/motion/footprint.mp4) · [View the static poster](docs/assets/motion/footprint.webp)
+[Explore all three diagrams (English reference)](docs/motion.md) · [Open/download the MP4](docs/assets/motion/footprint.mp4) · [View the static poster](docs/assets/motion/footprint.webp)
 
 ## Why this project
 
@@ -34,7 +40,7 @@ Three silent French diagrams explain the AI footprint, evidence levels and colle
 
 ## Where we are heading
 
-See the footprint. Understand the risk. Keep control. The [six-step roadmap](docs/roadmap.md) (in French) sets out richer discovery, agent visibility, optional local analysis, investigations that cite evidence, deliberate usage controls and continuous qualification. Each future step has measurable delivery gates; candidate technologies remain proposals for evaluation.
+See the footprint. Understand the risk. Keep control. The [six-step roadmap (English reference)](docs/roadmap.md) sets out richer discovery, agent visibility, optional local analysis, investigations that cite evidence, deliberate usage controls and continuous qualification. Each future step has measurable delivery gates; candidate technologies remain proposals for evaluation.
 
 ## Try the interface
 
@@ -65,9 +71,9 @@ docker compose run --rm api python -m shadai.cli create-admin
 
 On Windows, use `./scripts/bootstrap.ps1` in place of the Bash bootstrap. Both preserve existing secrets and configuration. Use `-DryRun` or `--dry-run` to preview.
 
-Wait for the new workers to initialize their actual Redis groups before reconciliation; retry if initialization is still in progress. On upgrades, stop all legacy writers/workers/replay clients before starting the indexed version. Readiness requires the reconciled retention schema. See [queue retention](docs/queue-retention.md) and [qualification](docs/production-qualification.md) for failure behavior and the isolated rehearsal.
+Wait for the new workers to initialize their actual Redis groups before reconciliation; retry if initialization is still in progress. On upgrades, stop all legacy writers/workers/replay clients before starting the indexed version. Readiness requires the reconciled retention schema. See [queue retention (English reference)](docs/queue-retention.md) and [qualification (English reference)](docs/production-qualification.md) for failure behavior and the isolated rehearsal.
 
-Open [localhost:3000](http://localhost:3000). PostgreSQL migrations run in the `migrate` service before the API starts; both ClickHouse schema files load on a fresh event-store volume. [Updating an existing installation](docs/deployment.md#updates) requires a separate ClickHouse migration.
+Open [localhost:3000](http://localhost:3000). PostgreSQL migrations run in the `migrate` service before the API starts; both ClickHouse schema files load on a fresh event-store volume. [Updating an existing installation (English reference)](docs/deployment.md#updates) requires a separate ClickHouse migration.
 
 Enabling collectors is deliberate:
 
@@ -77,11 +83,11 @@ docker compose --profile syslog up -d
 docker compose --profile entra up -d
 ```
 
-AD exports and endpoint installs are operator-run workflows, documented in the [Microsoft guide](docs/microsoft.md). Installing the server does not automatically scan the fleet.
+AD exports and endpoint installs are operator-run workflows, documented in the [Microsoft guide (English reference)](docs/microsoft.md). Installing the server does not automatically scan the fleet.
 
-Administrators can enroll scoped collectors in **Sources & coverage**, provision their one-time keys privately and rotate or revoke them. Endpoint, network and syslog collectors have bounded persistent delivery queues; pipeline status separates pending work, retained entries and unknown capture loss. Follow the [operations guide](docs/collector-operations.md) for enrollment, restart recovery, authenticated monitoring and identity retention.
+Administrators can enroll scoped collectors in **Sources & coverage**, provision their one-time keys privately and rotate or revoke them. Endpoint, network and syslog collectors have bounded persistent delivery queues; pipeline status separates pending work, retained entries and unknown capture loss. Follow the [operations guide (English reference)](docs/collector-operations.md) for enrollment, restart recovery, authenticated monitoring and identity retention.
 
-Optional [OIDC sign-in and SCIM provisioning](docs/sso-scim.md) manage access to the console, including Microsoft Entra ID. They are disabled in the base deployment and use separate credentials from the inventory collector. Local administrator sign-in remains available for recovery.
+Optional [OIDC sign-in and SCIM provisioning (English reference)](docs/sso-scim.md) manage access to the console, including Microsoft Entra ID. They are disabled in the base deployment and use separate credentials from the inventory collector. Local administrator sign-in remains available for recovery.
 
 ## What is delivered
 
@@ -89,7 +95,7 @@ Optional [OIDC sign-in and SCIM provisioning](docs/sso-scim.md) manage access to
 |---|---|
 | React investigation interface, catalog and governance workflow | Implemented; evaluate with your data |
 | DNS/proxy parsers and syslog collector | Implemented; parser and listener must match the source |
-| [Passive network analysis](docs/network-analysis.md) | Zeek/Suricata/TShark metadata imports, optional offline PCAP or explicit live sensor, and `/network` evidence view; observed names do not prove AI requests |
+| [Passive network analysis (English reference)](docs/network-analysis.md) | Zeek/Suricata/TShark metadata imports, optional offline PCAP or explicit live sensor, and `/network` evidence view; observed names do not prove AI requests |
 | Endpoint agent | Implemented process/container/runtime/extension inventory; OS and fleet rollout verification pending |
 | Microsoft Entra collector | Implemented service-principal inventory and optional grants; AI matching requires reviewed application-ID mappings; live tenant validation pending |
 | On-prem Active Directory | OU-scoped read-only PowerShell exporter; RSAT/live AD validation pending |
@@ -107,7 +113,7 @@ Optional [OIDC sign-in and SCIM provisioning](docs/sso-scim.md) manage access to
 
 ![Open Shadow AI architecture](docs/assets/architecture.svg)
 
-[Editable draw.io diagram](docs/assets/architecture.drawio) · [Mermaid and data flow](docs/architecture.md)
+[Editable draw.io diagram](docs/assets/architecture.drawio) · [Mermaid and data flow (English reference)](docs/architecture.md)
 
 The Python package and environment variable prefix remain `shadai` for compatibility. The public project name is **Open Shadow AI**.
 
@@ -115,11 +121,11 @@ The Python package and environment variable prefix remain `shadai` for compatibi
 
 The default configuration never stores URL paths, query strings or user agents. At ingestion, paths (without their query string) and user agents are compared in memory with catalog patterns scoped to each product's hosts; only the matched catalog entry is kept. Set `privacy.match_transient_signals: false` to skip that comparison. Treat usernames, device identifiers and directory exports as personal or organizational data. Set retention and access according to your deployment.
 
-Per-observation identity membership expires independently (default at most 30 days); displayed counts are distinct observed identifiers, not staff headcount. Optional server pseudonymization affects new processing and does not scrub history or plaintext local spools. Risk scores retain their last calculated snapshot and expose a nullable calculation time and stale marker. Historical cleanup is an explicit bounded maintenance operation; see [identity retention and pseudonymization](docs/collector-operations.md#retain-and-pseudonymize-identities).
+Per-observation identity membership expires independently (default at most 30 days); displayed counts are distinct observed identifiers, not staff headcount. Optional server pseudonymization affects new processing and does not scrub history or plaintext local spools. Risk scores retain their last calculated snapshot and expose a nullable calculation time and stale marker. Historical cleanup is an explicit bounded maintenance operation; see [identity retention and pseudonymization (English reference)](docs/collector-operations.md#retain-and-pseudonymize-identities).
 
 DNS resolution indicates contact with a domain, not a completed AI interaction. An installed extension or directory application indicates presence or permission, not usage. Model identifiers are declared evidence; token totals and costs require instrumentation. Cost calculations remain estimates unless reconciled against provider billing.
 
-Unmanaged devices, unobserved encrypted DNS, local tools, shared domains, embedded SaaS AI and gateway bypasses can leave gaps. See the [coverage guide](docs/collectors.md) and [market analysis](docs/market-analysis.md).
+Unmanaged devices, unobserved encrypted DNS, local tools, shared domains, embedded SaaS AI and gateway bypasses can leave gaps. See the [coverage guide (English reference)](docs/collectors.md) and [market analysis (English reference)](docs/market-analysis.md).
 
 ## Contribute
 
@@ -127,4 +133,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), submit a small reproducible change and 
 
 Licensed under [Apache-2.0](LICENSE). Copyright Open Shadow AI contributors.
 
-For sizing and rollout, see [capacity planning](docs/capacity.md). Throughput claims require measurements on your workload.
+For sizing and rollout, see [capacity planning (English reference)](docs/capacity.md). Throughput claims require measurements on your workload.

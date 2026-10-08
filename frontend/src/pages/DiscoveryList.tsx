@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -16,11 +17,18 @@ import EmptyState from '@/components/ui/EmptyState'
 import ErrorAlert from '@/components/ui/ErrorAlert'
 import { TableSkeleton } from '@/components/ui/LoadingSkeleton'
 import clsx from 'clsx'
-import { formatDistanceToNow } from 'date-fns'
 
 const PAGE_SIZES = [25, 50, 100]
 
+class BulkUpdateError extends Error {
+  constructor(readonly failed: number, readonly total: number) {
+    super('Bulk update failed')
+  }
+}
+
 export default function DiscoveryList() {
+  const { tr, textLabel, enumLabel, formatNumber, relativeTime } = useI18n()
+
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -78,7 +86,7 @@ export default function DiscoveryList() {
     mutationFn: async ({ ids, classification }: { ids: string[]; classification: string }) => {
       const results = await Promise.allSettled(ids.map(id => updateDetection(id, { classification })))
       const failures = results.filter(result => result.status === 'rejected').length
-      if (failures) throw new Error(`${failures} of ${ids.length} updates failed. Refresh the list before retrying.`)
+      if (failures) throw new BulkUpdateError(failures, ids.length)
     },
     onSuccess: () => { setSelectedIds(new Set()) },
     onSettled: () => { queryClient.invalidateQueries() },
@@ -103,11 +111,13 @@ export default function DiscoveryList() {
   const activeFilterCount = ['classification', 'risk_level', 'entity_type', 'analyst_status'].filter(k => searchParams.has(k)).length
 
   function SortHeader({ col, label }: { col: string; label: string }) {
+  const { textLabel } = useI18n()
+
     const active = filters.sort_by === col
     return (
       <th className="px-4 py-3 font-medium cursor-pointer hover:text-slate-300 transition-colors select-none">
         <button onClick={() => toggleSort(col)} className="flex items-center gap-1">
-          {label}
+          {textLabel(label)}
           {active && (filters.sort_order === 'desc' ? <ChevronDown className="w-3 h-3 text-accent" /> : <ChevronUp className="w-3 h-3 text-accent" />)}
         </button>
       </th>
@@ -117,45 +127,42 @@ export default function DiscoveryList() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold tracking-tight">Discoveries</h1>
-        <span className="text-sm text-slate-400">{data ? `${data.total} results` : 'Loading results…'}</span>
+        <h1 className="text-2xl font-bold tracking-tight">{tr("Discoveries")}</h1>
+        <span className="text-sm text-slate-400">{data ? tr('{count} results', { count: formatNumber(data.total) }) : tr("Loading results…")}</span>
       </div>
-      {isFetching && !isLoading && <p role="status" className="text-sm text-slate-400">Updating results…</p>}
+      {isFetching && !isLoading && <p role="status" className="text-sm text-slate-400">{tr("Updating results…")}</p>}
 
       {/* Search + filter toggle */}
       <div className="flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-          <input aria-label="Search discoveries" type="text" value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()} placeholder="Search AI tools..."
+          <input aria-label={tr("Search discoveries")} type="text" value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()} placeholder={tr("Search AI tools...")}
             className="w-full bg-surface-800 border border-surface-600/40 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-hidden focus:border-accent/50 placeholder-slate-600" />
         </div>
         <button onClick={() => setShowFilters(!showFilters)}
           className={clsx('flex items-center gap-2 px-3 py-2 text-sm rounded-lg border transition-colors',
             showFilters || activeFilterCount > 0 ? 'bg-accent/10 text-accent border-accent/30' : 'bg-surface-800 text-slate-400 border-surface-600/40 hover:text-slate-200')}>
-          <Filter className="w-4 h-4" /> Filters
-          {activeFilterCount > 0 && <span className="w-5 h-5 rounded-full bg-accent text-surface-950 text-[10px] font-bold flex items-center justify-center">{activeFilterCount}</span>}
+          <Filter className="w-4 h-4" />{tr("Filters")} {activeFilterCount > 0 && <span className="w-5 h-5 rounded-full bg-accent text-surface-950 text-[10px] font-bold flex items-center justify-center">{activeFilterCount}</span>}
         </button>
         <button disabled={actionsDisabled || !data?.items.length} onClick={() => downloadCsv([['Tool','Type','Classification','Risk','Events','Last seen'], ...(data?.items.map(d=>[d.entity_name,d.entity_type,d.classification,d.risk_score_stale ? 'Needs recalculation' : d.risk_score,d.total_events_count,d.last_seen_at]) || [])], 'open-shadow-ai-visible-discoveries.csv')} className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-800 text-slate-400 border border-surface-600/40 rounded-lg hover:text-slate-200 transition-colors">
-          <Download className="w-4 h-4" /> Export page
-        </button>
+          <Download className="w-4 h-4" />{tr("Export page")} </button>
         {canEdit && (
           <button disabled={actionsDisabled || !data?.total} onClick={() => { exportAll.reset(); setConfirmExport(true) }} aria-expanded={confirmExport} aria-controls="export-all"
             className="flex items-center gap-2 px-3 py-2 text-sm bg-surface-800 text-slate-400 border border-surface-600/40 rounded-lg hover:text-slate-200 transition-colors">
-            <Download className="w-4 h-4" /> Export all
-          </button>
+            <Download className="w-4 h-4" />{tr("Export all")} </button>
         )}
       </div>
 
       {confirmExport && (
         <section id="export-all" aria-labelledby="export-all-title" className="stat-card space-y-3">
-          <h2 id="export-all-title" className="text-sm font-medium">Export all {data?.total ?? 0} matching discoveries</h2>
-          <p className="text-xs text-slate-400 leading-relaxed">{ANTI_HR_NOTICE} The server records this export, with its filters, in the audit log.</p>
+          <h2 id="export-all-title" className="text-sm font-medium">{tr('Export all {count} matching discoveries', { count: formatNumber(data?.total ?? 0) })}</h2>
+          <p className="text-xs text-slate-400 leading-relaxed">{textLabel(ANTI_HR_NOTICE)}{' '}{tr("The server records this export, with its filters, in the audit log.")}</p>
           <div className="flex gap-2">
-            <button onClick={() => exportAll.mutate()} disabled={actionsDisabled || exportAll.isPending} className="primary-button">{exportAll.isPending ? 'Exporting…' : 'Confirm export'}</button>
-            <button onClick={() => setConfirmExport(false)} className="secondary-button">Cancel</button>
+            <button onClick={() => exportAll.mutate()} disabled={actionsDisabled || exportAll.isPending} className="primary-button">{exportAll.isPending ? tr("Exporting…") : tr("Confirm export")}</button>
+            <button onClick={() => setConfirmExport(false)} className="secondary-button">{tr("Cancel")}</button>
           </div>
-          {exportAll.isError && <p role="alert" className="text-xs text-red-400">The export could not be completed. Check your role and try again.</p>}
+          {exportAll.isError && <p role="alert" className="text-xs text-red-400">{tr("The export could not be completed. Check your role and try again.")}</p>}
         </section>
       )}
 
@@ -163,22 +170,21 @@ export default function DiscoveryList() {
       {showFilters && (
         <div className="flex flex-wrap gap-3 bg-surface-800/50 border border-surface-600/20 rounded-lg p-4">
           {[
-            { key: 'classification', label: 'Classification', options: ['unsanctioned', 'unknown', 'tolerated', 'sanctioned'] },
-            { key: 'risk_level', label: 'Risk', options: ['critical', 'high', 'medium', 'low', 'info'] },
-            { key: 'entity_type', label: 'Type', options: ['saas_app', 'api_service', 'browser_extension', 'oauth_app', 'local_runtime', 'local_container', 'desktop_app'] },
-            { key: 'analyst_status', label: 'Status', options: ['new', 'investigating', 'classified', 'false_positive', 'escalated'] },
+            { key: 'classification', label: tr("Classification"), options: ['unsanctioned', 'unknown', 'tolerated', 'sanctioned'] },
+            { key: 'risk_level', label: tr("Risk"), options: ['critical', 'high', 'medium', 'low', 'info'] },
+            { key: 'entity_type', label: tr("Type"), options: ['saas_app', 'api_service', 'browser_extension', 'oauth_app', 'local_runtime', 'local_container', 'desktop_app'] },
+            { key: 'analyst_status', label: tr("Status"), options: ['new', 'investigating', 'classified', 'false_positive', 'escalated'] },
           ].map(f => (
             <select aria-label={f.label} key={f.key} value={(filters as any)[f.key] ?? ''} onChange={(e) => setFilter(f.key, e.target.value || undefined)}
               className="bg-surface-900 border border-surface-600/40 rounded-lg px-3 py-1.5 text-sm text-slate-300">
-              <option value="">All {f.label.toLowerCase()}s</option>
-              {f.options.map(o => <option key={o} value={o}>{o.replace('_', ' ')}</option>)}
+              <option value="">{tr(({ classification: 'All classifications', risk_level: 'All risks', entity_type: 'All types', analyst_status: 'All statuses' } as const)[f.key as 'classification' | 'risk_level' | 'entity_type' | 'analyst_status'])}</option>
+              {f.options.map(o => <option key={o} value={o}>{enumLabel(o)}</option>)}
             </select>
           ))}
           {activeFilterCount > 0 && (
             <button onClick={() => setSearchParams(new URLSearchParams())}
               className="flex items-center gap-1 px-3 py-1.5 text-sm text-red-400 hover:text-red-300">
-              <X className="w-3 h-3" /> Clear
-            </button>
+              <X className="w-3 h-3" />{tr("Clear")} </button>
           )}
         </div>
       )}
@@ -186,21 +192,21 @@ export default function DiscoveryList() {
       {/* Bulk actions */}
       {canEdit && selectedIds.size > 0 && (
         <div className="flex items-center gap-4 bg-accent/5 border border-accent/20 rounded-lg px-4 py-2.5">
-          <span className="text-sm text-accent font-medium">{selectedIds.size} selected</span>
+          <span className="text-sm text-accent font-medium">{tr('{count} selected', { count: formatNumber(selectedIds.size) })}</span>
           <div className="flex gap-2">
             {(['sanctioned', 'tolerated', 'unsanctioned'] as const).map(cls => (
               <button disabled={actionsDisabled || bulkMutation.isPending} key={cls} onClick={() => bulkMutation.mutate({ ids: Array.from(selectedIds), classification: cls })}
-                className="px-3 py-1 text-xs bg-surface-700 text-slate-300 rounded-sm hover:bg-surface-600 transition-colors capitalize">{cls}</button>
+                className="px-3 py-1 text-xs bg-surface-700 text-slate-300 rounded-sm hover:bg-surface-600 transition-colors capitalize">{enumLabel(cls)}</button>
             ))}
           </div>
-          <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-slate-500 hover:text-slate-300">Deselect</button>
+          <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-slate-500 hover:text-slate-300">{tr("Deselect")}</button>
         </div>
       )}
 
       {/* Table */}
-      {bulkMutation.isError && <p role="alert" className="text-sm text-red-300">{bulkMutation.error.message}</p>}
+      {bulkMutation.isError && <p role="alert" className="text-sm text-red-300">{bulkMutation.error instanceof BulkUpdateError ? tr('{failed} of {total} updates failed. Refresh the list before retrying.', { failed: formatNumber(bulkMutation.error.failed), total: formatNumber(bulkMutation.error.total) }) : bulkMutation.error.message}</p>}
       {isLoading && <TableSkeleton rows={10} columns={9} />}
-      {isError && <ErrorAlert message="Failed to load detections" onRetry={refetch} />}
+      {isError && <ErrorAlert message={tr("Failed to load detections")} onRetry={refetch} />}
 
       {!isLoading && !isError && (
         <div className="bg-surface-800 border border-surface-600/30 rounded-xl overflow-hidden">
@@ -209,32 +215,32 @@ export default function DiscoveryList() {
               <thead>
                 <tr className="border-b border-surface-600/30 text-left text-xs text-slate-500 uppercase tracking-wider">
                   <th className="px-4 py-3 w-10">
-                    <input aria-label="Select visible discoveries" disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={data ? selectedIds.size === data.items.length && data.items.length > 0 : false}
+                    <input aria-label={tr("Select visible discoveries")} disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={data ? selectedIds.size === data.items.length && data.items.length > 0 : false}
                       onChange={toggleSelectAll} className="rounded-sm bg-surface-900 border-surface-600" />
                   </th>
-                  <SortHeader col="entity_name" label="AI Tool" />
-                  <th className="px-4 py-3 font-medium">Type</th>
-                  <th className="px-4 py-3 font-medium">Classification</th>
-                  <SortHeader col="confidence_score" label="Confidence" />
-                  <SortHeader col="risk_score" label="Risk" />
-                  <SortHeader col="impacted_users_count" label="Users" />
-                  <SortHeader col="last_seen_at" label="Last Seen" />
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Sources</th>
+                  <SortHeader col="entity_name" label={tr("AI Tool")} />
+                  <th className="px-4 py-3 font-medium">{tr("Type")}</th>
+                  <th className="px-4 py-3 font-medium">{tr("Classification")}</th>
+                  <SortHeader col="confidence_score" label={tr("Confidence")} />
+                  <SortHeader col="risk_score" label={tr("Risk")} />
+                  <SortHeader col="impacted_users_count" label={tr("Users")} />
+                  <SortHeader col="last_seen_at" label={tr("Last Seen")} />
+                  <th className="px-4 py-3 font-medium">{tr("Status")}</th>
+                  <th className="px-4 py-3 font-medium">{tr("Sources")}</th>
                 </tr>
               </thead>
               <tbody>
                 {data && data.items.length === 0 && (
                   <tr><td colSpan={10}>
                     <EmptyState icon={Search}
-                      title={activeFilterCount > 0 ? "No results match your filters" : "No AI tools discovered yet"}
-                      description={activeFilterCount > 0 ? "Try adjusting your filter criteria." : "Review source coverage and ingestion to start collecting evidence."} />
+                      title={activeFilterCount > 0 ? tr("No results match your filters") : tr("No AI tools discovered yet")}
+                      description={activeFilterCount > 0 ? tr("Try adjusting your filter criteria.") : tr("Review source coverage and ingestion to start collecting evidence.")} />
                   </td></tr>
                 )}
                 {data?.items.map((d) => (
                   <tr key={d.detection_id} className="data-row cursor-pointer group">
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <input aria-label={`Select ${d.entity_name}`} disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={selectedIds.has(d.detection_id)} onChange={() => toggleSelect(d.detection_id)}
+                      <input aria-label={tr("Select {name}", { name: d.entity_name })} disabled={actionsDisabled || !canEdit || bulkMutation.isPending} type="checkbox" checked={selectedIds.has(d.detection_id)} onChange={() => toggleSelect(d.detection_id)}
                         className="rounded-sm bg-surface-900 border-surface-600" />
                     </td>
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}>
@@ -244,9 +250,9 @@ export default function DiscoveryList() {
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}><div className="flex flex-wrap gap-1"><ClassificationBadge classification={d.classification} /><ApprovalBadge status={d.governance_status} /></div></td>
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}><ConfidenceBadge level={d.confidence_level} score={d.confidence_score} showScore /></td>
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}><RiskBadge stale={d.risk_score_stale} level={d.risk_level} score={d.risk_score} showScore /></td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400" onClick={() => navigate(`/discoveries/${d.detection_id}`)}>{d.impacted_users_count}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-400" onClick={() => navigate(`/discoveries/${d.detection_id}`)}>{formatNumber(d.impacted_users_count)}</td>
                     <td className="px-4 py-3 text-xs text-slate-400" onClick={() => navigate(`/discoveries/${d.detection_id}`)}>
-                      {formatDistanceToNow(new Date(d.last_seen_at), { addSuffix: true })}
+                      {relativeTime(d.last_seen_at)}
                     </td>
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}><StatusBadge status={d.analyst_status} /></td>
                     <td className="px-4 py-3" onClick={() => navigate(`/discoveries/${d.detection_id}`)}><SourceIcons sources={d.source_types} /></td>
@@ -260,18 +266,18 @@ export default function DiscoveryList() {
             <div className="flex items-center justify-between px-4 py-3 border-t border-surface-600/30">
               <div className="flex items-center gap-3">
                 <span className="text-xs text-slate-500">
-                  {((filters.page! - 1) * filters.page_size! + 1)}–{Math.min(filters.page! * filters.page_size!, data.total)} of {data.total}
+                  {tr('{first}–{last} of {total}', { first: formatNumber((filters.page! - 1) * filters.page_size! + 1), last: formatNumber(Math.min(filters.page! * filters.page_size!, data.total)), total: formatNumber(data.total) })}
                 </span>
-                <select aria-label="Results per page" value={filters.page_size} onChange={(e) => setFilter('page_size', e.target.value)}
+                <select aria-label={tr("Results per page")} value={filters.page_size} onChange={(e) => setFilter('page_size', e.target.value)}
                   className="bg-surface-900 border border-surface-600/40 rounded-sm px-2 py-1 text-xs text-slate-400">
-                  {PAGE_SIZES.map(s => <option key={s} value={s}>{s}/page</option>)}
+                  {PAGE_SIZES.map(s => <option key={s} value={s}>{tr('{count}/page', { count: formatNumber(s) })}</option>)}
                 </select>
               </div>
               <div className="flex gap-2">
                 <button disabled={filters.page! <= 1} onClick={() => setFilter('page', String(filters.page! - 1))}
-                  className="px-3 py-1 text-xs bg-surface-700 rounded-sm hover:bg-surface-600 disabled:opacity-30 transition-colors">Previous</button>
+                  className="px-3 py-1 text-xs bg-surface-700 rounded-sm hover:bg-surface-600 disabled:opacity-30 transition-colors">{tr("Previous")}</button>
                 <button disabled={filters.page! * filters.page_size! >= data.total} onClick={() => setFilter('page', String(filters.page! + 1))}
-                  className="px-3 py-1 text-xs bg-surface-700 rounded-sm hover:bg-surface-600 disabled:opacity-30 transition-colors">Next</button>
+                  className="px-3 py-1 text-xs bg-surface-700 rounded-sm hover:bg-surface-600 disabled:opacity-30 transition-colors">{tr("Next")}</button>
               </div>
             </div>
           )}

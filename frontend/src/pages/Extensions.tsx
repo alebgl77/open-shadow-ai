@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { Puzzle } from 'lucide-react'
@@ -10,6 +11,8 @@ import ErrorAlert from '@/components/ui/ErrorAlert'
 import { TableSkeleton } from '@/components/ui/LoadingSkeleton'
 
 export default function Extensions() {
+  const { tr, formatNumber } = useI18n()
+
   const navigate = useNavigate()
 
   const { data, isLoading, isError, refetch } = useQuery({
@@ -24,19 +27,19 @@ export default function Extensions() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Puzzle className="w-6 h-6 text-accent" />
-          <h1 className="text-2xl font-bold tracking-tight">AI Browser Extensions</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{tr("AI Browser Extensions")}</h1>
         </div>
-        <span className="text-sm text-slate-400">{data?.total ?? 0} extension{(data?.total ?? 0) !== 1 ? 's' : ''}</span>
+        <span className="text-sm text-slate-400">{tr(data?.total === 1 ? '{count} extension' : '{count} extensions', { count: formatNumber(data?.total ?? 0) })}</span>
       </div>
 
-      <p className="text-xs text-slate-400">Showing up to 100 extensions. <Link to="/discoveries?entity_type=browser_extension" className="text-accent">Open the complete paginated list</Link>. Installation does not establish active use.</p>{isLoading && <TableSkeleton rows={8} columns={6} />}
+      <p className="text-xs text-slate-400">{tr("Showing up to 100 extensions.")} <Link to="/discoveries?entity_type=browser_extension" className="text-accent">{tr("Open the complete paginated list")}</Link>{tr(". Installation does not establish active use.")}</p>{isLoading && <TableSkeleton rows={8} columns={6} />}
       {isError && <ErrorAlert onRetry={refetch} />}
 
       {!isLoading && !isError && items.length === 0 && (
         <EmptyState
           icon={Puzzle}
-          title="No AI browser extensions detected"
-          description="Deploy the endpoint agent on managed devices to discover installed AI browser extensions."
+          title={tr("No AI browser extensions detected")}
+          description={tr("Deploy the endpoint agent on managed devices to discover installed AI browser extensions.")}
         />
       )}
 
@@ -45,12 +48,12 @@ export default function Extensions() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-surface-600/30 text-left text-xs text-slate-500 uppercase tracking-wider">
-                <th className="px-4 py-3 font-medium">Extension</th>
-                <th className="px-4 py-3 font-medium">Extension ID</th>
-                <th className="px-4 py-3 font-medium">Devices</th>
-                <th className="px-4 py-3 font-medium">Classification</th>
-                <th className="px-4 py-3 font-medium">Risk</th>
-                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">{tr("Extension")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Extension ID")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Devices")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Classification")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Risk")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Status")}</th>
               </tr>
             </thead>
             <tbody>
@@ -66,7 +69,7 @@ export default function Extensions() {
                     <td className="px-4 py-3 font-mono text-xs text-slate-500 max-w-[200px] truncate">
                       {browserEvidence?.sample_values?.[0] || d.catalog_item_id || '—'}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{d.impacted_devices_count}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{formatNumber(d.impacted_devices_count)}</td>
                     <td className="px-4 py-3"><ClassificationBadge classification={d.classification} /></td>
                     <td className="px-4 py-3"><RiskBadge stale={d.risk_score_stale} level={d.risk_level} /></td>
                     <td className="px-4 py-3"><StatusBadge status={d.analyst_status} /></td>

@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import clsx from 'clsx'
 
 const STYLES: Record<string, string> = {
@@ -12,10 +13,12 @@ interface Props {
 }
 
 export default function ClassificationBadge({ classification }: Props) {
+  const { enumLabel } = useI18n()
+
   const normalized = classification.toLowerCase()
   return (
     <span className={clsx('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium', STYLES[normalized] || STYLES.unknown)}>
-      {normalized}
+      {enumLabel(normalized)}
     </span>
   )
 }

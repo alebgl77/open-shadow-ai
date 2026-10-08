@@ -1,89 +1,101 @@
-# Roadmap — voir l’IA, garder la maîtrise
+<a id="roadmap--voir-lia-garder-la-maîtrise"></a>
+# Roadmap — see AI, retain control
 
-**Voir l’IA. Comprendre le risque. Garder le contrôle.** Demain, suivre un service inconnu jusqu’à ses agents, retrouver les preuves d’un incident et choisir un usage autorisé devrait tenir dans une même investigation.
+[English](roadmap.md) | [Français](fr/roadmap.md) | [简体中文](zh-CN/roadmap.md)
 
-Cette roadmap décrit **six étapes futures, planifiées ou exploratoires** : une direction, sans dates ni promesse de livraison. Chaque passage dépend de résultats reproductibles et d’une revue humaine. Les technologies citées sont des candidates, pas des dépendances installées ou des partenariats ; références consultées le **7 octobre 2026**.
+**See AI. Understand the risk. Retain control.** In the future, tracing an unknown service to its agents, finding an incident's evidence and choosing an authorized use should fit into a single investigation.
 
-## Le socle disponible aujourd’hui
+This roadmap describes **six future stages, planned or exploratory**: a direction without dates or delivery commitments. Every transition depends on reproducible results and human review. Named technologies are candidates, not installed dependencies or partnerships; references were consulted on **7 October 2026**.
 
-Open Shadow AI rapproche un catalogue et des règles déterministes avec des [observations réseau](network-analysis.md), des inventaires de postes et des [signaux AD/Entra](microsoft.md). L’[architecture](architecture.md) distingue présence, observation et usage instrumenté ; les files des collecteurs restent bornées. [OIDC/SCIM](sso-scim.md) est facultatif. Les [recettes de qualification](production-qualification.md) ne certifient pas un parc AD, un fournisseur d’identité ou un cluster réel.
+<a id="le-socle-disponible-aujourdhui"></a>
+## The foundation available today
 
-Aujourd’hui : une organisation par installation, aucun moteur d’inférence intégré. Les signatures Ollama/vLLM servent à découvrir des outils ; elles ne les connectent pas. Un nom DNS ne révèle ni prompt, ni tokens, ni facture.
+Open Shadow AI combines a catalog and deterministic rules with [network observations](network-analysis.md), endpoint inventories and [AD/Entra signals](microsoft.md). The [architecture](architecture.md) distinguishes presence, observation and instrumented usage; collector queues remain bounded. [OIDC/SCIM](sso-scim.md) is optional. [Qualification procedures](production-qualification.md) do not certify an AD fleet, identity provider or real cluster.
 
-## Six étapes, six bénéfices
+Today: one organization per installation, with no integrated inference engine. Ollama/vLLM signatures discover tools; they do not connect to them. A DNS name reveals no prompt, tokens or invoice.
 
-| Étape | Priorité envisagée | Ce que vous gagnez |
+<a id="six-étapes-six-bénéfices"></a>
+## Six stages, six benefits
+
+| Stage | Proposed priority | What you gain |
 |---|---|---|
-| 1. Empreinte IA | Prochaine — planifiée | Des sources reliées, des inconnues visibles |
-| 2. Shadow Agent | Prochaine — planifiée | Des chaînes d’agents et d’outils compréhensibles |
-| 3. Analyse locale | Ensuite — planifiée | Une aide IA compatible avec vos contraintes |
-| 4. Copilote d’investigation | Ensuite — planifiée | Des réponses vérifiables, avec leurs preuves |
-| 5. Usages encadrés | Ensuite — planifiée | Des règles explicites, réversibles et auditables |
-| 6. Qualification | Continue — planifiée ; recherche exploratoire | Des progrès démontrés avant adoption |
+| 1. AI footprint | Next — planned | Connected sources, visible unknowns |
+| 2. Shadow Agent | Next — planned | Understandable agent and tool chains |
+| 3. Local analysis | Later — planned | AI assistance compatible with your constraints |
+| 4. Investigation copilot | Later — planned | Verifiable answers with supporting evidence |
+| 5. Governed usage | Later — planned | Explicit, reversible, auditable rules |
+| 6. Qualification | Continuous — planned; exploratory research | Demonstrated progress before adoption |
 
 ```mermaid
 flowchart LR
-    A["1. Découvrir"] --> B["2. Observer les agents"] --> C["3. Analyser localement"]
-    C --> D["4. Investiguer avec preuves"] --> E["5. Encadrer les usages"]
-    F["6. Évaluer et qualifier"] -.-> A
+    A["1. Discover"] --> B["2. Observe agents"] --> C["3. Analyze locally"]
+    C --> D["4. Investigate with evidence"] --> E["5. Govern usage"]
+    F["6. Evaluate and qualify"] -.-> A
     F -.-> C
     F -.-> E
 ```
 
-La qualification accompagne chaque étape du parcours envisagé.
+Qualification accompanies every stage of the proposed journey.
 
-## 1. Une empreinte IA qui montre aussi les zones inconnues
+<a id="1-une-empreinte-ia-qui-montre-aussi-les-zones-inconnues"></a>
+## 1. An AI footprint that also shows unknown areas
 
-Relier identités, machines, processus et services dans le temps aiderait à comprendre une apparition, avec la provenance et la confiance de chaque rapprochement. Les associations AD/Entra, DHCP et NAT resteraient explicites : un poste partagé ou une attribution ambiguë doit pouvoir rester inconnu.
+Connecting identities, machines, processes and services over time would help explain an appearance, with the provenance and confidence of every association. AD/Entra, DHCP and NAT associations would remain explicit: a shared endpoint or ambiguous attribution must be able to remain unknown.
 
-Enrichir les imports existants de [Zeek](https://zeek.org/about/) et évaluer [Tetragon/eBPF](https://tetragon.io/docs/) sur Linux ouvrirait de nouvelles corrélations, sans prétendre à une équivalence Windows. Collecte facultative de métadonnées ; ECH, DoH et visibilité QUIC limitée resteraient affichés, sans déchiffrement des contenus.
+Enriching existing [Zeek](https://zeek.org/about/) imports and evaluating [Tetragon/eBPF](https://tetragon.io/docs/) on Linux would enable new correlations without claiming Windows equivalence. Metadata collection would be optional; ECH, DoH and limited QUIC visibility would remain visible, without content decryption.
 
-**Passage :** publier précision/rappel par catégorie IA et niveau de preuve sur un corpus synthétique annoté, avec un lot réservé à l’évaluation, taux de couverture manquante, ambiguïtés d’attribution, latence et surcharge mesurées, puis vérifier rejeu et retour arrière.
+**Gate:** publish precision/recall by AI category and evidence level on an annotated synthetic corpus, with a held-out evaluation set, missing-coverage rates, attribution ambiguities, measured latency and overhead, then verify replay and rollback.
 
-## 2. Le Shadow AI devient aussi le Shadow Agent
+<a id="2-le-shadow-ai-devient-aussi-le-shadow-agent"></a>
+## 2. Shadow AI also becomes Shadow Agent
 
-Voir quels agents appellent quels outils rendrait leurs chaînes d’action investigables. Des adaptateurs [MCP](https://modelcontextprotocol.io/specification/latest/basic/security_best_practices) pour les serveurs d’outils et [A2A](https://a2a-protocol.org/latest/specification/) pour les tâches entre agents seraient évalués.
+Seeing which agents call which tools would make their action chains investigable. [MCP](https://modelcontextprotocol.io/specification/latest/basic/security_best_practices) adapters for tool servers and [A2A](https://a2a-protocol.org/latest/specification/) adapters for tasks between agents would be evaluated.
 
-Les [traces OpenTelemetry GenAI](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/README.md) apporteraient fournisseur, modèle, appels d’outils, tokens et latence **uniquement lorsque l’instrumentation les rapporte**. Les conventions GenAI/MCP sont en statut *Development* : mappings versionnés et compatibilité testée. Aucun calcul de tokens ou facture depuis DNS/SNI.
+[OpenTelemetry GenAI traces](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/README.md) would provide provider, model, tool calls, tokens and latency **only when instrumentation reports them**. GenAI/MCP conventions have *Development* status: mappings must be versioned and compatibility tested. No tokens or invoices would be calculated from DNS/SNI.
 
-Autorisations MCP restreintes, audience validée, métadonnées d’outils non fiables expurgées, aucun relais de jetons et collecte bornée par identité guideraient ces adaptateurs.
+Restricted MCP permissions, validated audiences, sanitized untrusted tool metadata, no token forwarding and collection bounded by identity would guide these adapters.
 
-**Passage :** valider contrats, pannes, confidentialité et continuité des traces avec des fixtures, conserver les champs inconnus et exclure les prompts bruts par défaut.
+**Gate:** validate contracts, failures, privacy and trace continuity with fixtures, preserve unknown fields and exclude raw prompts by default.
 
-## 3. Une analyse IA qui peut rester chez vous
+<a id="3-une-analyse-ia-qui-peut-rester-chez-vous"></a>
+## 3. AI analysis that can remain on your infrastructure
 
-Repérer des signaux inhabituels et rapprocher des observations pourrait combiner règles, embeddings et petits modèles locaux, sur activation volontaire. [Ollama](https://docs.ollama.com/faq) serait évalué en mode local avec fonctions cloud explicitement désactivées et déploiement sans sortie réseau. [vLLM](https://docs.vllm.ai/en/stable/features/structured_outputs/) serait une option de service GPU avec sorties JSON structurées, selon matériel et coût ; aucun GPU obligatoire. Respecter un schéma ne prouve pas une réponse.
+Identifying unusual signals and connecting observations could combine rules, embeddings and small local models with explicit opt-in. [Ollama](https://docs.ollama.com/faq) would be evaluated in local mode with cloud features explicitly disabled and deployment without network egress. [vLLM](https://docs.vllm.ai/en/stable/features/structured_outputs/) would be a GPU-service option with structured JSON outputs, depending on hardware and cost; no GPU would be mandatory. Schema compliance does not prove an answer.
 
-Le choix des modèles comparerait qualité français/anglais, licence, contexte, résistance aux injections, latence et ressources, avec artefacts et empreintes reproductibles. Des fournisseurs cloud approuvés resteraient facultatifs et configurables, sans transfert de données brutes par défaut. Aucun entraînement autonome en ligne ni promotion fondée sur l’autoévaluation du modèle.
+Model selection would compare French/English quality, licensing, context, injection resistance, latency and resources, with reproducible artifacts and fingerprints. Approved cloud providers would remain optional and configurable, without raw-data transfer by default. No autonomous online training or promotion based on model self-evaluation.
 
-**Passage :** comparer au socle déterministe sur le corpus réservé, mesurer calibration, inconnues, dérive, latence à froid et CPU/RAM/VRAM, puis démontrer le repli déterministe lorsque l’IA est désactivée ou indisponible.
+**Gate:** compare against the deterministic baseline on the held-out corpus, measure calibration, unknowns, drift, cold latency and CPU/RAM/VRAM, then demonstrate deterministic fallback when AI is disabled or unavailable.
 
-## 4. Un copilote d’investigation qui cite ses preuves
+<a id="4-un-copilote-dinvestigation-qui-cite-ses-preuves"></a>
+## 4. An investigation copilot that cites its evidence
 
-« Pourquoi ce service apparaît-il ici ? » appellerait une réponse sourcée, datée, ou une abstention. Une recherche hybride RAG et un graphe de connaissances relieraient événements et politiques autorisés ; le graphe n’impose pas de base dédiée. [Qdrant](https://qdrant.tech/documentation/search/hybrid-queries/) serait évalué pour la recherche hybride, sans remplacer les stockages actuels avant benchmark.
+“Why does this service appear here?” would call for a sourced, dated answer or abstention. Hybrid RAG search and a knowledge graph would connect authorized events and policies; the graph does not require a dedicated database. [Qdrant](https://qdrant.tech/documentation/search/hybrid-queries/) would be evaluated for hybrid search without replacing current stores before benchmarking.
 
-Les droits filtreraient les données avant recherche et embeddings, puis avant reclassement ; caches, isolation organisationnelle et suppression suivraient ces frontières. Aucune journalisation de raisonnement interne caché. [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) serait candidat pour des parcours bornés avec points de contrôle humains durables, d’abord en lecture seule, sans shell ni identifiants non revus.
+Permissions would filter data before search and embeddings, then before reranking; caches, organizational isolation and deletion would follow those boundaries. No logging of hidden internal reasoning. [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) would be a candidate for bounded workflows with durable human checkpoints, initially read-only, without shells or unreviewed credentials.
 
-**Passage :** mesurer fidélité et citations, tester refus d’accès, isolation, injections dans les documents et cas français difficiles, puis comparer le temps d’investigation sans inventer de gain.
+**Gate:** measure faithfulness and citations, test access refusal, isolation, document injections and difficult French cases, then compare investigation time without inventing gains.
 
-## 5. Protéger les usages sans freiner les équipes
+<a id="5-protéger-les-usages-sans-freiner-les-équipes"></a>
+## 5. Protect usage without slowing teams
 
-Une passerelle ou un SDK volontairement instrumenté et autorisé permettrait d’appliquer des règles aux contenus effectivement accessibles. [Presidio](https://presidio.dataprivacystack.org/), des motifs de secrets et un OCR multimodal local seraient évalués pour l’expurgation, sans garantie absolue ni inspection passive des prompts.
+An explicitly instrumented and authorized gateway or SDK would allow rules to apply to content that is actually accessible. [Presidio](https://presidio.dataprivacystack.org/), secret patterns and local multimodal OCR would be evaluated for redaction, without absolute guarantees or passive prompt inspection.
 
-Les politiques pourraient choisir des fournisseurs approuvés selon le risque, contrôler les schémas de sortie et fixer des quotas à partir d’usages rapportés et de tarifs versionnés. Toute modification externe ou destructive demanderait simulation, approbation humaine, audit et retour arrière ; aucun blocage décidé par le seul modèle.
+Policies could select approved providers according to risk, validate output schemas and set quotas based on reported usage and versioned prices. Any external or destructive change would require simulation, human approval, audit and rollback; no blocking decision would be made by the model alone.
 
-**Passage :** mesurer précision/rappel de l’expurgation et faux positifs sur des scénarios métier, vérifier l’absence de persistance des contenus par défaut et documenter, pour chaque panne, maintien ou refus du trafic avec décision déterministe.
+**Gate:** measure redaction precision/recall and false positives on business scenarios, verify that content is not persisted by default, and document continued or refused traffic for every failure using deterministic decisions.
 
-## 6. Une plateforme qui prouve ses progrès
+<a id="6-une-plateforme-qui-prouve-ses-progrès"></a>
+## 6. A platform that demonstrates its progress
 
-Chaque évolution aurait sa fiche de benchmark versionnée : corpus, faux positifs/négatifs, couverture et inconnues, latence, ressources et coût. Des tests reliés aux menaces [OWASP GenAI/Agentic](https://genai.owasp.org/), avec [NVIDIA garak](https://github.com/NVIDIA/garak) et [Microsoft PyRIT](https://github.com/microsoft/PyRIT), seraient exécutés uniquement en laboratoire autorisé et isolé, sur fixtures et budgets bornés.
+Every development would have a versioned benchmark record: corpus, false positives/negatives, coverage and unknowns, latency, resources and cost. Tests linked to [OWASP GenAI/Agentic](https://genai.owasp.org/) threats, with [NVIDIA garak](https://github.com/NVIDIA/garak) and [Microsoft PyRIT](https://github.com/microsoft/PyRIT), would run only in authorized isolated laboratories, using fixtures and bounded budgets.
 
-Manifestes des modèles, données et outils, licences, empreintes et analyse des dépendances prolongeraient les [contrôles de provenance et signature](production-delivery.md#images-and-retained-build-evidence) sans revendiquer de certification. Les changements de modèle passeraient par évaluation en parallèle, déploiement témoin, promotion manuelle et restauration possible.
+Model, data and tool manifests, licenses, fingerprints and dependency analysis would extend [provenance and signature controls](production-delivery.md#images-and-retained-build-evidence) without claiming certification. Model changes would require parallel evaluation, a canary deployment, manual promotion and possible restoration.
 
-**Passage :** publier ces mesures et qualifier IdP/MFA, parc AD, Kubernetes, sauvegarde/restauration, RPO/RTO et profils de panne/charge sur des environnements réels, avec leurs limites propres.
+**Gate:** publish these measurements and qualify IdP/MFA, AD fleets, Kubernetes, backup/restore, RPO/RTO and failure/load profiles in real environments with their own limitations.
 
-Détection sémantique ou multimodale, tendances de parc préservant la confidentialité et apprentissage fédéré resteraient **des recherches**, après définition des frontières de données et d’isolation, puis revue des menaces. Ce sont des explorations, pas des fonctionnalités promises.
+Semantic or multimodal detection, privacy-preserving fleet trends and federated learning would remain **research**, after defining data and isolation boundaries and reviewing threats. These are explorations, not promised capabilities.
 
-## Construisons la prochaine étape
+<a id="construisons-la-prochaine-étape"></a>
+## Build the next stage with us
 
-Un angle mort concret, un connecteur ciblé ou un corpus synthétique peut faire avancer cette roadmap. [Proposez un cas d’usage](https://github.com/alebgl77/open-shadow-ai/issues/new?template=feature_request.yml), avec la preuve disponible, vos contraintes et un critère mesurable ; apportez fixtures, benchmarks et cas négatifs selon le [guide de contribution](../CONTRIBUTING.md).
+A concrete blind spot, targeted connector or synthetic corpus can advance this roadmap. [Propose a use case](https://github.com/alebgl77/open-shadow-ai/issues/new?template=feature_request.yml) with available evidence, constraints and a measurable criterion; contribute fixtures, benchmarks and negative cases according to the [contribution guide](../CONTRIBUTING.md).

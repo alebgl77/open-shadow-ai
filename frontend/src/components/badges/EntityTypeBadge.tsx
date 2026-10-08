@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import { Globe, Puzzle, Key, Cpu, Container, Monitor, Code } from 'lucide-react'
 
 
@@ -27,13 +28,15 @@ interface Props {
 }
 
 export default function EntityTypeBadge({ entityType, showLabel = true }: Props) {
+  const { textLabel } = useI18n()
+
   const Icon = ICON_MAP[entityType] || Globe
   const label = LABEL_MAP[entityType] || entityType.replace('_', ' ')
 
   return (
     <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-surface-700 text-slate-300 text-xs">
       <Icon className="w-3 h-3" />
-      {showLabel && label}
+      {showLabel && textLabel(label)}
     </span>
   )
 }

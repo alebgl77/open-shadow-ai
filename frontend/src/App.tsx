@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth'
@@ -21,9 +22,11 @@ import Network from '@/pages/Network'
 import Settings from '@/pages/Settings'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { tr } = useI18n()
+
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   const restoring = useAuthStore((s) => s.restoring)
-  if (restoring) return <p className="p-8 text-slate-400" role="status">Restoring your session…</p>
+  if (restoring) return <p className="p-8 text-slate-400" role="status">{tr("Restoring your session…")}</p>
   if (!isAuthenticated) return <Navigate to="/login" replace />
   return <>{children}</>
 }
