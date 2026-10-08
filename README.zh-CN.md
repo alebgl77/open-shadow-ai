@@ -12,13 +12,15 @@
 
 了解环境中出现了哪些 AI 服务与工具、每条信号来自何处，以及它实际能够证明什么。在面向调查的界面中，汇集网络元数据、终端清单和 Microsoft 目录信号。
 
-[专家实施与运维手册](docs/zh-CN/README.md) · [快速开始](#快速开始) · [文档与语言覆盖范围（英文参考）](docs/README.md) · [部署（英文参考）](docs/deployment.md) · [生产环境验收验证（英文参考）](docs/production-qualification.md) · [采集器运维（英文参考）](docs/collector-operations.md) · [Microsoft 与 Active Directory（英文参考）](docs/microsoft.md) · [SSO 与 SCIM（英文参考）](docs/sso-scim.md) · [架构（英文参考）](docs/architecture.md) · [路线图](docs/zh-CN/roadmap.md)
+[专家实施与运维手册](docs/zh-CN/README.md) · [快速开始](#快速开始) · [文档与语言覆盖范围](docs/README.md) · [部署（英文参考）](docs/deployment.md) · [生产环境验收验证（英文参考）](docs/production-qualification.md) · [采集器运维（英文参考）](docs/collector-operations.md) · [Microsoft 与 Active Directory（英文参考）](docs/microsoft.md) · [SSO 与 SCIM（英文参考）](docs/sso-scim.md) · [架构（英文参考）](docs/architecture.md) · [路线图](docs/zh-CN/roadmap.md)
 
 > 本项目处于早期阶段，适用于评估和受控试点。每个部署仅服务一个组织。Docker、Kubernetes 和实际 Microsoft 环境需要在自身环境中完成运维验证；不声称获得认证或提供生产 SLA。
 
 后端为开发预览版 **0.3.0**；独立终端代理为 **0.1.0**。英语、法语和简体中文手册提供等效的实施流程。详细参考资料和历史验证记录保留其声明的语言与各自来源的范围。
 
-控制台在登录前后均提供英语、法语和简体中文。经过校验的浏览器本地语言偏好独立于身份验证；没有可用偏好或存储被阻止时，默认使用英语。原始来源数据与机器/API 标识保留原值。参见[语言覆盖范围（英文参考）](docs/README.md)。
+控制台在登录前后均提供英语、法语和简体中文。经过校验的浏览器本地语言偏好独立于身份验证；没有可用偏好或存储被阻止时，默认使用英语。原始来源数据与机器/API 标识保留原值。参见[语言覆盖范围](docs/README.md)。
+
+这些语言选项由[提交 `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669)引入 `main`。已发布的 `v0.3.0` 预发行版位于提交 `49a58d7`，早于本地化功能。两个源代码修订均声明版本 `0.3.0`；核对功能可用性与 CI 证据时，应记录实际部署的准确提交。
 
 ![使用合成演示数据的 Open Shadow AI 调查仪表板](docs/assets/dashboard-desktop.webp)
 

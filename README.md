@@ -20,6 +20,8 @@ The backend is development preview **0.3.0**; the standalone endpoint agent is *
 
 The console offers English, French and Simplified Chinese before and after sign-in. A validated browser-local language preference is separate from authentication; English is the default when no preference is available or storage is blocked. Raw source data and machine/API identifiers retain their original values. See [language coverage](docs/README.md).
 
+These language options were introduced on `main` by [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). The published `v0.3.0` prerelease at `49a58d7` predates localization. Both source revisions declare `0.3.0`; record the exact deployed commit when checking availability and CI evidence.
+
 ![Open Shadow AI investigation dashboard with synthetic demo data](docs/assets/dashboard-desktop.webp)
 
 ## Discovery in motion

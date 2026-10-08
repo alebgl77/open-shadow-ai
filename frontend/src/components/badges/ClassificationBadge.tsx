@@ -16,9 +16,10 @@ export default function ClassificationBadge({ classification }: Props) {
   const { enumLabel } = useI18n()
 
   const normalized = classification.toLowerCase()
+  const recognized = Object.hasOwn(STYLES, normalized)
   return (
-    <span className={clsx('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium', STYLES[normalized] || STYLES.unknown)}>
-      {enumLabel(normalized)}
+    <span className={clsx('inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium', recognized ? STYLES[normalized] : STYLES.unknown)}>
+      {recognized ? enumLabel(normalized) : classification}
     </span>
   )
 }
