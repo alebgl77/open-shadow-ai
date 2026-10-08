@@ -19,6 +19,8 @@ Le backend est en préversion **0.3.0** ; l'agent autonome pour les postes est e
 
 La console propose l'anglais, le français et le chinois simplifié avant et après connexion. La préférence de langue validée, locale au navigateur, est séparée de l'authentification ; l'anglais est utilisé sans préférence disponible ou si le stockage est bloqué. Les données brutes des sources et identifiants techniques/API conservent leurs valeurs originales. Voir la [couverture linguistique](docs/README.md).
 
+Ces langues ont été introduites sur `main` par le [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). La préversion publiée `v0.3.0`, au commit `49a58d7`, précède la localisation. Les deux révisions sources déclarent `0.3.0` ; consignez le commit exact déployé pour vérifier les fonctionnalités disponibles et leurs preuves CI.
+
 ![Interface d'investigation Open Shadow AI avec des données de démonstration synthétiques](docs/assets/dashboard-desktop.webp)
 
 ## La découverte en mouvement

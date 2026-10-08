@@ -17,10 +17,11 @@ export default function StatusBadge({ status }: Props) {
   const { enumLabel } = useI18n()
 
   const normalized = status.toLowerCase()
+  const recognized = Object.hasOwn(STYLES, normalized)
   return (
-    <span className={clsx('inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium', STYLES[normalized] || STYLES.new)}>
+    <span className={clsx('inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium', recognized ? STYLES[normalized] : STYLES.new)}>
       {normalized === 'new' && <span className="w-1.5 h-1.5 bg-blue-400 rounded-full" />}
-      {enumLabel(normalized)}
+      {recognized ? enumLabel(normalized) : status}
     </span>
   )
 }
