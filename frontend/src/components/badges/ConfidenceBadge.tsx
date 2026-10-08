@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import clsx from 'clsx'
 
 const STYLES: Record<string, string> = {
@@ -14,11 +15,13 @@ interface Props {
 }
 
 export default function ConfidenceBadge({ level, score, showScore = false }: Props) {
+  const { enumLabel, formatNumber } = useI18n()
+
   const normalized = level.toLowerCase()
   return (
     <span className={clsx('inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium', STYLES[normalized] || STYLES.low)}>
-      {normalized.replace('_', ' ')}
-      {showScore && score !== undefined && <span className="font-mono opacity-70">{score.toFixed(2)}</span>}
+      {enumLabel(normalized)}
+      {showScore && score !== undefined && <span className="font-mono opacity-70">{formatNumber(score, { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false })}</span>}
     </span>
   )
 }

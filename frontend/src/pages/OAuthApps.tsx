@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { Key, ShieldAlert } from 'lucide-react'
@@ -8,9 +9,10 @@ import StatusBadge from '@/components/badges/StatusBadge'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorAlert from '@/components/ui/ErrorAlert'
 import { TableSkeleton } from '@/components/ui/LoadingSkeleton'
-import { formatDistanceToNow } from 'date-fns'
 
 export default function OAuthApps() {
+  const { tr, formatNumber, relativeTime } = useI18n()
+
   const navigate = useNavigate()
 
   const { data, isLoading, isError, refetch } = useQuery({
@@ -25,17 +27,16 @@ export default function OAuthApps() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Key className="w-6 h-6 text-accent" />
-          <h1 className="text-2xl font-bold tracking-tight">OAuth AI Apps</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{tr("OAuth AI Apps")}</h1>
         </div>
-        <span className="text-sm text-slate-400">{data?.total ?? 0} app{(data?.total ?? 0) !== 1 ? 's' : ''} discovered</span>
+        <span className="text-sm text-slate-400">{tr(data?.total === 1 ? '{count} app discovered' : '{count} apps discovered', { count: formatNumber(data?.total ?? 0) })}</span>
       </div>
 
-      <p className="text-xs text-slate-400">Showing up to 100 applications. <Link to="/discoveries?entity_type=oauth_app" className="text-accent">Open the complete paginated list</Link>. Permissions indicate a grant, not confirmed access.</p>
+      <p className="text-xs text-slate-400">{tr("Showing up to 100 applications.")} <Link to="/discoveries?entity_type=oauth_app" className="text-accent">{tr("Open the complete paginated list")}</Link>{tr(". Permissions indicate a grant, not confirmed access.")}</p>
       {items.some(d => !d.risk_score_stale && (d.risk_level === 'critical' || d.risk_level === 'high')) && (
         <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5 text-sm text-red-400">
           <ShieldAlert className="w-4 h-4" />
-          {items.filter(d => !d.risk_score_stale && (d.risk_level === 'critical' || d.risk_level === 'high')).length} OAuth app(s) with sensitive scopes require review
-        </div>
+          {tr('{count} OAuth app(s) with sensitive scopes require review', { count: formatNumber(items.filter(d => !d.risk_score_stale && (d.risk_level === 'critical' || d.risk_level === 'high')).length) })} </div>
       )}
 
       {isLoading && <TableSkeleton rows={8} columns={7} />}
@@ -44,8 +45,8 @@ export default function OAuthApps() {
       {!isLoading && !isError && items.length === 0 && (
         <EmptyState
           icon={Key}
-          title="No OAuth AI apps discovered"
-          description="Connect Microsoft 365 or Google Workspace sources to discover OAuth-connected AI applications."
+          title={tr("No OAuth AI apps discovered")}
+          description={tr("Connect Microsoft 365 or Google Workspace sources to discover OAuth-connected AI applications.")}
         />
       )}
 
@@ -54,13 +55,13 @@ export default function OAuthApps() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-surface-600/30 text-left text-xs text-slate-500 uppercase tracking-wider">
-                <th className="px-4 py-3 font-medium">App Name</th>
-                <th className="px-4 py-3 font-medium">Scopes</th>
-                <th className="px-4 py-3 font-medium">Users</th>
-                <th className="px-4 py-3 font-medium">Classification</th>
-                <th className="px-4 py-3 font-medium">Risk</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">First Seen</th>
+                <th className="px-4 py-3 font-medium">{tr("App Name")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Scopes")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Users")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Classification")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Risk")}</th>
+                <th className="px-4 py-3 font-medium">{tr("Status")}</th>
+                <th className="px-4 py-3 font-medium">{tr("First Seen")}</th>
               </tr>
             </thead>
             <tbody>
@@ -88,12 +89,12 @@ export default function OAuthApps() {
                         {scopes.length > 4 && <span className="text-[10px] text-slate-500">+{scopes.length - 4}</span>}
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{d.impacted_users_count}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{formatNumber(d.impacted_users_count)}</td>
                     <td className="px-4 py-3"><ClassificationBadge classification={d.classification} /></td>
                     <td className="px-4 py-3"><RiskBadge stale={d.risk_score_stale} level={d.risk_level} score={d.risk_score} showScore /></td>
                     <td className="px-4 py-3"><StatusBadge status={d.analyst_status} /></td>
                     <td className="px-4 py-3 text-xs text-slate-400">
-                      {formatDistanceToNow(new Date(d.first_seen_at), { addSuffix: true })}
+                      {relativeTime(d.first_seen_at)}
                     </td>
                   </tr>
                 )

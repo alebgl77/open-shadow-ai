@@ -1,3 +1,4 @@
+import { LanguageSelector, useI18n } from '@/i18n'
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { ArrowLeft, LoaderCircle } from 'lucide-react'
@@ -6,6 +7,8 @@ import { useAuthStore } from '@/stores/auth'
 import Brand from '@/components/ui/Brand'
 
 export default function SsoCallback() {
+  const { tr, textLabel } = useI18n()
+
   const [failed, setFailed] = useState(false)
   const authenticated = useAuthStore(state => state.isAuthenticated)
   const login = useAuthStore(state => state.login)
@@ -25,5 +28,5 @@ export default function SsoCallback() {
     return () => { active = false }
   }, [authenticated, login, navigate])
   if (authenticated) return <Navigate to="/dashboard" replace />
-  return <main className="login-scene min-h-screen flex flex-col items-center justify-center p-6"><Brand/><section className="login-panel mt-8 w-full max-w-md rounded-2xl border border-surface-600/50 bg-surface-900 p-8"><p className="eyebrow mb-3">Workspace sign-in</p><h1 className="text-2xl font-semibold tracking-tight">{failed ? 'Sign-in did not complete' : 'Completing single sign-on'}</h1>{failed ? <><p role="alert" className="mt-4 text-sm leading-relaxed text-slate-300">{SSO_FAILURE_MESSAGE}</p><Link to="/login" replace className="secondary-button mt-6"><ArrowLeft size={14}/>Back to sign in</Link></> : <p role="status" className="flex items-center gap-3 mt-5 text-sm text-slate-400"><LoaderCircle size={17} className="animate-spin"/>Verifying your workspace session…</p>}</section></main>
+  return <main className="login-scene min-h-screen flex flex-col items-center justify-center p-6"><Brand/><div className="mt-4"><LanguageSelector/></div><section className="login-panel mt-8 w-full max-w-md rounded-2xl border border-surface-600/50 bg-surface-900 p-8"><p className="eyebrow mb-3">{tr("Workspace sign-in")}</p><h1 className="text-2xl font-semibold tracking-tight">{failed ? tr("Sign-in did not complete") : tr("Completing single sign-on")}</h1>{failed ? <><p role="alert" className="mt-4 text-sm leading-relaxed text-slate-300">{textLabel(SSO_FAILURE_MESSAGE)}</p><Link to="/login" replace className="secondary-button mt-6"><ArrowLeft size={14}/>{tr("Back to sign in")}</Link></> : <p role="status" className="flex items-center gap-3 mt-5 text-sm text-slate-400"><LoaderCircle size={17} className="animate-spin"/>{tr("Verifying your workspace session…")}</p>}</section></main>
 }

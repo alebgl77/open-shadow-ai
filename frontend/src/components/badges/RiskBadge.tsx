@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import clsx from 'clsx'
 
 const STYLES: Record<string, string> = {
@@ -16,13 +17,15 @@ interface Props {
 }
 
 export default function RiskBadge({ level, score, showScore = false, stale = false }: Props) {
-  if (stale) return <span className="badge bg-amber-500/15 text-amber-300 border border-amber-500/30" title="The last calculated score may not reflect current governance. Review the evidence detail.">Needs recalculation</span>
+  const { tr, enumLabel, formatNumber } = useI18n()
+
+  if (stale) return <span className="badge bg-amber-500/15 text-amber-300 border border-amber-500/30" title={tr("The last calculated score may not reflect current governance. Review the evidence detail.")}>{tr("Needs recalculation")}</span>
   const normalized = level.toLowerCase()
   return (
     <span className={clsx('inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium', STYLES[normalized] || STYLES.info)}>
       {normalized === 'critical' && <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />}
-      {normalized}
-      {showScore && score !== undefined && <span className="font-mono opacity-70">({score})</span>}
+      {enumLabel(normalized)}
+      {showScore && score !== undefined && <span className="font-mono opacity-70">({formatNumber(score)})</span>}
     </span>
   )
 }

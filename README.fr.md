@@ -1,28 +1,45 @@
+<p align="center"><img src="docs/assets/brand-mark.svg" width="72" alt="Emblème Open Shadow AI"></p>
+
 # Open Shadow AI
 
+[English](README.md) | [Français](README.fr.md) | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/alebgl77/open-shadow-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/alebgl77/open-shadow-ai/actions/workflows/ci.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Licence : Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
+**Découvrez l'IA sur votre infrastructure, avec les preuves derrière chaque constat.**
 
-**Découvrez les usages IA de votre organisation, avec les preuves derrière chaque constat.**
+Comprenez quels services et outils d'IA apparaissent dans votre environnement, d'où vient chaque signal et ce qu'il permet réellement d'établir. Rassemblez métadonnées réseau, inventaires des postes et signaux des annuaires Microsoft dans une interface d'investigation.
 
-Open Shadow AI rassemble des métadonnées réseau, des inventaires de postes et des informations Microsoft dans une interface d'investigation auto-hébergée. Le projet vise une installation par organisation, de la startup au pilote d'un parc géré.
+[Guide de mise en œuvre pour experts](docs/fr/README.md) · [Démarrage](#démarrage) · [Documentation et couverture linguistique](docs/README.md) · [Déploiement (référence en anglais)](docs/deployment.md) · [Qualification de production (référence en anglais)](docs/production-qualification.md) · [Exploitation des collecteurs (référence en anglais)](docs/collector-operations.md) · [Microsoft et Active Directory (référence en anglais)](docs/microsoft.md) · [SSO et SCIM (référence en anglais)](docs/sso-scim.md) · [Architecture (référence en anglais)](docs/architecture.md) · [Roadmap](docs/fr/roadmap.md)
 
-[Démarrage](#démarrage) · [Roadmap](docs/roadmap.md) · [Déploiement](docs/deployment.md) · [Architecture](docs/architecture.md) · [English](README.md)
+> Logiciel en phase initiale, destiné à l'évaluation et aux pilotes maîtrisés. Une organisation par installation. Docker, Kubernetes et les environnements Microsoft réels exigent une validation opérationnelle sur votre infrastructure ; aucune certification ni aucun SLA de production ne sont revendiqués.
 
-Logiciel en phase de développement : les packages Docker/Kubernetes et les scripts sont fournis pour évaluation. Un déploiement réel Docker, Kubernetes, AD ou Entra nécessite une validation opérationnelle. Aucune certification ou couverture exhaustive n'est revendiquée.
+Le backend est en préversion **0.3.0** ; l'agent autonome pour les postes est en version **0.1.0**. Les guides anglais, français et chinois simplifié proposent les mêmes procédures de mise en œuvre. Les références détaillées et comptes rendus historiques conservent leur langue indiquée et la portée propre à leurs sources.
 
-## La suite : voir l’IA, garder la maîtrise
+La console propose l'anglais, le français et le chinois simplifié avant et après connexion. La préférence de langue validée, locale au navigateur, est séparée de l'authentification ; l'anglais est utilisé sans préférence disponible ou si le stockage est bloqué. Les données brutes des sources et identifiants techniques/API conservent leurs valeurs originales. Voir la [couverture linguistique](docs/README.md).
 
-La [roadmap en six étapes](docs/roadmap.md) dessine une découverte enrichie, la visibilité des agents, une analyse locale facultative, un copilote qui cite ses preuves, des usages encadrés et une qualification continue. Chaque étape future a des critères mesurables ; les technologies proposées restent à évaluer.
+![Interface d'investigation Open Shadow AI avec des données de démonstration synthétiques](docs/assets/dashboard-desktop.webp)
 
 ## La découverte en mouvement
 
-Trois schémas muets en français illustrent l'empreinte IA, les niveaux de preuve et la reprise des collecteurs. Ces illustrations éditoriales utilisent des données synthétiques ; elles ne sont pas des captures de l'interface.
+Trois schémas muets en français expliquent l'empreinte IA, les niveaux de preuve et la reprise des collecteurs. Ces illustrations éditoriales utilisent des données synthétiques ; elles sont distinctes de l'interface réelle présentée ci-dessus.
 
 ![Illustration des signaux réseau, postes et AD/Entra convergeant vers les catégories LLM, code, médias et API ; données synthétiques](docs/assets/motion/footprint.gif)
 
-[Voir les trois schémas](docs/motion.md) · [Ouvrir/télécharger le MP4](docs/assets/motion/footprint.mp4) · [Voir l'affiche statique](docs/assets/motion/footprint.webp)
+[Voir les trois schémas (référence en anglais)](docs/motion.md) · [Ouvrir/télécharger le MP4](docs/assets/motion/footprint.mp4) · [Voir l'affiche statique](docs/assets/motion/footprint.webp)
+
+## Pourquoi ce projet
+
+- **Des preuves vérifiables.** Distinguez observations réseau, logiciels installés, inventaire des annuaires et usage instrumenté.
+- **Une infrastructure sous votre contrôle.** Hébergez l'API, les files, le stockage des événements et l'interface.
+- **Une adoption progressive.** Commencez par une source de journaux ou quelques postes gérés.
+- **Un catalogue ouvert.** Examinez et améliorez les signatures utilisées pour les classifications.
+- **Des limites explicites.** Un signal absent reste inconnu ; une requête DNS n'est ni un prompt ni une facture.
+
+## La direction envisagée
+
+Voir l'empreinte. Comprendre le risque. Garder le contrôle. La [roadmap en six étapes](docs/fr/roadmap.md) prévoit une découverte enrichie, la visibilité des agents, une analyse locale facultative, des investigations sourcées, des usages encadrés et une qualification continue. Chaque étape future comporte des critères mesurables ; les technologies candidates restent des propositions à évaluer.
 
 ## Essayer l'interface
 
@@ -34,49 +51,85 @@ npm ci
 npm run demo
 ```
 
-Ouvrez la route `/demo` à l'adresse locale affichée par le serveur de développement. Cette session utilise des données synthétiques, sans identifiants backend ni connexion à vos annuaires ou à votre parc. Pour poursuivre avec l'installation complète, arrêtez le serveur de démonstration puis exécutez `cd ..`.
+Ouvrez la route `/demo` à l'adresse locale affichée par le serveur de développement. Cette session synthétique ne demande aucun identifiant backend et ne se connecte ni à vos annuaires ni à votre parc. Pour poursuivre avec l'installation complète, arrêtez le serveur de démonstration puis exécutez `cd ..`.
 
 ## Démarrage
 
-Prérequis : Git, Python 3.12+, Docker Engine et Compose v2 fonctionnels.
+Prérequis : Git, Python 3.12+ et un Docker Engine fonctionnel avec Compose v2. Aucun runtime Docker n'est fourni. L'interface initiale écoute en HTTP sur localhost ; les agents distants nécessitent un reverse proxy HTTPS.
 
-```powershell
+```bash
 git clone https://github.com/alebgl77/open-shadow-ai.git
 cd open-shadow-ai
-./scripts/bootstrap.ps1
+bash scripts/bootstrap.sh
 docker compose config --quiet
 docker compose up -d --build
+docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
-Sous Linux/macOS, remplacer le bootstrap PowerShell par `bash scripts/bootstrap.sh`. Le bootstrap génère les secrets manquants sans afficher leur valeur ni remplacer ceux déjà présents. `-DryRun` permet une prévisualisation.
+Sous Windows, remplacez le bootstrap Bash par `./scripts/bootstrap.ps1`. Les deux préservent les secrets et la configuration existants. Utilisez `-DryRun` ou `--dry-run` pour prévisualiser.
 
-L'interface est accessible sur [localhost:3000](http://localhost:3000). Cette écoute locale HTTP est destinée à l'évaluation ; prévoir une terminaison HTTPS avant de connecter des postes distants.
+Attendez que les nouveaux workers initialisent leurs groupes Redis réels avant la réconciliation ; réessayez si cette initialisation est encore en cours. Lors d'une mise à niveau, arrêtez tous les anciens producteurs, workers et clients de rejeu avant de lancer la version indexée. La readiness exige le schéma de rétention réconcilié. Consultez la [rétention des files (référence en anglais)](docs/queue-retention.md) et la [qualification (référence en anglais)](docs/production-qualification.md) pour les comportements de panne et la répétition isolée.
 
-## Choisir les sources
+Ouvrez [localhost:3000](http://localhost:3000). Les migrations PostgreSQL s'exécutent dans le service `migrate` avant le démarrage de l'API ; les deux schémas ClickHouse sont chargés sur un volume neuf. La [mise à jour d'une installation existante (référence en anglais)](docs/deployment.md#updates) exige une migration ClickHouse distincte.
 
-- **AD local :** exporter des utilisateurs et ordinateurs dans des OU explicites avec RSAT. Le script ne modifie pas l'annuaire.
-- **Entra :** activer le profil Docker après création d'une application dédiée et attribution des permissions de lecture minimales.
-- **Parc Windows hybride :** tester l'agent sur une OU pilote, puis utiliser vos outils GPO, Intune ou Configuration Manager. L'installation du serveur ne déploie aucun agent.
-- **Réseau :** sélectionner un parseur DNS/proxy correspondant au format réellement envoyé.
-- **Autres annuaires :** utiliser le contrat d'ingestion générique ; les connecteurs natifs restent à développer.
+L'activation des collecteurs est explicite :
 
-[Guide Microsoft et AD](docs/microsoft.md) · [Déploiement et exploitation](docs/deployment.md) · [SSO et SCIM](docs/sso-scim.md) · [Couverture des collecteurs](docs/collectors.md)
+```bash
+docker compose --profile syslog up -d
+# After configuring Entra IDs and its separately provisioned client-secret file:
+docker compose --profile entra up -d
+```
 
-La connexion OIDC et le provisionnement SCIM 2.0 des comptes de la console sont facultatifs, avec un guide Microsoft Entra ID. Ils sont désactivés par défaut et utilisent des secrets distincts du collecteur d'inventaire. Un administrateur local reste disponible pour la récupération. SCIM gère les accès à la console ; il ne collecte pas les salariés ni les appareils observés.
+Les exports AD et installations sur les postes sont réalisés par l'opérateur, selon le [guide Microsoft (référence en anglais)](docs/microsoft.md). Installer le serveur ne déclenche pas de scan automatique du parc.
 
-## Lire les résultats correctement
+Les administrateurs peuvent inscrire des collecteurs à périmètre restreint dans **Sources et couverture**, distribuer leurs clés à affichage unique par un canal privé, puis les renouveler ou les révoquer. Les collecteurs de postes, réseau et syslog disposent de files de livraison persistantes et bornées ; l'état du pipeline distingue travail en attente, entrées conservées et pertes de capture inconnues. Le [guide d'exploitation (référence en anglais)](docs/collector-operations.md) détaille inscription, reprise après redémarrage, supervision authentifiée et rétention des identités.
 
-Une résolution DNS n'est pas une preuve de prompt. Une application présente dans l'annuaire ou une extension installée n'est pas une preuve d'usage. Les identifiants de modèle, tokens et coûts nécessitent des événements instrumentés ; les coûts calculés sont des estimations.
+La [connexion OIDC et le provisionnement SCIM facultatifs (référence en anglais)](docs/sso-scim.md) gèrent l'accès à la console, notamment avec Microsoft Entra ID. Ils sont désactivés dans le déploiement de base et utilisent des identifiants distincts du collecteur d'inventaire. La connexion d'un administrateur local reste disponible pour la récupération.
 
-Les chemins d'URL, chaînes de requête et user-agents ne sont jamais stockés. À l'ingestion, le chemin (sans sa chaîne de requête) et le user-agent sont comparés en mémoire aux motifs du catalogue, limités aux hôtes de chaque produit ; seule l'entrée du catalogue reconnue est conservée. `privacy.match_transient_signals: false` désactive cette comparaison.
+## Ce qui est livré
 
-Les tableaux distinguent observations, inventaires et informations indisponibles. Les appareils non gérés, modèles locaux non collectés, proxys de contournement, domaines partagés et IA intégrée aux SaaS peuvent rester invisibles.
+| Fonctionnalité | État et limite pratique |
+|---|---|
+| Interface React d'investigation, catalogue et processus de gouvernance | Implémentés ; à évaluer avec vos données |
+| Parseurs DNS/proxy et collecteur syslog | Implémentés ; le parseur et le listener doivent correspondre à la source |
+| [Analyse réseau passive (référence en anglais)](docs/network-analysis.md) | Imports de métadonnées Zeek/Suricata/TShark, PCAP hors ligne facultatif ou capteur live explicitement choisi, vue des preuves `/network` ; les noms observés ne prouvent pas des requêtes IA |
+| Agent pour les postes | Inventaire des processus, conteneurs, runtimes et extensions implémenté ; vérification par OS et déploiement de parc à réaliser |
+| Collecteur Microsoft Entra | Inventaire des service principals et grants facultatifs implémenté ; classification IA fondée sur des mappings d'application-ID revus ; validation sur tenant réel à réaliser |
+| Active Directory local | Exporteur PowerShell en lecture seule, limité aux OU ; validation RSAT/AD réel à réaliser |
+| Ingestion générique d'événements | Lots authentifiés et bornés ; les adaptateurs personnalisés restent votre travail d'intégration |
+| Inscription et reprise des collecteurs | Identifiants à affichage unique et portée limitée, rotation/révocation, files locales bornées et rejeu explicite des dead letters ; vérifier les résultats CI natifs et magasins du commit déployé |
+| Preuves de modèle/tokens/coûts | Métadonnées instrumentées acceptées lorsqu'elles sont fournies ; les journaux réseau ne produisent pas ces valeurs |
+| Autres annuaires (LDAP, Okta, Google Workspace) | Contrat d'ingestion personnalisé disponible ; connecteurs natifs prévus |
+| Docker Compose | Package de déploiement et test de services CI fournis ; valider le premier démarrage |
+| Kubernetes | Base pour magasins externes ; validation du cluster, ingress, sauvegardes et montée en charge à réaliser |
+| SSO OIDC et provisionnement SCIM 2.0 de la console | Sous-ensemble facultatif implémenté avec guide Entra ; validation d'interopérabilité sur tenant réel à réaliser |
+| Isolation multi-organisations et gestion automatisée du parc | Prévues ; une organisation par installation actuellement |
+| Blocage en ligne, DLP des prompts et analyse comportementale complète | Hors du produit actuel |
 
-## Du pilote à l'entreprise
+## Architecture
 
-Le package fournit une base Docker Compose, une configuration Kubernetes pour bases externes et des procédures d'export/installation. Avant production : tester sauvegarde et restauration, capacité, mises à jour, accès, politique de conservation et supervision des collecteurs. Le sous-ensemble OIDC/SCIM livré nécessite une validation avec votre fournisseur d'identité ; SAML et l'isolation multi-organisations ne sont pas implémentés.
+![Architecture Open Shadow AI](docs/assets/architecture.svg)
 
-![Architecture](docs/assets/architecture.svg)
+[Schéma draw.io éditable](docs/assets/architecture.drawio) · [Mermaid et flux de données (référence en anglais)](docs/architecture.md)
 
-[Analyse concurrentielle](docs/market-analysis.md) · [Contribuer](CONTRIBUTING.md) · [Signaler une vulnérabilité](SECURITY.md) · [Licence Apache-2.0](LICENSE)
+Le package Python et le préfixe des variables d'environnement restent `shadai` pour compatibilité. Le nom public du projet est **Open Shadow AI**.
+
+## Preuves, confidentialité et limites
+
+La configuration par défaut ne stocke jamais les chemins d'URL, chaînes de requête ou user agents. À l'ingestion, les chemins sans chaîne de requête et les user agents sont comparés en mémoire aux motifs du catalogue limités aux hôtes de chaque produit ; seule l'entrée reconnue du catalogue est conservée. `privacy.match_transient_signals: false` désactive cette comparaison. Traitez noms d'utilisateur, identifiants d'appareil et exports d'annuaire comme des données personnelles ou organisationnelles. Définissez rétention et accès selon votre déploiement.
+
+L'appartenance d'une identité expire indépendamment selon chaque observation (par défaut au plus 30 jours) ; les comptes affichés portent sur des identifiants distincts observés, pas sur l'effectif salarié. La pseudonymisation facultative du serveur affecte les nouveaux traitements et ne nettoie ni l'historique ni les files locales en clair. Les scores de risque conservent leur dernier calcul et exposent une date nullable ainsi qu'un indicateur d'obsolescence. Le nettoyage historique est une maintenance explicite et bornée ; voir [rétention et pseudonymisation des identités (référence en anglais)](docs/collector-operations.md#retain-and-pseudonymize-identities).
+
+Une résolution DNS indique un contact avec un domaine, pas une interaction IA achevée. Une extension installée ou une application d'annuaire indique présence ou autorisation, pas usage. Les identifiants de modèle sont des preuves déclarées ; les totaux de tokens et coûts nécessitent une instrumentation. Les coûts calculés restent des estimations jusqu'à leur rapprochement avec la facturation du fournisseur.
+
+Postes non gérés, DNS chiffré non observé, outils locaux, domaines partagés, IA intégrée aux SaaS et contournements de passerelle peuvent laisser des angles morts. Consultez le [guide de couverture (référence en anglais)](docs/collectors.md) et l'[analyse de marché (référence en anglais)](docs/market-analysis.md).
+
+## Contribuer
+
+Consultez [CONTRIBUTING.md (référence en anglais)](CONTRIBUTING.md), proposez une modification limitée et reproductible et fournissez des fixtures synthétiques pour les collecteurs. Signalez les vulnérabilités en privé selon [SECURITY.md (référence en anglais)](SECURITY.md).
+
+Licence [Apache-2.0](LICENSE). Copyright des contributeurs Open Shadow AI.
+
+Pour le dimensionnement et le déploiement progressif, voir la [planification de capacité (référence en anglais)](docs/capacity.md). Toute affirmation de débit exige des mesures sur votre charge.

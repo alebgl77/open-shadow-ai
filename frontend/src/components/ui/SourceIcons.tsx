@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 /**
  * Tiny inline source type indicators used in tables.
  */
@@ -19,16 +20,18 @@ interface Props {
 }
 
 export default function SourceIcons({ sources }: Props) {
+  const { enumLabel } = useI18n()
+
   return (
     <div className="flex gap-1">
       {sources.map((s) => (
         <span
           key={s}
-          title={sourceLabel(s)}
+          title={enumLabel(s)}
           className="text-[10px] bg-surface-700 px-1.5 py-0.5 rounded-sm font-mono text-slate-400 flex items-center gap-1"
         >
           <span className={`w-1.5 h-1.5 rounded-full ${SOURCE_COLORS[s] || 'bg-slate-500'}`} />
-          {sourceLabel(s)}
+          {enumLabel(s)}
         </span>
       ))}
     </div>
