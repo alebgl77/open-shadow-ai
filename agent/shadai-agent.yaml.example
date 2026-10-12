@@ -19,7 +19,7 @@ poll_interval_seconds: 300
 # Toggle collectors
 collect_processes: true
 collect_containers: true
-collect_extensions: true
+collect_extensions: true  # every local user's Chromium, Firefox and Safari extensions; id, name and browser only on the wire
 collect_local_ai: true
 
 # Override hostname detection
