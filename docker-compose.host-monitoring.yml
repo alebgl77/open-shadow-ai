@@ -1,6 +1,6 @@
 services:
   node-exporter:
-    image: shadai/node-exporter:1.12.1-maintained.1
+    image: shadai/node-exporter:1.12.1-maintained.2
     pull_policy: build
     build: {context: ., dockerfile: deploy/service-builds/Dockerfile.node-exporter}
     user: '65534:65534'

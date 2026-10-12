@@ -77,7 +77,7 @@ def check_service_builds(root: Path, images: dict) -> dict:
     manifest = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_service_manifest_object)
     if not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or \
             type(manifest.get("recipe_version")) is not int or \
-            manifest.get("schema") != 1 or manifest.get("recipe_version") != 1 or \
+            manifest.get("schema") != 1 or manifest.get("recipe_version") != 2 or \
             set(manifest.get("services", {})) != set(SERVICES):
         raise ValueError("Incomplete or unknown maintained service manifest")
     files = {f"requirements/service-builds/{component}/{name}"
@@ -99,12 +99,12 @@ def check_service_builds(root: Path, images: dict) -> dict:
         if version != VERSIONS[name] or service.get("base") != name + "-base" or \
                 service.get("dockerfile") != images[name]["dockerfile"] or \
                 service.get("runtime_tag") != images[name]["reference"] or \
-                images[name]["reference"] != f"shadai/{name}:{version}-maintained.1":
+                images[name]["reference"] != f"shadai/{name}:{version}-maintained.2":
             raise ValueError(f"Maintained service recipe/reference mismatch: {name}")
-    if manifest.get("toolchain") != {"version": "go1.26.6", "image": "golang", "goproxy": "https://proxy.golang.org",
+    if manifest.get("toolchain") != {"version": "go1.26.9", "image": "golang", "goproxy": "https://proxy.golang.org",
                                      "gosumdb": "sum.golang.org", "gotoolchain": "local"}:
         raise ValueError("Maintained Go toolchain or checksum database mismatch")
-    if not images["golang"]["reference"].startswith("golang:1.26.6-alpine3.24@sha256:"):
+    if not images["golang"]["reference"].startswith("golang:1.26.9-alpine3.24@sha256:"):
         raise ValueError("Maintained Go image must use the exact approved compiler version")
     recipes = {name: (root / images[name]["dockerfile"]).read_text(encoding="utf-8") for name in SERVICES}
     for name, recipe in recipes.items():
@@ -130,8 +130,11 @@ def check_service_builds(root: Path, images: dict) -> dict:
         expected = upstream.replace("go 1.20\n", "go 1.25.0\n").replace(
             "golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0"
         ) if name == "gosu" else upstream.replace("go 1.25.0\n", "go 1.26.0\n").replace(
-            "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.56.0"
-        ).replace("golang.org/x/text v0.40.0", "golang.org/x/text v0.41.0")
+            "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0"
+        ).replace("golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.57.0").replace(
+            "golang.org/x/net v0.57.0", "golang.org/x/net v0.60.0"
+        ).replace("golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0").replace(
+            "golang.org/x/text v0.40.0", "golang.org/x/text v0.42.0")
         if maintained != expected:
             raise ValueError("Maintained module changes exceed the approved targeted dependency updates")
         recipe = recipes["postgres" if name == "gosu" else name]

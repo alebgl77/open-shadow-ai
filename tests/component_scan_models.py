@@ -22,6 +22,18 @@ def capture(service):
     return json.loads((ROOT / f"tests/fixtures/component-scanner/{service}-{suffix}.json").read_bytes())
 
 
+def resolved_dependencies(root, platform="linux/amd64"):
+    """Synthetic CURRENT official base/tool bindings for a projected ClickHouse recipe graph."""
+    images = json.loads((root / "requirements/images.json").read_bytes())
+    dependencies = []
+    for name in ("clickhouse-base", "golang", "sbom-generator"):
+        image, digest = images[name]["reference"].split("@")
+        repository, version = image.rsplit(":", 1)
+        dependencies.append({"uri": f"pkg:docker/{repository}@{version}?digest={digest}&platform=" +
+                             platform.replace("/", "%2F"), "digest": {"sha256": digest[7:]}})
+    return sorted(dependencies, key=lambda item: item["uri"])
+
+
 def documents(fixture, source):
     provenance = copy.deepcopy(fixture["provenance"][0]) if fixture["provenance"] else {"blob": "sha256:" + "8" * 64}
     if "statement" in provenance:

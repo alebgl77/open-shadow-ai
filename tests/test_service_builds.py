@@ -315,13 +315,23 @@ def test_release_sources_and_only_approved_module_difference():
     before = (directory / "upstream.go.mod").read_text()
     after = (directory / "go.mod").read_text()
     assert after == before.replace("go 1.25.0\n", "go 1.26.0\n").replace(
-        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.56.0").replace(
-        "golang.org/x/text v0.40.0", "golang.org/x/text v0.41.0")
-    added_sums = set((directory / "go.sum").read_text().splitlines()) - \
-        set((directory / "upstream.go.sum").read_text().splitlines())
-    assert len(added_sums) == 6
-    assert all(line.startswith(("golang.org/x/crypto v0.55.0", "golang.org/x/crypto v0.56.0",
-                                "golang.org/x/text v0.41.0")) for line in added_sums)
+        "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0").replace(
+        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.57.0").replace(
+        "golang.org/x/net v0.57.0", "golang.org/x/net v0.60.0").replace(
+        "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0").replace(
+        "golang.org/x/text v0.40.0", "golang.org/x/text v0.42.0")
+    maintained_sums = set((directory / "go.sum").read_text().splitlines())
+    upstream_sums = set((directory / "upstream.go.sum").read_text().splitlines())
+    added_sums = maintained_sums - upstream_sums
+    assert len(added_sums) == 10
+    assert all(line.startswith(("golang.org/x/crypto v0.57.0", "golang.org/x/net v0.60.0",
+                                "golang.org/x/sync v0.23.0", "golang.org/x/sys v0.48.0",
+                                "golang.org/x/text v0.42.0")) for line in added_sums)
+    removed_sums = upstream_sums - maintained_sums  # Only the superseded publisher versions leave the tidy graph.
+    assert len(removed_sums) == 10
+    assert all(line.startswith(("golang.org/x/crypto v0.54.0", "golang.org/x/net v0.57.0",
+                                "golang.org/x/sync v0.22.0", "golang.org/x/sys v0.47.0",
+                                "golang.org/x/text v0.40.0")) for line in removed_sums)
     gosu = ROOT / "requirements/service-builds/gosu"
     assert (gosu / "go.mod").read_text() == (gosu / "upstream.go.mod").read_text().replace(
         "go 1.20\n", "go 1.25.0\n").replace("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")
@@ -334,8 +344,10 @@ def test_release_sources_and_only_approved_module_difference():
     ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.1.0"),
     ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.45.0"),
     ("gosu", "github.com/moby/sys/user v0.1.0", "github.com/moby/sys/user v0.2.0"),
-    ("node-exporter", "golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.55.0"),
-    ("node-exporter", "golang.org/x/text v0.41.0", "golang.org/x/text v0.42.0"),
+    ("node-exporter", "golang.org/x/crypto v0.57.0", "golang.org/x/crypto v0.56.0"),
+    ("node-exporter", "golang.org/x/net v0.60.0", "golang.org/x/net v0.57.0"),
+    ("node-exporter", "golang.org/x/sys v0.48.0", "golang.org/x/sys v0.49.0"),
+    ("node-exporter", "golang.org/x/text v0.42.0", "golang.org/x/text v0.43.0"),
     ("node-exporter", "go 1.26.0", "go 1.25.0"),
 ])
 def test_refreshed_hash_cannot_authorize_stale_or_unapproved_go_delta(service_tree, component, before, after):
@@ -371,16 +383,16 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
             assert 'case "$(apk --print-arch)" in' in recipe and "ARG TARGETARCH" not in recipe
             assert "apk add --no-network /packages/zlib.apk" in recipe and "apk info -e 'zlib=1.3.2-r1'" in recipe
             assert "--mount=type=bind,from=build,source=/packages,target=/packages,ro" in recipe
-            assert 'gosu --version | grep -F "1.19 (go1.26.6 " && test "$(gosu nobody id -u)" = 65534' in recipe
+            assert 'gosu --version | grep -F "1.19 (go1.26.9 " && test "$(gosu nobody id -u)" = 65534' in recipe
 
 
-@pytest.mark.parametrize("version", ["go1.26.6", "1.26.6", "v1.26.6"])
+@pytest.mark.parametrize("version", ["go1.26.9", "1.26.9", "v1.26.9"])
 def test_go_standard_library_inventory_uses_one_semantic_version(version):
-    assert SCAN.package_key(f"pkg:golang/stdlib@{version}") == ("golang", "stdlib", "v1.26.6")
+    assert SCAN.package_key(f"pkg:golang/stdlib@{version}") == ("golang", "stdlib", "v1.26.9")
 
 
 def test_service_sbom_retains_entire_go_and_os_inventory():
-    purls = ["pkg:apk/alpine/libcrypto3@3.5.9-r0", "pkg:golang/stdlib@go1.26.6",
+    purls = ["pkg:apk/alpine/libcrypto3@3.5.9-r0", "pkg:golang/stdlib@go1.26.9",
              "pkg:golang/golang.org/x/crypto@v0.55.0"]
     sbom = {"packages": [{"externalRefs": [{"referenceType": "purl", "referenceLocator": p}]} for p in purls]}
     assert SCAN.spdx_inventory(sbom, service=True) == {SCAN.package_key(p) for p in purls}

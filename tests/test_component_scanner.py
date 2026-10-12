@@ -187,16 +187,30 @@ def test_actual_captured_native_recipe_and_locks_bind_matching_source_rootfs(ser
 
 
 def zlib_pg_model():
-    """Synthetic updated graph over historical layer descriptors; not a native rebuild capture."""
+    """Synthetic updated graph over historical layer descriptors; not a native rebuild capture.
+
+    The current recipe's compiler stage, Go environment and commands are projected onto the
+    captured graph; the captured layer descriptors and the observed gosu module locks remain.
+    """
     fixture = capture("postgres", "current-amd64")
     recipe = (ROOT / "deploy/service-builds/Dockerfile.postgres").read_bytes()
     fixture["service_manifest"] = json.loads((ROOT / "requirements/service-builds/manifest.json").read_bytes())
     predicate = fixture["provenance"][0]["statement"]["predicate"]
     metadata = predicate["runDetails"]["metadata"]["buildkit_metadata"]
     metadata["source"]["infos"][0]["data"] = base64.b64encode(recipe).decode()
-    runs = [line[4:] for line in recipe.decode().replace("\\\n", "").splitlines() if line.startswith("RUN ")]
+    instructions = recipe.decode().replace("\\\n", "").splitlines()
+    runs = [line[4:] for line in instructions if line.startswith("RUN ")]
+    compiler = next(line.split()[1] for line in instructions if line.startswith("FROM golang:"))
+    compiler_version = compiler.split(":", 1)[1].split("-", 1)[0]
     graph = predicate["buildDefinition"]["internalParameters"]["buildConfig"]["llbDefinition"]
+    graph[1]["op"]["Op"]["source"]["identifier"] = source.source_identifier(compiler)
+    for step in (3, 7):
+        environment = graph[step]["op"]["Op"]["exec"]["meta"]["env"]
+        graph[step]["op"]["Op"]["exec"]["meta"]["env"] = [
+            f"GOLANG_VERSION={compiler_version}" if value.startswith("GOLANG_VERSION=") else value
+            for value in environment]
     graph[3]["op"]["Op"]["exec"]["meta"]["args"][-1] = runs[0]
+    graph[7]["op"]["Op"]["exec"]["meta"]["args"][-1] = runs[1]
     graph[12]["op"]["Op"]["exec"]["meta"]["args"][-1] = runs[2].split(None, 1)[1]
     graph[12]["inputs"].append("step7:0")
     graph[12]["op"]["Op"]["exec"]["mounts"].append(
@@ -211,7 +225,9 @@ def test_updated_postgres_zlib_graph_has_exact_readonly_build_edge_and_unchanged
         "buildConfig"]["llbDefinition"]
     assert len(graph) == 14 and graph[12]["inputs"] == ["step11:0", "step7:0"]
     assert graph[12]["op"]["Op"]["exec"]["meta"]["env"] == source.PG_ENV
-    assert graph[3]["op"]["Op"]["exec"]["meta"]["env"] == source.GO_ENV
+    compiler = next(line.split()[1] for line in (ROOT / "deploy/service-builds/Dockerfile.postgres").read_text()
+                    .splitlines() if line.startswith("FROM golang:"))
+    assert graph[3]["op"]["Op"]["exec"]["meta"]["env"] == source.go_environment(compiler)
     assert proof["rootfs_output"] == "step12:0" and proof["binary_version_claim"] is None
 
 

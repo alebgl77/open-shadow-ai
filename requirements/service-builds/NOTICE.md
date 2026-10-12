@@ -1,4 +1,4 @@
-# Maintained service recipe 1
+# Maintained service recipe 2
 
 These recipes preserve PostgreSQL 16.15, Redis 7.4.11, ClickHouse 25.8.33.6,
 gosu 1.19 and node_exporter 1.12.1. They replace the final executable or
@@ -6,25 +6,33 @@ OpenSSL/zlib libraries that the mandatory security gate found vulnerable. They
 are maintained project builds, not new releases from those publishers.
 
 Source archives are bound to the official release commits and SHA256 bytes
-in `manifest.json`. Go 1.26.6 is the official multiarch image recorded in
+in `manifest.json`. Go 1.26.9 is the official multiarch image recorded in
 `requirements/images.json`; automatic toolchain downloads are disabled.
 `go.mod`, `go.sum` and `modules.txt` fix the module graph. Go verifies downloads
 through `proxy.golang.org` and `sum.golang.org`, verifies the module cache,
 checks the complete selected graph and builds with `-mod=readonly`,
 `CGO_ENABLED=0`, `-trimpath` and `-buildvcs=false`.
 
-Both publisher sources are unchanged. gosu updates only x/sys 0.1.0 to
-0.44.0, the fixed version reported for CVE-2026-39824; that module requires
-the Go language directive to move from 1.20 to 1.25.0. node_exporter updates
-x/crypto 0.54.0 to 0.56.0 (superseding the first maintained build's 0.55.0),
-which fixes the reported CVE-2026-56855 and CVE-2026-78662. Its Go language
-directive moves from 1.25.0 to the required 1.26.0; the compiler stays 1.26.6.
-The earlier x/text 0.40.0 to 0.41.0 MVS update remains required. No other
-selected module version changes in either maintained build.
+Both publisher sources are unchanged. Recipe 2 compiles both binaries with
+Go 1.26.9, the fixed standard library reported for CVE-2026-78667,
+CVE-2026-78669, CVE-2026-97031, CVE-2026-78659, CVE-2026-78660, CVE-2026-94440
+and CVE-2026-97030, which the security gate found in recipe 1's Go 1.26.6
+binaries. gosu updates only x/sys 0.1.0 to 0.44.0, the fixed version reported
+for CVE-2026-39824; that module requires the Go language directive to move
+from 1.20 to 1.25.0. Its module graph is otherwise unchanged from recipe 1.
+node_exporter updates x/net 0.57.0 to 0.60.0, the fixed version reported for
+CVE-2026-78669, CVE-2026-78659 and CVE-2026-78660 in that module. x/net 0.60.0
+requires x/crypto 0.57.0 (superseding recipe 1's 0.56.0, which fixed
+CVE-2026-56855 and CVE-2026-78662), x/sys 0.47.0 to 0.48.0 and x/text 0.42.0
+(superseding recipe 1's 0.41.0); x/text 0.42.0 requires x/sync 0.22.0 to
+0.23.0. Its Go language directive stays at the required 1.26.0. Those modules'
+own requirements also move x/term to 0.46.0, x/mod to 0.41.0 and x/tools to
+0.49.0 in the complete selected graph; none of the three is built into the
+binary. No other selected module version changes in either maintained build.
 The reviewed `go.mod.diff` and upstream module files record that difference.
-The node_exporter binary reports `1.12.1-shadai.1`; gosu retains its upstream
+The node_exporter binary reports `1.12.1-shadai.2`; gosu retains its upstream
 1.19 version and reports the new compiler. Image labels identify maintenance
-recipe 1 and the upstream source commit.
+recipe 2 and the upstream source commit.
 
 The module-level GO-2026-5932 advisory remains visible: x/crypto's OpenPGP
 packages are unmaintained and have no fixed version. Updating x/crypto does

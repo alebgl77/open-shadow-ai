@@ -10,10 +10,10 @@ import json
 import re
 from pathlib import Path
 
-GO_ENV = ["PATH=/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-          "GOLANG_VERSION=1.26.6", "GOPATH=/go", "CGO_ENABLED=0", "GOTOOLCHAIN=local", "GOENV=off",
-          "GOWORK=off", "GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org",
-          "GOFLAGS=-mod=readonly", "GOTELEMETRY=off"]
+GO_PATH = "PATH=/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+GO_ENV = ["GOPATH=/go", "CGO_ENABLED=0", "GOTOOLCHAIN=local", "GOENV=off", "GOWORK=off",
+          "GOPROXY=https://proxy.golang.org", "GOSUMDB=sum.golang.org", "GOFLAGS=-mod=readonly", "GOTELEMETRY=off"]
+COMPILER = re.compile(r"golang:(\d+\.\d+\.\d+)-alpine3\.24@sha256:[a-f0-9]{64}")
 PG_ENV = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "GOSU_VERSION=1.19",
           "LANG=en_US.utf8", "PG_MAJOR=16", "PG_VERSION=16.15",
           "PG_SHA256=c1575341fa7bd40f5274ea465b34390f4dc64cdd0770af327005caaeb9f6b7ed",
@@ -32,6 +32,14 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def go_environment(compiler):
+    """The official golang image environment of the recipe's exact pinned compiler plus the recipe's own ENV."""
+    match = COMPILER.fullmatch(compiler)
+    if not match:
+        raise ValueError("Unsupported maintained compiler image")
+    return [GO_PATH, "GOLANG_VERSION=" + match[1], *GO_ENV]
+
+
 def source_identifier(reference):
     if reference.startswith(("golang:", "postgres:")):
         reference = "docker.io/library/" + reference
@@ -46,6 +54,7 @@ def expected_graph(recipe, dockerignore, platform, component):
     if len(runs) != 3 or len(bases) != 2:
         raise ValueError("Unsupported maintained recipe template")
     native_platform = {"Architecture": platform.split("/")[1], "OS": "linux"}
+    go_env = go_environment(bases[0])
     graph = []
 
     def add(body, inputs=None, *, native=False, terminal=False):
@@ -76,7 +85,7 @@ def expected_graph(recipe, dockerignore, platform, component):
     add({"source": {"identifier": source_identifier(bases[0])}}, native=True)
     add({"file": {"actions": [{"input": 0, "secondaryInput": -1, "output": 0,
          "Action": {"mkdir": {"path": "/src", "mode": 493, "makeParents": True, "timestamp": -1}}}]}}, ["step1:0"])
-    add(run(runs[0], GO_ENV), ["step2:0"], native=True)
+    add(run(runs[0], go_env), ["step2:0"], native=True)
     directory = f"requirements/service-builds/{component}"
     # Docker's ignore parser removes a leading/trailing slash for these fixed patterns.
     excluded = [line.strip().strip("/") for line in dockerignore.decode("utf-8").splitlines()
@@ -88,7 +97,7 @@ def expected_graph(recipe, dockerignore, platform, component):
     add({"file": {"actions": [copy(f"/{directory}/go.mod", "/src/", output_port=-1),
          copy(f"/{directory}/go.sum", "/src/", input_port=2)]}}, ["step3:0", "step4:0"])
     add({"file": {"actions": [copy(f"/{directory}/modules.txt", "/locked-modules.txt")]}}, ["step5:0", "step4:0"])
-    add(run(runs[1], GO_ENV), ["step6:0"], native=True)
+    add(run(runs[1], go_env), ["step6:0"], native=True)
     binary = "gosu" if component == "gosu" else "node_exporter"
     destination = "/usr/local/bin/gosu" if component == "gosu" else "/bin/node_exporter"
     add({"file": {"actions": [copy(f"/out/{binary}", destination)]}}, ["step0:0", "step7:0"])
@@ -243,7 +252,7 @@ def expected_clickhouse_graph(recipe, platform):
                                   "removeMountStubsRecursive": True}, "mounts": mounts}}
     return [node(0, {"source": {"identifier": "docker-image://docker.io/" + bases[1]}}),
             node(1, {"source": {"identifier": source_identifier(bases[0])}}),
-            node(2, run(runs[0], GO_ENV[:2] + ["GOTOOLCHAIN=local", "GOPATH=/go",
+            node(2, run(runs[0], go_environment(bases[0])[:2] + ["GOTOOLCHAIN=local", "GOPATH=/go",
                                              "TARGETARCH=" + platform.split("/")[1]], "/go", [{"dest": "/"}]),
                  ["step1:0"]),
             node(3, run(runs[1].split(None, 1)[1], ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

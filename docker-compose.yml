@@ -45,7 +45,7 @@ services:
       redis: {condition: service_healthy}
 
   postgres:
-    image: shadai/postgres:16.15-maintained.1
+    image: shadai/postgres:16.15-maintained.2
     pull_policy: build
     build: {context: ., dockerfile: deploy/service-builds/Dockerfile.postgres}
     restart: unless-stopped
@@ -63,7 +63,7 @@ services:
       retries: 12
 
   clickhouse:
-    image: shadai/clickhouse:25.8.33.6-maintained.1
+    image: shadai/clickhouse:25.8.33.6-maintained.2
     pull_policy: build
     build: {context: ., dockerfile: deploy/service-builds/Dockerfile.clickhouse}
     restart: unless-stopped
@@ -87,7 +87,7 @@ services:
       retries: 18
 
   redis:
-    image: shadai/redis:7.4.11-maintained.1
+    image: shadai/redis:7.4.11-maintained.2
     pull_policy: build
     build: {context: ., dockerfile: deploy/service-builds/Dockerfile.redis}
     restart: unless-stopped

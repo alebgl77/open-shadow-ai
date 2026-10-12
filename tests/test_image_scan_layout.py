@@ -85,7 +85,7 @@ def harness(tmp_path, monkeypatch):
     def inventory():
         purls = ['pkg:apk/alpine/libcrypto3@3.5.9-r0']
         if state.component in {'postgres', 'node-exporter'}:
-            purls.append('pkg:golang/stdlib@go1.26.6')
+            purls.append('pkg:golang/stdlib@go1.26.9')
         elif state.component in PINS.APP_IMAGES and state.component != 'frontend':
             environment = AUDIT.default_environment()
             environment.update({'sys_platform': 'linux', 'os_name': 'posix', 'platform_system': 'Linux',
@@ -145,7 +145,7 @@ def harness(tmp_path, monkeypatch):
             packages = []
             for purl in inventory():
                 _, name, version = SCAN.package_key(purl)
-                packages.append({'Name': name, 'Version': 'go1.26.6' if name == 'stdlib' else version,
+                packages.append({'Name': name, 'Version': 'go1.26.9' if name == 'stdlib' else version,
                                  'Identifier': {'PURL': purl}})
             report = {'SchemaVersion': 2, 'ArtifactType': 'container_image', 'ArtifactName': '/input/layout',
                       'Trivy': {'Version': SCAN.TRIVY_VERSION},
@@ -170,6 +170,8 @@ def harness(tmp_path, monkeypatch):
                 SOURCE.expected_graph(recipe, (root / '.dockerignore').read_bytes(), 'linux/amd64',
                                       'gosu' if state.component == 'postgres' else 'node-exporter')
             predicate['buildDefinition']['internalParameters']['buildConfig']['llbDefinition'] = graph
+            if state.component == 'clickhouse':
+                predicate['buildDefinition']['resolvedDependencies'] = MODELS.resolved_dependencies(root)
         if state.source_mutate:
             state.source_mutate(result)
         return result

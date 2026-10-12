@@ -61,9 +61,18 @@ def matching_source_inputs(fixture, directory):
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(text.encode())
-    images = directory / "requirements/images.json"
-    images.parent.mkdir(parents=True, exist_ok=True)
-    images.write_bytes((ROOT / "requirements/images.json").read_bytes())
+    # The capture's own resolved official base/tool references replace the current pins, so the preserved
+    # historical provenance is checked against the inventory it was built from, never relabelled.
+    images = json.loads((ROOT / "requirements/images.json").read_bytes())
+    for dependency in fixture["provenance"][0]["statement"]["predicate"]["buildDefinition"].get(
+            "resolvedDependencies", []):
+        locator, _, digest = dependency["uri"].removeprefix("pkg:docker/").partition("?digest=")
+        repository, _, version = locator.rpartition("@")
+        name = next(key for key, value in images.items() if value["reference"].startswith(repository + ":"))
+        images[name]["reference"] = f"{repository}:{version}@{digest.partition('&')[0]}"
+    path = directory / "requirements/images.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(images, indent=2) + "\n")
 
 
 def bind(fixture, directory):

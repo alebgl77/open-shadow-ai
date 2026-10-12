@@ -29,6 +29,7 @@ def load(path, name):
 
 
 OBSERVER = load(ROOT / "scripts/observe-clickhouse-version.py", "clickhouse_version_observer")
+MODELS = load(ROOT / "tests/component_scan_models.py", "clickhouse_observation_models")
 PRINCIPAL = load(ROOT / "scripts/component_principal.py", "clickhouse_principal_validator")
 CAPTURE = json.loads((ROOT / "tests/fixtures/component-scanner/clickhouse-current-amd64.json").read_bytes())
 CID = "b" * 64
@@ -332,6 +333,7 @@ def integrated(tmp_path, monkeypatch):
         base64.b64encode(recipe).decode()
     predicate["buildDefinition"]["internalParameters"]["buildConfig"]["llbDefinition"] = \
         binding.expected_clickhouse_graph(recipe, "linux/amd64")
+    predicate["buildDefinition"]["resolvedDependencies"] = MODELS.resolved_dependencies(root)
     monkeypatch.setattr(OBSERVER, "ROOT", root)
     monkeypatch.setattr(OBSERVER, "native_platform", lambda: "linux/amd64")
     # Only the host-specific filesystem/syscall boundary is modeled here;
