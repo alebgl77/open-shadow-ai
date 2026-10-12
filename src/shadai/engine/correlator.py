@@ -47,6 +47,11 @@ ENTITY_TYPE_MAP: dict[tuple[str, str], str] = {
 }
 
 
+# Entity types a network-only sighting can establish; an inventory or OAuth
+# source later names what the entity actually is.
+GENERIC_ENTITY_TYPES = frozenset({"saas_app", "api_service"})
+
+
 def _derive_entity_type(source_type: str, category: str) -> str:
     key = (source_type, category)
     if key in ENTITY_TYPE_MAP:
@@ -381,6 +386,9 @@ class Correlator:
         if event.source_type not in current_sources:
             current_sources.append(event.source_type)
             detection.source_types = current_sources
+        derived_type = _derive_entity_type(event.source_type, detection.entity_category or "")
+        if detection.entity_type in GENERIC_ENTITY_TYPES and derived_type not in GENERIC_ENTITY_TYPES:
+            detection.entity_type = derived_type
 
         # Update evidence bundle
         bundle = sanitize_evidence(detection.evidence_bundle, now=now)
@@ -445,8 +453,9 @@ class Correlator:
                     Signal(
                         source_type=src_type,
                         confidence_base=src_data["confidence_base"],
-                        # Repeated packets are not independent evidence of AI use.
-                        event_count=0 if src_type == "network" else src_data.get("event_count", 1),
+                        # Repeated packets and repeated inventory polls (an installed
+                        # extension is reported every cycle) are not independent evidence.
+                        event_count=0 if src_type in ("network", "browser") else src_data.get("event_count", 1),
                         match_field=src_data.get("matched_field", ""),
                     )
                 )
