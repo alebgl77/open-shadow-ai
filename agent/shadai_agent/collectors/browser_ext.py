@@ -594,7 +594,7 @@ def _chromium_roots(home: Path, system: str) -> list[tuple[Path, str]]:
 
 
 def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
-    """Collect installed Chromium- and Firefox-family browser extensions for every local user.
+    """Collect installed Chromium-, Firefox-family and Safari extensions for every local user.
 
     Never raises: unreadable homes, roots, profiles and manifests are counted
     and skipped. Records carry the raw extension id, name and browser (the only
@@ -616,6 +616,12 @@ def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
             errors += _collect_root(base, browser, home.name, extensions)
         for base, browser in gecko:
             errors += _collect_gecko_root(base, browser, home.name, extensions)
+    if system == "Darwin":
+        from shadai_agent.collectors.safari_ext import collect_safari_extensions  # noqa: PLC0415 - macOS only
+
+        found, safari_errors = collect_safari_extensions(list(iter_user_homes() if homes is None else homes))
+        extensions.extend(found)
+        errors += safari_errors
     if errors:
         logger.warning("Extension inventory skipped %s unreadable path(s)", errors)
     return extensions
