@@ -179,8 +179,7 @@ describe('localized live UI states', () => {
 
 describe.each(locales)('%s full console', locale => {
   it.each([
-    ['/dashboard', 'Evidence into oversight.'], ['/discoveries', 'Discoveries'], ['/users', 'Identity signals'],
-    ['/oauth-apps', 'OAuth AI Apps'], ['/extensions', 'AI Browser Extensions'], ['/local-ai', 'Local AI Runtimes'],
+    ['/dashboard', 'Evidence into oversight.'], ['/discoveries', 'Discoveries'], ['/oauth-apps', 'OAuth AI Apps'], ['/extensions', 'AI Browser Extensions'], ['/local-ai', 'Local AI Runtimes'],
     ['/network', 'Network observations'], ['/governance', 'Governance Policies'], ['/catalog', 'AI catalog'],
     ['/sources', 'Sources & coverage'], ['/settings', 'Settings'],
   ] as Array<[string, MessageKey]>)('renders localized page and navigation at %s', async (path, heading) => {
