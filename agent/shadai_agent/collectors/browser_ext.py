@@ -6,13 +6,22 @@ history and sign-in data are never touched. A malformed, oversized or
 unreadable manifest is skipped so that one bad file can never abort the
 collection cycle (a failure here must not drop the processes and local-AI hits
 gathered in the same snapshot).
+
+The agent runs as a service account (SYSTEM on Windows, root elsewhere), so
+``~`` is the service profile and holds no browser at all. Every local user
+profile on the host is enumerated instead, and every Chromium-family user-data
+root under each one is read: stable, beta, dev and canary channels, snap and
+flatpak installs, and vendors that ship their own Chromium build.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
+import re
+from collections.abc import Iterable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -22,27 +31,77 @@ MANIFEST_MAX_BYTES = 1024 * 1024
 # Transient install scratch directories that are not real extension versions.
 _SKIP_VERSION_DIRS = {"Temp", "CRX_INSTALL"}
 
-# Known user-data roots, each tagged with the browser it belongs to so the label
-# never has to be guessed from a substring of the path (that mislabelled
-# Chromium as "chrome" and could mislabel Edge). Still single-user ("~") here;
-# full multi-user, multi-browser enumeration is a later step.
-BROWSER_ROOTS: dict[str, list[tuple[str, str]]] = {
+# Chromium-family user-data roots, relative to a user's home directory, each
+# tagged with the browser it belongs to so the label never has to be guessed
+# from a substring of the path.
+CHROMIUM_ROOTS: dict[str, list[tuple[str, str]]] = {
     "Linux": [
-        ("~/.config/google-chrome", "chrome"),
-        ("~/.config/chromium", "chromium"),
-        ("~/.config/microsoft-edge", "edge"),
+        (".config/google-chrome", "chrome"),
+        (".config/google-chrome-beta", "chrome"),
+        (".config/google-chrome-unstable", "chrome"),
+        (".var/app/com.google.Chrome/config/google-chrome", "chrome"),
+        (".config/chromium", "chromium"),
+        ("snap/chromium/common/chromium", "chromium"),
+        (".var/app/org.chromium.Chromium/config/chromium", "chromium"),
+        (".config/microsoft-edge", "edge"),
+        (".config/microsoft-edge-beta", "edge"),
+        (".config/microsoft-edge-dev", "edge"),
+        (".var/app/com.microsoft.Edge/config/microsoft-edge", "edge"),
+        (".config/BraveSoftware/Brave-Browser", "brave"),
+        (".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser", "brave"),
+        (".config/vivaldi", "vivaldi"),
+        (".config/opera", "opera"),
     ],
     "Darwin": [
-        ("~/Library/Application Support/Google/Chrome", "chrome"),
-        ("~/Library/Application Support/Chromium", "chromium"),
-        ("~/Library/Application Support/Microsoft Edge", "edge"),
+        ("Library/Application Support/Google/Chrome", "chrome"),
+        ("Library/Application Support/Google/Chrome Beta", "chrome"),
+        ("Library/Application Support/Google/Chrome Canary", "chrome"),
+        ("Library/Application Support/Chromium", "chromium"),
+        ("Library/Application Support/Microsoft Edge", "edge"),
+        ("Library/Application Support/Microsoft Edge Beta", "edge"),
+        ("Library/Application Support/Microsoft Edge Dev", "edge"),
+        ("Library/Application Support/Microsoft Edge Canary", "edge"),
+        ("Library/Application Support/BraveSoftware/Brave-Browser", "brave"),
+        ("Library/Application Support/Vivaldi", "vivaldi"),
+        ("Library/Application Support/com.operasoftware.Opera", "opera"),
+        ("Library/Application Support/Arc/User Data", "arc"),
     ],
     "Windows": [
-        ("~/AppData/Local/Google/Chrome/User Data", "chrome"),
-        ("~/AppData/Local/Chromium/User Data", "chromium"),
-        ("~/AppData/Local/Microsoft/Edge/User Data", "edge"),
+        ("AppData/Local/Google/Chrome/User Data", "chrome"),
+        ("AppData/Local/Google/Chrome Beta/User Data", "chrome"),
+        ("AppData/Local/Google/Chrome SxS/User Data", "chrome"),
+        ("AppData/Local/Chromium/User Data", "chromium"),
+        ("AppData/Local/Microsoft/Edge/User Data", "edge"),
+        ("AppData/Local/Microsoft/Edge Beta/User Data", "edge"),
+        ("AppData/Local/Microsoft/Edge Dev/User Data", "edge"),
+        ("AppData/Local/Microsoft/Edge SxS/User Data", "edge"),
+        ("AppData/Local/BraveSoftware/Brave-Browser/User Data", "brave"),
+        ("AppData/Local/Vivaldi/User Data", "vivaldi"),
+        ("AppData/Roaming/Opera Software/Opera Stable", "opera"),
+        ("AppData/Roaming/Opera Software/Opera GX Stable", "opera"),
+        ("AppData/Local/Packages/TheBrowserCompany.Arc_ttt1ap7aakyb4/LocalCache/Local/Arc/User Data", "arc"),
     ],
 }
+
+# Where vendors put per-user application data, relative to the home directory.
+# Any Chromium-family browser not listed above (new entrants bundle their own
+# Chromium) is discovered here by its ``Local State`` file, up to this depth.
+APP_DATA_DIRS: dict[str, list[str]] = {
+    "Linux": [".config"],
+    "Darwin": ["Library/Application Support"],
+    "Windows": ["AppData/Local", "AppData/Roaming"],
+}
+DISCOVERY_MAX_DEPTH = 3
+DISCOVERY_MAX_ENTRIES = 5000
+
+# Only real accounts hold a browser: local and domain users, and Entra ID users.
+_WINDOWS_USER_SID_PREFIXES = ("S-1-5-21-", "S-1-12-1-")
+# Folders under the users directory that are never a person's profile.
+_WINDOWS_NON_USER_PROFILES = {"public", "default", "default user", "all users"}
+_POSIX_NON_USER_HOMES = {"shared", "guest", "lost+found"}
+_POSIX_USERS_DIRS = {"Darwin": "/Users", "Linux": "/home"}
+_POSIX_NOLOGIN_SHELLS = ("nologin", "false")
+_NOBODY_UID = 65534
 
 
 def _version_sort_key(name: str) -> tuple:
@@ -100,15 +159,154 @@ def _pick_manifest(ext_id_dir: Path) -> dict | None:
     return None
 
 
-def _collect_root(base: Path, browser: str, extensions: list[dict]) -> int:
+def _windows_profile_homes() -> list[Path]:
+    """Every user profile registered on a Windows host, read as SYSTEM.
+
+    ``ProfileList`` is the authoritative record, including roaming and Entra
+    ID accounts whose folder names differ from their user names. Falls back to
+    listing the users directory when the registry is unavailable.
+    """
+
+    homes: list[Path] = []
+    try:
+        import winreg  # noqa: PLC0415 - Windows only
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList") as profiles:
+            index = 0
+            while True:
+                try:
+                    sid = winreg.EnumKey(profiles, index)
+                except OSError:
+                    break
+                index += 1
+                if not sid.startswith(_WINDOWS_USER_SID_PREFIXES):
+                    continue
+                try:
+                    with winreg.OpenKey(profiles, sid) as entry:
+                        image, _ = winreg.QueryValueEx(entry, "ProfileImagePath")
+                except OSError:
+                    continue
+                homes.append(Path(os.path.expandvars(str(image))))
+    except (ImportError, OSError):
+        pass
+    if homes:
+        return homes
+    users_dir = Path(os.environ.get("SystemDrive", "C:")) / "Users"
+    try:
+        return [child for child in users_dir.iterdir()
+                if child.is_dir() and child.name.lower() not in _WINDOWS_NON_USER_PROFILES]
+    except OSError:
+        return []
+
+
+def _posix_homes(system: str) -> list[Path]:
+    """Every interactive account's home, from the account database and the users directory."""
+
+    homes: list[Path] = []
+    minimum_uid = 500 if system == "Darwin" else 1000
+    try:
+        import pwd  # noqa: PLC0415 - POSIX only
+
+        for entry in pwd.getpwall():
+            if not minimum_uid <= entry.pw_uid < _NOBODY_UID or entry.pw_shell.endswith(_POSIX_NOLOGIN_SHELLS):
+                continue
+            homes.append(Path(entry.pw_dir))
+    except (ImportError, OSError):
+        pass
+    # Directory and mobile accounts (LDAP, AD-bound Macs) are not always in
+    # the local account database; a home that exists on disk belonged to someone.
+    try:
+        homes.extend(child for child in Path(_POSIX_USERS_DIRS.get(system, "/home")).iterdir()
+                     if child.is_dir() and not child.name.startswith(".")
+                     and child.name.lower() not in _POSIX_NON_USER_HOMES)
+    except OSError:
+        pass
+    return homes
+
+
+def iter_user_homes() -> list[Path]:
+    """Home directories of every local user, plus the one the agent runs as.
+
+    Never raises. Duplicates (the same home reached by two routes) are removed
+    so an extension is never inventoried twice from the same files.
+    """
+
+    system = platform.system()
+    candidates = _windows_profile_homes() if system == "Windows" else _posix_homes(system)
+    try:
+        candidates.append(Path.home())
+    except (OSError, RuntimeError):
+        pass
+    homes: list[Path] = []
+    seen: set[str] = set()
+    for home in candidates:
+        try:
+            key = os.path.normcase(str(home.resolve()))
+            if key in seen or not home.is_dir():
+                continue
+        except OSError:
+            continue
+        seen.add(key)
+        homes.append(home)
+    return homes
+
+
+def _slug(relative: Path) -> str:
+    """Label an unlisted Chromium-family root after its vendor path ("perplexity-comet")."""
+
+    parts = [part for part in relative.parts if part.lower() != "user data"]
+    text = "-".join(parts).lower()
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-") or "chromium"
+
+
+def _discover_chromium_roots(home: Path, system: str) -> list[tuple[Path, str]]:
+    """Find Chromium-family user-data roots not in the known table.
+
+    A user-data root is recognised by its ``Local State`` file next to at least
+    one profile holding an ``Extensions`` directory, which rules out the many
+    Electron applications that also write a ``Local State``.
+    """
+
+    found: list[tuple[Path, str]] = []
+    for app_data in APP_DATA_DIRS.get(system, []):
+        base = home / app_data
+        if not base.is_dir():
+            continue
+        budget = DISCOVERY_MAX_ENTRIES
+        pending = [(base, 0)]
+        while pending and budget > 0:
+            directory, depth = pending.pop()
+            try:
+                children = [child for child in directory.iterdir() if child.is_dir() and not child.is_symlink()]
+            except OSError:
+                continue
+            budget -= len(children)
+            for child in children:
+                if (child / "Local State").is_file():
+                    if any((profile / "Extensions").is_dir() for profile in _profile_dirs(child)):
+                        found.append((child, _slug(child.relative_to(base))))
+                elif depth + 1 < DISCOVERY_MAX_DEPTH:
+                    pending.append((child, depth + 1))
+    return found
+
+
+def _profile_dirs(base: Path) -> list[Path]:
+    """Profile directories of one user-data root (the root itself for single-profile layouts)."""
+
+    try:
+        if (base / "Extensions").is_dir():
+            return [base]
+        return [child for child in base.iterdir() if child.is_dir()]
+    except OSError:
+        return []
+
+
+def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -> int:
     """Append every readable extension under one user-data root. Returns errors."""
 
     errors = 0
-    try:
-        profiles = list(base.iterdir())
-    except OSError:
-        return 1
-    for profile_dir in profiles:
+    for profile_dir in _profile_dirs(base):
         try:
             ext_dir = profile_dir / "Extensions"
             if not ext_dir.is_dir():
@@ -131,7 +329,8 @@ def _collect_root(base: Path, browser: str, extensions: list[dict]) -> int:
                         "version": str(manifest.get("version", "")),
                         "browser": browser,
                         "permissions": manifest.get("permissions", []),
-                        "profile": profile_dir.name,
+                        "profile": "Default" if profile_dir == base else profile_dir.name,
+                        "user": user,
                     }
                 )
             except OSError:
@@ -139,27 +338,45 @@ def _collect_root(base: Path, browser: str, extensions: list[dict]) -> int:
     return errors
 
 
-def collect_extensions() -> list[dict]:
-    """Collect installed Chromium-family browser extensions.
+def _chromium_roots(home: Path, system: str) -> list[tuple[Path, str]]:
+    """Known roots first, then discovered ones, without reading the same root twice."""
 
-    Never raises: unreadable roots, profiles and manifests are counted and
-    skipped. Records carry the raw extension id, name and browser (the only
-    fields put on the wire today) plus version, permissions and profile for
-    local use.
+    roots: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    known = [(home / relative, browser) for relative, browser in CHROMIUM_ROOTS.get(system, [])]
+    for base, browser in known + _discover_chromium_roots(home, system):
+        try:
+            if not base.is_dir():
+                continue
+            key = os.path.normcase(str(base.resolve()))
+        except OSError:
+            continue
+        if key not in seen:
+            seen.add(key)
+            roots.append((base, browser))
+    return roots
+
+
+def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
+    """Collect installed Chromium-family browser extensions for every local user.
+
+    Never raises: unreadable homes, roots, profiles and manifests are counted
+    and skipped. Records carry the raw extension id, name and browser (the only
+    fields put on the wire today) plus version, permissions, profile and user
+    for local use.
     """
 
     system = platform.system()
     extensions: list[dict] = []
     errors = 0
-    for base_path, browser in BROWSER_ROOTS.get(system, []):
+    for home in iter_user_homes() if homes is None else homes:
         try:
-            base = Path(base_path).expanduser()
-            if not base.exists():
-                continue
+            roots = _chromium_roots(Path(home), system)
         except OSError:
             errors += 1
             continue
-        errors += _collect_root(base, browser, extensions)
+        for base, browser in roots:
+            errors += _collect_root(base, browser, Path(home).name, extensions)
     if errors:
         logger.warning("Extension inventory skipped %s unreadable path(s)", errors)
     return extensions

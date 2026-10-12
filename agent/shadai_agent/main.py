@@ -73,15 +73,26 @@ def collect_section(section: str, enabled: bool, collect) -> list[dict]:
     return records if isinstance(records, list) else []
 
 
-def unique_processes(processes: list[dict]) -> list[dict]:
-    """Collapse process instances the server would record as the same observation."""
+def unique_records(section: str, records: list[dict]) -> list[dict]:
+    """Collapse records the server would store as the same observation.
+
+    Only the wire fields identify a record server-side, so an extension found
+    in several profiles or user accounts of the same host is one inventory
+    entry on the wire, and a process seen several times is one observation.
+    """
+    key_fields = PROCESS_KEY if section == "processes" else WIRE_FIELDS[section]
     seen, result = set(), []
-    for process in processes:
-        key = tuple(process.get(field) for field in PROCESS_KEY)
+    for record in records:
+        key = tuple(record.get(field) for field in key_fields)
         if key not in seen:
             seen.add(key)
-            result.append(process)
+            result.append(record)
     return result
+
+
+def unique_processes(processes: list[dict]) -> list[dict]:
+    """Collapse process instances the server would record as the same observation."""
+    return unique_records("processes", processes)
 
 
 def conform(record: dict) -> dict:
@@ -323,8 +334,9 @@ def main():
                     logger.info(f"Detected {len(sections['local_ai_hits'])} local AI processes")
 
             if config.collect_extensions:
-                sections["extensions"] = collect_section("extensions", True, collect_extensions)
-                logger.info(f"Collected {len(sections['extensions'])} browser extensions")
+                extensions = collect_section("extensions", True, collect_extensions)
+                sections["extensions"] = unique_records("extensions", extensions)
+                logger.info(f"Collected {len(extensions)} browser extensions ({len(sections['extensions'])} distinct)")
 
             # Send telemetry
             batches = split_batches(header, sections)
