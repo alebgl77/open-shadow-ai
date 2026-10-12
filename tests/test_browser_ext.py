@@ -367,6 +367,93 @@ def _fake_winreg(profiles: dict[str, str]):
                                  QueryValueEx=query_value_ex)
 
 
+# --- EXT-02: Firefox-family add-ons ---------------------------------------------
+
+
+def _addon(addon_id: str, name: str, **fields) -> dict:
+    """One extensions.json entry with the fields the collector reads."""
+    entry = {"id": addon_id, "type": "extension", "version": "3.1", "location": "app-profile",
+             "active": True, "userDisabled": False, "appDisabled": False,
+             "defaultLocale": {"name": name, "description": "d"},
+             "userPermissions": {"permissions": ["tabs"], "origins": ["<all_urls>"]},
+             "sourceURI": "https://addons.mozilla.org/firefox/downloads/file/1/x.xpi"}
+    entry.update(fields)
+    return entry
+
+
+def _firefox(home: Path, root: str, profile: str, addons: list, *, text: str | None = None) -> Path:
+    listing = home / root / profile / "extensions.json"
+    listing.parent.mkdir(parents=True, exist_ok=True)
+    listing.write_text(text if text is not None else json.dumps({"schemaVersion": 36, "addons": addons}))
+    return listing
+
+
+def test_firefox_addons_are_inventoried_per_profile(home):
+    _firefox(home, ".mozilla/firefox", "abc.default-release", [
+        _addon("uBlock0@raymondhill.net", "uBlock Origin"),
+        _addon("{11111111-2222-3333-4444-555555555555}", "Off AI", userDisabled=True),
+        _addon("theme@example.org", "A Theme", type="theme"),
+        _addon("webcompat@mozilla.org", "Web Compat", location="app-builtin"),
+    ])
+    records = {r["id"]: r for r in collect(home)}
+    assert set(records) == {"uBlock0@raymondhill.net", "{11111111-2222-3333-4444-555555555555}"}
+    ublock = records["uBlock0@raymondhill.net"]
+    assert (ublock["name"], ublock["browser"], ublock["profile"], ublock["user"]) == (
+        "uBlock Origin", "firefox", "abc.default-release", "alice")
+    assert ublock["enabled"] is True and ublock["install_source"] == "store"
+    assert ublock["permissions"] == ["tabs", "<all_urls>"]
+    assert records["{11111111-2222-3333-4444-555555555555}"]["enabled"] is False
+
+
+@pytest.mark.parametrize("location, source_uri, expected", [
+    ("app-profile", "https://addons.mozilla.org/firefox/downloads/file/1/x.xpi", "store"),
+    ("app-profile", "file:///tmp/custom.xpi", "user"),
+    ("app-temporary", "", "unpacked"),
+    ("winreg-app-global", "", "external"),
+    ("app-global", "", "external"),
+    ("something-new", "", "unknown"),
+])
+def test_firefox_install_source_is_derived_from_the_install_location(home, location, source_uri, expected):
+    _firefox(home, ".mozilla/firefox", "p", [_addon("x@y", "X", location=location, sourceURI=source_uri)])
+    [record] = collect(home)
+    assert record["install_source"] == expected
+
+
+def test_gecko_forks_and_snap_roots_carry_their_own_label(home):
+    roots = {".mozilla/firefox": "firefox", "snap/firefox/common/.mozilla/firefox": "firefox",
+             ".librewolf": "librewolf", ".zen": "zen"}
+    for index, root in enumerate(roots):
+        _firefox(home, root, "p", [_addon(f"ext{index}@test", root)])
+    assert {r["name"]: r["browser"] for r in collect(home)} == roots
+
+
+@pytest.mark.parametrize("system, root", [
+    ("Windows", "AppData/Roaming/Mozilla/Firefox/Profiles"),
+    ("Darwin", "Library/Application Support/Firefox/Profiles"),
+])
+def test_firefox_roots_on_other_platforms(tmp_path, monkeypatch, system, root):
+    monkeypatch.setattr(browser_ext.platform, "system", lambda: system)
+    home = tmp_path / "home"
+    _firefox(home, root, "zz.default", [_addon("x@y", "X")])
+    [record] = collect(home)
+    assert record["browser"] == "firefox"
+
+
+def test_broken_or_odd_extensions_json_is_skipped_not_raised(home):
+    _firefox(home, ".mozilla/firefox", "broken", [], text="{ not json")
+    _firefox(home, ".mozilla/firefox", "list", [], text="[]")
+    _firefox(home, ".mozilla/firefox", "odd", ["not-a-dict", {"type": "extension"}, {"id": "", "type": "extension"}])
+    _firefox(home, ".mozilla/firefox", "ok", [_addon("x@y", "X")])
+    assert [r["id"] for r in collect(home)] == ["x@y"]
+
+
+def test_chromium_and_firefox_extensions_of_one_user_are_both_reported(home):
+    _install(home, CHROME, "Default", "a" * 32, "1.0.0", {"name": "Chrome side", "version": "1.0.0"})
+    _firefox(home, ".mozilla/firefox", "p", [_addon("x@y", "Firefox side")])
+    found = {(r["browser"], r["name"]) for r in collect(home)}
+    assert found == {("chrome", "Chrome side"), ("firefox", "Firefox side")}
+
+
 # --- Agent main loop ------------------------------------------------------------
 
 

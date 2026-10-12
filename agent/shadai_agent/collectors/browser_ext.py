@@ -1,8 +1,9 @@
 """Browser extension inventory collector.
 
 Reads installed Chromium-family browser extensions from their on-disk
-``manifest.json``. Only manifest metadata is read; extension storage, cookies,
-history and sign-in data are never touched. A malformed, oversized or
+``manifest.json`` and Firefox-family add-ons from each profile's
+``extensions.json``. Only extension metadata is read; extension storage,
+cookies, history and sign-in data are never touched. A malformed, oversized or
 unreadable manifest is skipped so that one bad file can never abort the
 collection cycle (a failure here must not drop the processes and local-AI hits
 gathered in the same snapshot).
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 # A manifest larger than this is treated as hostile and skipped rather than read.
 MANIFEST_MAX_BYTES = 1024 * 1024
+# Firefox's extensions.json lists every add-on of a profile with its locales.
+ADDONS_JSON_MAX_BYTES = 8 * 1024 * 1024
 # Transient install scratch directories that are not real extension versions.
 _SKIP_VERSION_DIRS = {"Temp", "CRX_INSTALL"}
 # Chromium i18n placeholder in manifest strings: "__MSG_appName__".
@@ -87,6 +90,45 @@ CHROMIUM_ROOTS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# Firefox-family profile roots relative to a user's home directory. Each child
+# directory holding an extensions.json is one profile.
+GECKO_ROOTS: dict[str, list[tuple[str, str]]] = {
+    "Linux": [
+        (".mozilla/firefox", "firefox"),
+        ("snap/firefox/common/.mozilla/firefox", "firefox"),
+        (".var/app/org.mozilla.firefox/.mozilla/firefox", "firefox"),
+        (".librewolf", "librewolf"),
+        (".var/app/io.gitlab.librewolf-community/.librewolf", "librewolf"),
+        (".waterfox", "waterfox"),
+        (".zen", "zen"),
+    ],
+    "Darwin": [
+        ("Library/Application Support/Firefox/Profiles", "firefox"),
+        ("Library/Application Support/LibreWolf/Profiles", "librewolf"),
+        ("Library/Application Support/Waterfox/Profiles", "waterfox"),
+        ("Library/Application Support/zen/Profiles", "zen"),
+    ],
+    "Windows": [
+        ("AppData/Roaming/Mozilla/Firefox/Profiles", "firefox"),
+        ("AppData/Roaming/librewolf/Profiles", "librewolf"),
+        ("AppData/Roaming/Waterfox/Profiles", "waterfox"),
+        ("AppData/Roaming/zen/Profiles", "zen"),
+    ],
+}
+# Add-ons Mozilla ships inside the browser itself are not user choices.
+_GECKO_BUILTIN_LOCATIONS = {"app-builtin", "app-system-defaults", "app-system-addons"}
+# Where a Firefox add-on came from, by its install location.
+_GECKO_INSTALL_SOURCES = {
+    "app-profile": "user",
+    "app-temporary": "unpacked",
+    "app-global": "external",
+    "app-system-share": "external",
+    "app-system-local": "external",
+    "app-system-user": "external",
+    "winreg-app-global": "external",
+    "winreg-app-user": "external",
+}
+
 # Where vendors put per-user application data, relative to the home directory.
 # Any Chromium-family browser not listed above (new entrants bundle their own
 # Chromium) is discovered here by its ``Local State`` file, up to this depth.
@@ -128,15 +170,15 @@ def _version_sort_key(name: str) -> tuple:
     return (components(version), int(serial) if serial.isdigit() else -1)
 
 
-def _read_manifest(path: Path) -> dict | None:
-    """Parse one ``manifest.json``; return the dict, or None if unusable.
+def _read_manifest(path: Path, max_bytes: int = MANIFEST_MAX_BYTES) -> dict | None:
+    """Parse one JSON metadata file; return the dict, or None if unusable.
 
     Reads as UTF-8 (tolerating a BOM) with a size cap, and treats any OS error,
-    decode error or non-object JSON as "skip this manifest" rather than raising.
+    decode error or non-object JSON as "skip this file" rather than raising.
     """
 
     try:
-        if not path.is_file() or path.stat().st_size > MANIFEST_MAX_BYTES:
+        if not path.is_file() or path.stat().st_size > max_bytes:
             return None
         with open(path, encoding="utf-8-sig") as handle:
             manifest = json.load(handle)
@@ -387,6 +429,73 @@ def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -
     return errors
 
 
+def _gecko_addon(addon: dict) -> dict | None:
+    """One add-on record from a Firefox ``extensions.json`` entry, or None if not an extension."""
+
+    if addon.get("type") != "extension" or addon.get("location") in _GECKO_BUILTIN_LOCATIONS:
+        return None
+    addon_id = addon.get("id")
+    if not isinstance(addon_id, str) or not addon_id:
+        return None
+    locale = addon.get("defaultLocale")
+    name = locale.get("name") if isinstance(locale, dict) else None
+    grants = addon.get("userPermissions")
+    grants = grants if isinstance(grants, dict) else {}
+    permissions = [p for key in ("permissions", "origins") for p in grants.get(key, []) if isinstance(p, str)]
+    source = str(addon.get("sourceURI") or "")
+    install_source = _GECKO_INSTALL_SOURCES.get(str(addon.get("location")), "unknown")
+    if install_source == "user" and "addons.mozilla.org" in source:
+        install_source = "store"
+    return {
+        "id": addon_id,
+        "name": str(name) if name else "Unknown",
+        "version": str(addon.get("version", "")),
+        "permissions": permissions,
+        "enabled": bool(addon.get("active")) and not addon.get("userDisabled") and not addon.get("appDisabled"),
+        "install_source": install_source,
+    }
+
+
+def _collect_gecko_root(base: Path, browser: str, user: str, extensions: list[dict]) -> int:
+    """Append every add-on listed by the profiles under one Firefox-family root. Returns errors."""
+
+    errors = 0
+    try:
+        profiles = [child for child in base.iterdir() if child.is_dir()]
+    except OSError:
+        return 1
+    for profile_dir in profiles:
+        listing = profile_dir / "extensions.json"
+        try:
+            if not listing.is_file():
+                continue
+        except OSError:
+            errors += 1
+            continue
+        data = _read_manifest(listing, ADDONS_JSON_MAX_BYTES)
+        if data is None:
+            errors += 1
+            continue
+        addons = data.get("addons")
+        for addon in addons if isinstance(addons, list) else []:
+            record = _gecko_addon(addon) if isinstance(addon, dict) else None
+            if record is not None:
+                extensions.append({**record, "browser": browser, "profile": profile_dir.name, "user": user})
+    return errors
+
+
+def _gecko_roots(home: Path, system: str) -> list[tuple[Path, str]]:
+    roots = []
+    for relative, browser in GECKO_ROOTS.get(system, []):
+        base = home / relative
+        try:
+            if base.is_dir():
+                roots.append((base, browser))
+        except OSError:
+            continue
+    return roots
+
+
 def _chromium_roots(home: Path, system: str) -> list[tuple[Path, str]]:
     """Known roots first, then discovered ones, without reading the same root twice."""
 
@@ -407,7 +516,7 @@ def _chromium_roots(home: Path, system: str) -> list[tuple[Path, str]]:
 
 
 def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
-    """Collect installed Chromium-family browser extensions for every local user.
+    """Collect installed Chromium- and Firefox-family browser extensions for every local user.
 
     Never raises: unreadable homes, roots, profiles and manifests are counted
     and skipped. Records carry the raw extension id, name and browser (the only
@@ -419,13 +528,16 @@ def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
     extensions: list[dict] = []
     errors = 0
     for home in iter_user_homes() if homes is None else homes:
+        home = Path(home)
         try:
-            roots = _chromium_roots(Path(home), system)
+            chromium, gecko = _chromium_roots(home, system), _gecko_roots(home, system)
         except OSError:
             errors += 1
             continue
-        for base, browser in roots:
-            errors += _collect_root(base, browser, Path(home).name, extensions)
+        for base, browser in chromium:
+            errors += _collect_root(base, browser, home.name, extensions)
+        for base, browser in gecko:
+            errors += _collect_gecko_root(base, browser, home.name, extensions)
     if errors:
         logger.warning("Extension inventory skipped %s unreadable path(s)", errors)
     return extensions
