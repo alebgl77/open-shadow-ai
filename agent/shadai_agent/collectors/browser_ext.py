@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 MANIFEST_MAX_BYTES = 1024 * 1024
 # Transient install scratch directories that are not real extension versions.
 _SKIP_VERSION_DIRS = {"Temp", "CRX_INSTALL"}
+# Chromium i18n placeholder in manifest strings: "__MSG_appName__".
+_MSG_PLACEHOLDER = re.compile(r"__MSG_([A-Za-z0-9_@]+)__")
+# Locales tried after the manifest's default_locale when a message is missing.
+_FALLBACK_LOCALES = ("en", "en_US", "en_GB")
 
 # Chromium-family user-data roots, relative to a user's home directory, each
 # tagged with the browser it belongs to so the label never has to be guessed
@@ -141,8 +145,8 @@ def _read_manifest(path: Path) -> dict | None:
     return manifest if isinstance(manifest, dict) else None
 
 
-def _pick_manifest(ext_id_dir: Path) -> dict | None:
-    """Return the manifest of the highest installed version of an extension."""
+def _pick_manifest(ext_id_dir: Path) -> tuple[dict, Path] | None:
+    """Return the manifest of the highest installed version of an extension, and its directory."""
 
     try:
         candidates = [
@@ -155,8 +159,52 @@ def _pick_manifest(ext_id_dir: Path) -> dict | None:
     for version_dir in sorted(candidates, key=lambda d: _version_sort_key(d.name), reverse=True):
         manifest = _read_manifest(version_dir / "manifest.json")
         if manifest is not None:
-            return manifest
+            return manifest, version_dir
     return None
+
+
+def _messages(version_dir: Path, locale: str) -> dict:
+    """The ``_locales/<locale>/messages.json`` table, keyed case-insensitively, or empty."""
+
+    if not isinstance(locale, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,16}", locale):
+        return {}
+    table = _read_manifest(version_dir / "_locales" / locale / "messages.json")
+    if not table:
+        return {}
+    messages = {}
+    for key, entry in table.items():
+        if isinstance(entry, dict) and isinstance(entry.get("message"), str):
+            messages[key.lower()] = entry["message"]
+    return messages
+
+
+def _localized(text: object, manifest: dict, version_dir: Path) -> str:
+    """Resolve ``__MSG_key__`` placeholders the way Chromium does for a stored extension.
+
+    The manifest's ``default_locale`` table is used first, then English
+    fallbacks. A placeholder with no message anywhere is left as is: the raw
+    key still identifies the extension better than an empty name.
+    """
+
+    text = str(text)
+    if "__MSG_" not in text:
+        return text
+    tables: list[dict] = []
+    for locale in (manifest.get("default_locale"), *_FALLBACK_LOCALES):
+        if locale and locale not in [t.get("__locale__") for t in tables]:
+            table = _messages(version_dir, locale)
+            if table:
+                table["__locale__"] = locale
+                tables.append(table)
+
+    def lookup(match: re.Match) -> str:
+        key = match.group(1).lower()
+        for table in tables:
+            if key in table:
+                return table[key]
+        return match.group(0)
+
+    return _MSG_PLACEHOLDER.sub(lookup, text).strip()
 
 
 def _windows_profile_homes() -> list[Path]:
@@ -319,13 +367,14 @@ def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -
             try:
                 if not ext_id_dir.is_dir():
                     continue
-                manifest = _pick_manifest(ext_id_dir)
-                if manifest is None:
+                picked = _pick_manifest(ext_id_dir)
+                if picked is None:
                     continue
+                manifest, version_dir = picked
                 extensions.append(
                     {
                         "id": ext_id_dir.name,
-                        "name": str(manifest.get("name", "Unknown")),
+                        "name": _localized(manifest.get("name", "Unknown"), manifest, version_dir) or "Unknown",
                         "version": str(manifest.get("version", "")),
                         "browser": browser,
                         "permissions": manifest.get("permissions", []),

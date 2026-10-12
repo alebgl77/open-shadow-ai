@@ -143,6 +143,67 @@ def test_version_sort_key_orders_numerically():
     assert key("1.0.0_2") > key("1.0.0_1")
 
 
+# --- EXT-05: localized names ------------------------------------------------------
+
+
+def _locale(path: Path, locale: str, messages: dict) -> None:
+    """Write a _locales/<locale>/messages.json next to an installed manifest."""
+    table = path.parent / "_locales" / locale
+    table.mkdir(parents=True)
+    (table / "messages.json").write_text(json.dumps(messages), encoding="utf-8")
+
+
+def test_msg_placeholder_name_is_resolved_from_the_default_locale(home):
+    path = _install(home, CHROME, "Default", "l" * 32, "1.0.0",
+                    {"name": "__MSG_appName__", "version": "1.0.0", "default_locale": "fr"})
+    _locale(path, "fr", {"appName": {"message": "Assistant IA", "description": "x"}})
+    _locale(path, "en", {"appName": {"message": "AI Assistant"}})
+    [record] = collect(home)
+    assert record["name"] == "Assistant IA"
+
+
+def test_msg_lookup_is_case_insensitive_and_falls_back_to_english(home):
+    path = _install(home, CHROME, "Default", "m" * 32, "1.0.0",
+                    {"name": "__MSG_AppName__", "version": "1.0.0", "default_locale": "de"})
+    _locale(path, "en_US", {"appname": {"message": "Grammar Helper"}})
+    [record] = collect(home)
+    assert record["name"] == "Grammar Helper"
+
+
+def test_msg_placeholder_inside_a_longer_name_is_substituted(home):
+    path = _install(home, CHROME, "Default", "n" * 32, "1.0.0",
+                    {"name": "__MSG_brand__ for Gmail", "version": "1.0.0", "default_locale": "en"})
+    _locale(path, "en", {"brand": {"message": "Writer"}})
+    [record] = collect(home)
+    assert record["name"] == "Writer for Gmail"
+
+
+def test_unresolvable_placeholder_is_kept_as_the_raw_key(home):
+    _install(home, CHROME, "Default", "o" * 32, "1.0.0",
+             {"name": "__MSG_missing__", "version": "1.0.0", "default_locale": "en"})
+    [record] = collect(home)
+    assert record["name"] == "__MSG_missing__"
+
+
+def test_locale_from_manifest_cannot_escape_the_extension_directory(home):
+    secret = home / "secret"
+    secret.mkdir()
+    (secret / "messages.json").write_text(json.dumps({"appname": {"message": "leaked"}}))
+    _install(home, CHROME, "Default", "q" * 32, "1.0.0",
+             {"name": "__MSG_appName__", "version": "1.0.0", "default_locale": "../../../../secret"})
+    [record] = collect(home)
+    assert record["name"] == "__MSG_appName__"
+
+
+def test_broken_messages_table_does_not_hide_the_extension(home):
+    path = _install(home, CHROME, "Default", "r" * 32, "1.0.0",
+                    {"name": "__MSG_appName__", "version": "1.0.0", "default_locale": "en"})
+    _locale(path, "en", {"appName": "not an object"})
+    (path.parent / "_locales" / "en" / "messages.json").write_text("{ broken")
+    [record] = collect(home)
+    assert record["id"] == "r" * 32
+
+
 # --- EXT-02: every user, every Chromium-family browser ---------------------------
 
 
