@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import requests
 
+from shadai_agent import __version__
 from shadai_agent.collectors.browser_ext import collect_extensions
 from shadai_agent.collectors.container import collect_containers
 from shadai_agent.collectors.local_ai import detect_local_ai
@@ -52,6 +53,24 @@ def _handle_signal(signum, frame):
     global _running
     logger.info(f"Received signal {signum}, shutting down...")
     _running = False
+
+
+def collect_section(section: str, enabled: bool, collect) -> list[dict]:
+    """Run one collector in isolation.
+
+    A collector that raises yields an empty section instead of aborting the
+    snapshot, so a bad browser manifest can never drop the processes and
+    local-AI hits gathered in the same cycle. Only the exception type is
+    logged: messages may carry file paths with user names.
+    """
+    if not enabled:
+        return []
+    try:
+        records = collect()
+    except Exception as exc:  # noqa: BLE001 - isolation boundary by design
+        logger.error("Collector %s failed: %s", section, type(exc).__name__)
+        return []
+    return records if isinstance(records, list) else []
 
 
 def unique_processes(processes: list[dict]) -> list[dict]:
@@ -252,7 +271,7 @@ def discover_binding(config, spool: DurableSpool) -> bool | None:
 
 
 def send_heartbeat(config, stats: dict) -> None:
-    body = {"collector_id": config.collector_id, "client_version": "0.2.0",
+    body = {"collector_id": config.collector_id, "client_version": __version__,
             "queue_events": stats["queued_events"], "queued_bytes": stats["queued_bytes"],
             "dropped_events": stats.get("overflow_events", 0) + stats.get("storage_failed_events", 0),
             "expired_events": stats.get("expired_events", 0),
@@ -283,30 +302,28 @@ def main():
             scoped = discover_binding(config, spool)
             if scoped is not None:
                 drain_spool(spool, config)
-            header = {"hostname": config.hostname, "agent_version": "0.1.0",
+            header = {"hostname": config.hostname, "agent_version": __version__,
                       "timestamp": datetime.now(timezone.utc).isoformat()}  # noqa: UP017 - Python 3.10
             sections: dict[str, list[dict]] = {}
 
-            # Collect processes
-            processes = collect_processes() if config.collect_processes else []
+            # Each collector runs in isolation: a failure empties its own
+            # section only, and the rest of the snapshot is still delivered.
+            processes = collect_section("processes", config.collect_processes, collect_processes)
             sections["processes"] = unique_processes(processes)
             if config.collect_processes:
                 logger.info(f"Collected {len(processes)} processes ({len(sections['processes'])} distinct)")
 
-            # Collect containers
             if config.collect_containers:
-                sections["containers"] = collect_containers()
+                sections["containers"] = collect_section("containers", True, collect_containers)
                 logger.info(f"Collected {len(sections['containers'])} containers")
 
-            # Detect local AI
             if config.collect_local_ai:
-                sections["local_ai_hits"] = detect_local_ai(processes)
+                sections["local_ai_hits"] = collect_section("local_ai_hits", True, lambda: detect_local_ai(processes))
                 if sections["local_ai_hits"]:
                     logger.info(f"Detected {len(sections['local_ai_hits'])} local AI processes")
 
-            # Collect browser extensions
             if config.collect_extensions:
-                sections["extensions"] = collect_extensions()
+                sections["extensions"] = collect_section("extensions", True, collect_extensions)
                 logger.info(f"Collected {len(sections['extensions'])} browser extensions")
 
             # Send telemetry
