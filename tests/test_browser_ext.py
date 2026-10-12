@@ -367,6 +367,92 @@ def _fake_winreg(profiles: dict[str, str]):
                                  QueryValueEx=query_value_ex)
 
 
+# --- EXT-03/04: real state and install source (Chromium) ---------------------------
+
+
+def _prefs(home: Path, root: str, profile: str, settings: dict, *, secure: bool = False, text: str | None = None):
+    path = home / root / profile / ("Secure Preferences" if secure else "Preferences")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {"profile": {"name": profile}, "extensions": {"settings": settings}}
+    path.write_text(text if text is not None else json.dumps(body))
+
+
+# 2026-01-15T10:30:00Z as Chromium microseconds since 1601-01-01.
+_INSTALL_TIME = str((1_768_473_000 + 11_644_473_600) * 1_000_000)
+
+
+def test_enabled_state_and_store_install_come_from_the_profile_preferences(home):
+    _install(home, CHROME, "Default", "a" * 32, "1.0.0", {"name": "On", "version": "1.0.0"})
+    _install(home, CHROME, "Default", "b" * 32, "1.0.0", {"name": "Off", "version": "1.0.0"})
+    _prefs(home, CHROME, "Default", {
+        "a" * 32: {"state": 1, "location": 1, "from_webstore": True, "install_time": _INSTALL_TIME},
+        "b" * 32: {"state": 0, "location": 1, "from_webstore": True, "disable_reasons": 1},
+    })
+    records = {r["name"]: r for r in collect(home)}
+    assert (records["On"]["enabled"], records["On"]["install_source"]) == (True, "store")
+    assert records["On"]["installed_at"] == "2026-01-15T10:30:00+00:00"
+    assert (records["Off"]["enabled"], records["Off"]["install_source"]) == (False, "store")
+
+
+@pytest.mark.parametrize("entry, expected", [
+    ({"state": 1, "location": 1, "from_webstore": False}, "user"),
+    ({"state": 1, "location": 1}, "user"),
+    ({"state": 1, "location": 4}, "unpacked"),
+    ({"state": 1, "location": 8}, "unpacked"),
+    ({"state": 1, "location": 9}, "policy"),
+    ({"state": 1, "location": 7, "from_webstore": True}, "policy"),
+    ({"state": 1, "location": 3}, "external"),
+    ({"state": 1, "location": 5}, "component"),
+    ({"state": 1, "location": "1"}, "unknown"),
+    ({"state": 1}, "unknown"),
+])
+def test_install_source_follows_chromium_manifest_location(home, entry, expected):
+    _install(home, CHROME, "Default", "c" * 32, "1.0.0", {"name": "X", "version": "1.0.0"})
+    _prefs(home, CHROME, "Default", {"c" * 32: entry})
+    [record] = collect(home)
+    assert record["install_source"] == expected
+
+
+def test_secure_preferences_entries_override_preferences(home):
+    _install(home, CHROME, "Default", "d" * 32, "1.0.0", {"name": "X", "version": "1.0.0"})
+    _prefs(home, CHROME, "Default", {"d" * 32: {"state": 0, "location": 1}})
+    _prefs(home, CHROME, "Default", {"d" * 32: {"state": 1, "location": 9}}, secure=True)
+    [record] = collect(home)
+    assert (record["enabled"], record["install_source"]) == (True, "policy")
+
+
+def test_extension_left_on_disk_but_not_in_the_profile_is_an_orphan(home):
+    _install(home, CHROME, "Default", "e" * 32, "1.0.0", {"name": "Residue", "version": "1.0.0"})
+    _prefs(home, CHROME, "Default", {"f" * 32: {"state": 1, "location": 1}})
+    [record] = collect(home)
+    assert (record["enabled"], record["install_source"]) == (False, "orphan")
+
+
+def test_unreadable_preferences_leave_the_state_unknown(home):
+    _install(home, CHROME, "Default", "g" * 32, "1.0.0", {"name": "X", "version": "1.0.0"})
+    _prefs(home, CHROME, "Default", {}, text="{ broken")
+    [record] = collect(home)
+    assert (record["enabled"], record["install_source"], record["installed_at"]) == (None, "unknown", None)
+    assert record["name"] == "X"
+
+
+def test_odd_install_times_are_not_reported(home):
+    _install(home, CHROME, "Default", "h" * 32, "1.0.0", {"name": "X", "version": "1.0.0"})
+    _prefs(home, CHROME, "Default", {"h" * 32: {"state": 1, "location": 1, "install_time": "not a number"}})
+    [record] = collect(home)
+    assert record["installed_at"] is None
+    assert browser_ext._chromium_time("0") is None
+    assert browser_ext._chromium_time(None) is None
+    assert browser_ext._chromium_time("9" * 40) is None
+
+
+def test_preferences_with_no_extension_table_mark_everything_orphan(home):
+    _install(home, CHROME, "Default", "i" * 32, "1.0.0", {"name": "X", "version": "1.0.0"})
+    (home / CHROME / "Default" / "Preferences").write_text(json.dumps({"profile": {"name": "Default"}}))
+    [record] = collect(home)
+    assert record["install_source"] == "orphan"
+
+
 # --- EXT-02: Firefox-family add-ons ---------------------------------------------
 
 

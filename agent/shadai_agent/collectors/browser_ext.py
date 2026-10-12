@@ -23,6 +23,7 @@ import os
 import platform
 import re
 from collections.abc import Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,24 @@ logger = logging.getLogger(__name__)
 MANIFEST_MAX_BYTES = 1024 * 1024
 # Firefox's extensions.json lists every add-on of a profile with its locales.
 ADDONS_JSON_MAX_BYTES = 8 * 1024 * 1024
+# Chromium's per-profile Preferences / Secure Preferences hold extension state.
+PREFERENCES_MAX_BYTES = 32 * 1024 * 1024
+# Chromium ManifestLocation values, mapped to where the extension came from.
+_CHROMIUM_INSTALL_SOURCES = {
+    1: "user",        # INTERNAL: installed by the user ("store" when from_webstore)
+    2: "external",    # EXTERNAL_PREF: third-party installer, preferences file
+    3: "external",    # EXTERNAL_REGISTRY: third-party installer, Windows registry
+    4: "unpacked",    # UNPACKED: developer mode "Load unpacked"
+    5: "component",   # COMPONENT: part of the browser
+    6: "external",    # EXTERNAL_PREF_DOWNLOAD
+    7: "policy",      # EXTERNAL_POLICY_DOWNLOAD: force-installed by enterprise policy
+    8: "unpacked",    # COMMAND_LINE: --load-extension
+    9: "policy",      # EXTERNAL_POLICY
+    10: "component",  # EXTERNAL_COMPONENT
+}
+_CHROMIUM_STATE_ENABLED = 1
+# Chromium stores times as microseconds since 1601-01-01 (Windows epoch).
+_WINDOWS_EPOCH_OFFSET_SECONDS = 11_644_473_600
 # Transient install scratch directories that are not real extension versions.
 _SKIP_VERSION_DIRS = {"Temp", "CRX_INSTALL"}
 # Chromium i18n placeholder in manifest strings: "__MSG_appName__".
@@ -392,6 +411,63 @@ def _profile_dirs(base: Path) -> list[Path]:
         return []
 
 
+def _extension_settings(profile_dir: Path) -> dict[str, dict] | None:
+    """The ``extensions.settings`` table of one Chromium profile, or None if unreadable.
+
+    Chromium splits it between ``Preferences`` and ``Secure Preferences``;
+    entries from the latter win. Only this table is kept: the rest of the
+    preferences (sites, accounts, sync state) is discarded unread.
+    """
+
+    settings: dict[str, dict] = {}
+    found = False
+    for file_name in ("Preferences", "Secure Preferences"):
+        prefs = _read_manifest(profile_dir / file_name, PREFERENCES_MAX_BYTES)
+        if prefs is None:
+            continue
+        found = True
+        table = prefs.get("extensions", {})
+        table = table.get("settings", {}) if isinstance(table, dict) else {}
+        if isinstance(table, dict):
+            settings.update({ext_id: entry for ext_id, entry in table.items() if isinstance(entry, dict)})
+    return settings if found else None
+
+
+def _chromium_time(value: object) -> str | None:
+    """An ISO-8601 UTC timestamp from Chromium's microseconds-since-1601 string, or None."""
+
+    try:
+        seconds = int(str(value)) / 1_000_000 - _WINDOWS_EPOCH_OFFSET_SECONDS
+        if seconds <= 0:
+            return None
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat(timespec="seconds")  # noqa: UP017 - py3.10
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _chromium_state(entry: dict | None, settings: dict | None) -> dict:
+    """Real state of one extension from its profile settings entry.
+
+    ``enabled`` is None when the profile's preferences could not be read, and
+    False with ``install_source`` "orphan" when the extension directory is on
+    disk but the profile no longer lists it (an uninstall that left files).
+    """
+
+    if settings is None:
+        return {"enabled": None, "install_source": "unknown", "installed_at": None}
+    if entry is None:
+        return {"enabled": False, "install_source": "orphan", "installed_at": None}
+    location = entry.get("location")
+    source = _CHROMIUM_INSTALL_SOURCES.get(location, "unknown") if isinstance(location, int) else "unknown"
+    if source == "user" and entry.get("from_webstore") is True:
+        source = "store"
+    return {
+        "enabled": entry.get("state") == _CHROMIUM_STATE_ENABLED,
+        "install_source": source,
+        "installed_at": _chromium_time(entry.get("install_time")),
+    }
+
+
 def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -> int:
     """Append every readable extension under one user-data root. Returns errors."""
 
@@ -405,6 +481,7 @@ def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -
         except OSError:
             errors += 1
             continue
+        settings = _extension_settings(profile_dir)
         for ext_id_dir in ext_id_dirs:
             try:
                 if not ext_id_dir.is_dir():
@@ -422,6 +499,7 @@ def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -
                         "permissions": manifest.get("permissions", []),
                         "profile": "Default" if profile_dir == base else profile_dir.name,
                         "user": user,
+                        **_chromium_state(settings.get(ext_id_dir.name) if settings else None, settings),
                     }
                 )
             except OSError:
