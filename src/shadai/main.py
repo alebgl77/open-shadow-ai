@@ -35,6 +35,10 @@ from shadai.security.scim import SCIMError
 from shadai.utils.logging import setup_logging
 from shadai.utils.metrics import operational_metrics
 
+# Selects the column added by the newest ClickHouse migration (003_extension_inventory.sql);
+# the Compose health check selects the same column.
+CLICKHOUSE_SCHEMA_PROBE = "SELECT event_id, evidence_type, browser_profile FROM events LIMIT 0"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -133,11 +137,10 @@ async def readiness():
     except Exception:
         checks["redis"] = False
     try:
+        # Probe the newest migrated column so a missing ClickHouse migration reports
+        # "unavailable" instead of letting ingestion retry inserts forever.
         await asyncio.wait_for(
-            asyncio.to_thread(
-                get_clickhouse().execute, "SELECT event_id, evidence_type, identity_sid FROM events LIMIT 0"
-            ),
-            timeout=5,
+            asyncio.to_thread(get_clickhouse().execute, CLICKHOUSE_SCHEMA_PROBE), timeout=5
         )
         checks["clickhouse"] = True
     except Exception:

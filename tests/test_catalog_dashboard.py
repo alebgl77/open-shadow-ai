@@ -112,6 +112,28 @@ async def test_readiness_fails_without_dependencies(monkeypatch):
     assert result.status_code == 503
 
 
+async def test_readiness_probes_the_newest_clickhouse_migration(monkeypatch):
+    from shadai.main import CLICKHOUSE_SCHEMA_PROBE, readiness
+
+    queries = []
+
+    async def sessions():
+        yield SimpleNamespace(execute=AsyncMock())
+
+    monkeypatch.setattr("shadai.database.get_postgres_session", sessions)
+    monkeypatch.setattr(
+        "shadai.database.get_redis", AsyncMock(return_value=SimpleNamespace(ping=AsyncMock(return_value=True)))
+    )
+    monkeypatch.setattr("shadai.database.get_clickhouse", lambda: SimpleNamespace(execute=queries.append))
+    result = await readiness()
+    assert result.status_code == 200
+    # A deployment that skipped migrations/clickhouse/003_extension_inventory.sql must report unavailable
+    # rather than let the ingest worker retry inserts into missing columns forever.
+    assert queries == [CLICKHOUSE_SCHEMA_PROBE] and "browser_profile" in CLICKHOUSE_SCHEMA_PROBE
+    assert "browser_profile" in Path("migrations/clickhouse/003_extension_inventory.sql").read_text()
+    assert "SELECT browser_profile FROM shadai.events LIMIT 0" in Path("docker-compose.yml").read_text()
+
+
 def test_shared_signatures_resolve_independently_of_catalog_order():
     api = CatalogItemRead(
         catalog_item_id="b-api",

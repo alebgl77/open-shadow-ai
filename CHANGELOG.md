@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Browser inventory events gain per-installation state: `extension_version`, `extension_enabled`, `extension_install_source`, `extension_installed_at` and `browser_profile` on the canonical event, with network observations still rejecting them. ClickHouse migration `003_extension_inventory.sql` adds the columns; the readiness probe and the Compose health check now select `browser_profile`, so apply that migration before starting the new API, and upgrade ClickHouse, then workers, then the API, then agents. See the [upgrade procedure](docs/deployment.md#updates).
+
 ## 0.3.0 preview — 2026-10-07
 
 Server and console component versions are 0.3.0; the standalone endpoint agent remains 0.1.0. This preview targets controlled pilots, with one organization per deployment. Fresh CI and signing evidence for the release commit remain required before publication.

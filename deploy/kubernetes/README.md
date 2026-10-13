@@ -25,7 +25,7 @@ Mount certificates and keys read-only from a Secret. Verification cannot be disa
 
 Replace TEST-NET CIDR `192.0.2.0/24` in `external-stores` with the actual database CIDRs and ports. It intentionally grants no usable production route by default. Adapt the DNS and ingress-controller namespace selectors to your cluster. These policies apply only if the CNI enforces them.
 
-Apply the two ClickHouse schema files to the external database using its administration process, in order. Provision the PostgreSQL database/user, then run the migration Job:
+Apply the three ClickHouse schema files (`docker/clickhouse-init/001_create_database.sql`, then `migrations/clickhouse/002_event_metadata.sql` and `003_extension_inventory.sql`) to the external database using its administration process, in order; readiness selects the column added by `003`. Provision the PostgreSQL database/user, then run the migration Job:
 
 ```bash
 kubectl apply -f deploy/kubernetes/base/namespace.yaml
