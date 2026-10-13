@@ -81,7 +81,7 @@ icacls $wheelhouse /setowner '*S-1-5-32-544' /T
 ./scripts/Install-AgentWindows.ps1 -Python 'C:/Program Files/Python313/python.exe' -WheelPath $approvedWheel -WheelSha256 $approvedHash -Wheelhouse $wheelhouse -ApiKeyFile 'C:/Protected/collector-key.txt' -ServerUrl 'https://ai-inventory.example.com' -WhatIf
 ```
 
-Running as SYSTEM may not reveal every user's browser profile. Inventory coverage varies by OS, permissions and collector. Package signing, restart behavior, upgrade/uninstall and rollout through GPO remain fleet acceptance tests.
+Running as SYSTEM, the agent enumerates every local user's browser profiles for extensions; roaming or container profiles absent from local disk can still be missed. Inventory coverage varies by OS, permissions and collector. Package signing, restart behavior, upgrade/uninstall and rollout through GPO remain fleet acceptance tests.
 
 The endpoint discovers its scoped identity before delivery and retains bounded batches across restarts. Keep its spool inside a persistent private tree trusted by the SYSTEM task, using `spool_dir` or `SHADAI_AGENT_SPOOL_DIR`; validate actual directory/file/ancestor permissions under that identity. Rotation keeps the same collector binding and queue. Restore the correct key after a mismatch rather than changing the enrollment of retained data. Review [operations](collector-operations.md) for retention, expired observations, plaintext queue protection and revocation recovery. Server pseudonymization does not clean local AD exports or endpoint spools.
 

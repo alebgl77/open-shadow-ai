@@ -22,6 +22,9 @@ collect_containers: true
 # Every local user's Chromium, Firefox and Safari extensions, one record per installation:
 # id, name, browser, version, enabled state, install source, install time, owning user and
 # profile directory name. Permissions and the Safari host application never leave the host.
+# Requires a collector enrolled with the `browser` scope. A snapshot carries at most 5,000
+# installations; the agent logs the count when it truncates. The server keeps the state
+# each installation last reported, for the identity retention window only.
 collect_extensions: true
 collect_local_ai: true
 
