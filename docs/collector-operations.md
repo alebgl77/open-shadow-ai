@@ -68,6 +68,8 @@ spool_max_batches: 2048
 spool_ttl_seconds: 604800
 ```
 
+Size the endpoint spool for the fleet's browser inventory. Agent 0.3.0 sends one extension record per installation (extension wire v2: version, enabled state, install source, install time, owning user and profile inside each record), so a shared host with many users and profiles yields many more records than one running the 0.2.0 agent, which sends one id/name/browser record per host. Each poll produces `ceil(records / 500)` batches of at most 1.5 MB, counting processes, containers, local AI hits and extensions together, and at most 5,000 extension records per snapshot. Both agent generations can share one server: the server accepts the old records with an empty version, user and profile as host-level rows, and `GET /api/v1/agent/config` advertises `extension_wire: 2` so operators can tell which contract a deployment serves; the agent does not depend on it.
+
 For a network sensor, explicitly provision a private directory owned by the service account and retain the same directory across restarts:
 
 ```bash

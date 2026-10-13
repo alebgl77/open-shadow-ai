@@ -587,16 +587,34 @@ def test_failing_extension_collector_does_not_drop_the_snapshot(monkeypatch):
     assert datetime.fromisoformat(batch["timestamp"]).tzinfo is not None
 
 
-def test_same_extension_across_users_and_profiles_is_one_wire_record(monkeypatch):
-    """EXT-02: v1 wire carries id/name/browser only, so local duplicates collapse."""
+def test_each_installation_is_one_wire_record(monkeypatch):
+    """EXT-05: wire v2 carries one record per installation with its real state; permissions stay local."""
+    state = {"version": "1.2.0", "enabled": True, "install_source": "store",
+             "installed_at": "2026-01-15T10:30:00+00:00", "permissions": ["tabs", "<all_urls>"]}
     found = [
-        {"id": "a" * 32, "name": "Tidy", "browser": "chrome", "profile": "Default", "user": "alice"},
-        {"id": "a" * 32, "name": "Tidy", "browser": "chrome", "profile": "Profile 1", "user": "alice"},
-        {"id": "a" * 32, "name": "Tidy", "browser": "chrome", "profile": "Default", "user": "bob"},
-        {"id": "a" * 32, "name": "Tidy", "browser": "edge", "profile": "Default", "user": "bob"},
+        {"id": "a" * 32, "name": "Tidy", "browser": "chrome", "profile": "Default", "user": "alice", **state},
+        {"id": "a" * 32, "name": "Tidy", "browser": "chrome", "profile": "Profile 1", "user": "alice", **state,
+         "enabled": False, "version": "1.1.0"},
+        {"id": "a" * 32, "name": "Rangé", "browser": "chrome", "profile": "Default", "user": "bob", **state,
+         "install_source": "policy"},
+        {"id": "com.tidy.Safari", "name": "Tidy", "browser": "safari", "profile": "Default", "user": "bob",
+         "version": "1.2.0", "enabled": None, "install_source": "user", "permissions": [], "host_app": "Tidy.app"},
     ]
-    _, batch = _run_agent_once(monkeypatch, extensions=lambda: found)
-    assert batch["extensions"] == [
-        {"id": "a" * 32, "name": "Tidy", "browser": "chrome"},
-        {"id": "a" * 32, "name": "Tidy", "browser": "edge"},
+    agent, batch = _run_agent_once(monkeypatch, extensions=lambda: found)
+    assert [(r["id"], r["browser"], r["user"], r["profile"]) for r in batch["extensions"]] == [
+        ("a" * 32, "chrome", "alice", "Default"),
+        ("a" * 32, "chrome", "alice", "Profile 1"),
+        ("a" * 32, "chrome", "bob", "Default"),
+        ("com.tidy.Safari", "safari", "bob", "Default"),
     ]
+    assert [(r["name"], r["version"], r["enabled"], r["install_source"]) for r in batch["extensions"]] == [
+        ("Tidy", "1.2.0", True, "store"), ("Tidy", "1.1.0", False, "store"),
+        ("Rangé", "1.2.0", True, "policy"), ("Tidy", "1.2.0", None, "user"),
+    ]
+    assert [r.get("installed_at") for r in batch["extensions"]] == ["2026-01-15T10:30:00+00:00"] * 3 + [None]
+    assert "installed_at" not in batch["extensions"][3]
+    for record in batch["extensions"]:
+        assert set(record) <= set(agent.WIRE_FIELDS["extensions"])
+        assert "permissions" not in record and "host_app" not in record
+    encoded = json.dumps(batch)
+    assert "permissions" not in encoded and "host_app" not in encoded and "all_urls" not in encoded

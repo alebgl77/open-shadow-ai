@@ -38,15 +38,32 @@ WIRE_FIELDS = {
     "processes": ("name", "parent", "username", "listening_port"),
     "containers": ("name", "image", "port"),
     "local_ai_hits": ("process_name", "tool_name", "port"),
-    "extensions": ("id", "name", "browser"),
+    # Extension wire v2: the per-installation keys travel INSIDE each record, never as a new
+    # top-level batch key, so an older server ignores them and still counts one event per record.
+    "extensions": ("id", "name", "browser", "version", "enabled", "install_source", "installed_at", "user", "profile"),
 }
 # The server builds process events from these fields only; identical keys are identical events.
 PROCESS_KEY = ("name", "parent", "username", "listening_port")
+# One wire record per installation: the same extension in two profiles or two user accounts
+# is two installations. The locale-specific name and the per-installation version are state
+# of that installation, not a new one.
+EXTENSION_KEY = ("id", "browser", "user", "profile")
 # The API rejects a whole batch for one text field that is not a string of at most 2048
 # characters, or one port outside 0-65535. Records are brought within that contract first.
 TEXT_FIELDS = ("name", "path", "parent", "username", "image", "process_name", "tool_name", "id", "browser")
 PORT_FIELDS = ("port", "listening_port")
 MAX_TEXT_LENGTH = 2048
+# Extension records are validated field by field server-side: a non-boolean ``enabled``, an
+# ``installed_at`` without an offset or an over-long text rejects the whole batch, while an
+# ``install_source`` token the server does not know becomes "unknown". conform() mirrors that.
+EXTENSION_TEXT_FIELDS = ("version", "install_source", "user", "profile")
+TEXT_LIMITS = {"version": 100, "browser": 64, "user": 255, "profile": 255}
+BOOL_FIELDS = ("enabled",)
+TIMESTAMP_FIELDS = ("installed_at",)
+INSTALL_SOURCES = frozenset({"store", "user", "unpacked", "external", "policy", "component", "orphan", "unknown"})
+# A shared host (terminal server, lab image) multiplies installations by users and profiles;
+# past this ceiling one snapshot would fill the spool with inventory alone. Only a count is logged.
+MAX_EXTENSION_RECORDS_PER_SNAPSHOT = 5000
 
 
 def _handle_signal(signum, frame):
@@ -76,11 +93,13 @@ def collect_section(section: str, enabled: bool, collect) -> list[dict]:
 def unique_records(section: str, records: list[dict]) -> list[dict]:
     """Collapse records the server would store as the same observation.
 
-    Only the wire fields identify a record server-side, so an extension found
-    in several profiles or user accounts of the same host is one inventory
-    entry on the wire, and a process seen several times is one observation.
+    Only the identifying wire fields matter server-side: a process seen
+    several times is one observation, and a browser extension is one record
+    per installation (id, browser, owning user and profile), so the same
+    extension in two profiles or two user accounts of one host is two wire
+    records, while its locale-specific name or version never adds one.
     """
-    key_fields = PROCESS_KEY if section == "processes" else WIRE_FIELDS[section]
+    key_fields = {"processes": PROCESS_KEY, "extensions": EXTENSION_KEY}.get(section, WIRE_FIELDS[section])
     seen, result = set(), []
     for record in records:
         key = tuple(record.get(field) for field in key_fields)
@@ -95,17 +114,51 @@ def unique_processes(processes: list[dict]) -> list[dict]:
     return unique_records("processes", processes)
 
 
+def bound_extensions(records: list[dict]) -> list[dict]:
+    """Keep at most MAX_EXTENSION_RECORDS_PER_SNAPSHOT installations in one snapshot."""
+    if len(records) <= MAX_EXTENSION_RECORDS_PER_SNAPSHOT:
+        return records
+    logger.warning("Extension inventory truncated: %s of %s installations kept this snapshot",
+                   MAX_EXTENSION_RECORDS_PER_SNAPSHOT, len(records))
+    return records[:MAX_EXTENSION_RECORDS_PER_SNAPSHOT]
+
+
+def _aware_timestamp(value: object) -> bool:
+    """True for ISO 8601 text carrying a UTC offset, the only form the server accepts."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).tzinfo is not None
+    except ValueError:
+        return False
+
+
 def conform(record: dict) -> dict:
-    """Coerce a collected record to the API's field contract without dropping the observation."""
+    """Coerce a collected record to the API's field contract without dropping the observation.
+
+    Text becomes a string within its field limit and a bad port is dropped,
+    as before. For extension records, ``enabled`` is kept only as a real
+    boolean (else None), ``installed_at`` only as offset-aware ISO 8601 text
+    (else removed) and ``install_source`` only as a shared token (else
+    "unknown"): the server rejects the whole batch for one wrong type.
+    """
     record = dict(record)
-    for field in TEXT_FIELDS:
+    for field in (*TEXT_FIELDS, *EXTENSION_TEXT_FIELDS):
         if field in record:
             value = record[field]
-            record[field] = ("" if value is None else str(value))[:MAX_TEXT_LENGTH]
+            record[field] = ("" if value is None else str(value))[:TEXT_LIMITS.get(field, MAX_TEXT_LENGTH)]
     for field in PORT_FIELDS:
         value = record.get(field)
         if field in record and (isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 65535):
             del record[field]
+    for field in BOOL_FIELDS:
+        if field in record and not isinstance(record[field], bool):
+            record[field] = None
+    for field in TIMESTAMP_FIELDS:
+        if field in record and not _aware_timestamp(record[field]):
+            del record[field]
+    if "install_source" in record and record["install_source"] not in INSTALL_SOURCES:
+        record["install_source"] = "unknown"
     return record
 
 
@@ -335,8 +388,9 @@ def main():
 
             if config.collect_extensions:
                 extensions = collect_section("extensions", True, collect_extensions)
-                sections["extensions"] = unique_records("extensions", extensions)
-                logger.info(f"Collected {len(extensions)} browser extensions ({len(sections['extensions'])} distinct)")
+                installations = unique_records("extensions", extensions)
+                sections["extensions"] = bound_extensions(installations)
+                logger.info(f"Collected {len(extensions)} browser extensions ({len(installations)} installations)")
 
             # Send telemetry
             batches = split_batches(header, sections)

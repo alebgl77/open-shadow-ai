@@ -597,9 +597,12 @@ def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
     """Collect installed Chromium-, Firefox-family and Safari extensions for every local user.
 
     Never raises: unreadable homes, roots, profiles and manifests are counted
-    and skipped. Records carry the raw extension id, name and browser (the only
-    fields put on the wire today) plus version, permissions, profile and user
-    for local use.
+    and skipped. One record per installation: the extension id, name and
+    browser plus its version, enabled state, install source, install time
+    (Chromium only today), owning user (the home directory name) and profile
+    (the profile directory name, never a display name or signed-in account).
+    All of those go on the wire; ``permissions`` and the Safari ``host_app``
+    are for local use only and never leave the host.
     """
 
     system = platform.system()

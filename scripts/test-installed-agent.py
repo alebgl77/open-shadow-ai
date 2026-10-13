@@ -226,7 +226,21 @@ def shapes(agent) -> dict:
     assert json.loads(parent) == original
     fresh = agent.split_batches(HEADER, {section: original.get(section, []) for section in agent.SECTIONS})
     assert all(sum(len(row[section]) for section in agent.SECTIONS) <= 500 for row in fresh)
-    return {"small_exact_bytes": True, "legacy_total": 1001, "child_counts": [500, 500, 1]}
+    # Extension wire v2: one full installation record next to minimal ones, counted one-for-one.
+    inventory = {"id": "v2" * 16, "name": "Inventory", "browser": "chrome", "version": "3.1.0", "enabled": True,
+                 "install_source": "store", "installed_at": "2026-01-15T10:30:00+00:00", "user": "alice",
+                 "profile": "Default", "permissions": ["tabs"], "host_app": "local-only"}
+    [batch] = agent.split_batches(HEADER, {"extensions": [inventory, *({"id": str(i)} for i in range(249))]})
+    record, *minimal = batch["extensions"]
+    assert set(record) == set(agent.WIRE_FIELDS["extensions"]), "wire_v2_record_shape"
+    assert record["installed_at"] == inventory["installed_at"] and record["enabled"] is True
+    assert minimal == [{"id": str(i)} for i in range(249)], "minimal_records_changed"
+    payload = json.dumps(batch, ensure_ascii=False, separators=(",", ":")).encode()
+    assert "permissions" not in payload.decode() and "host_app" not in payload.decode(), "local_fields_leaked"
+    with local_receiver(agent, "wire_v2") as (url, seen):
+        assert agent.send_once(url + "/api/v1/agent/telemetry", payload, {}, True) == 250
+    assert seen == [payload], "wire_v2_bytes_changed"
+    return {"small_exact_bytes": True, "legacy_total": 1001, "child_counts": [500, 500, 1], "wire_v2_record": True}
 
 
 def utc_loop(agent, path: Path) -> dict:
