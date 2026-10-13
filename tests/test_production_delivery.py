@@ -519,6 +519,27 @@ def test_spdx_inventory_accepts_encoded_epochs_and_normalizes_python_names():
     assert SCAN.package_key("pkg:deb/debian/openssl@3.5.0-1?epoch=1&arch=arm64") == ("deb", "openssl", "1:3.5.0-1")
 
 
+def test_go_module_paths_compare_case_insensitively_between_sbom_and_trivy():
+    # Syft keeps the declared module path spelling; Trivy lower-cases it. Both must land on one key.
+    mixed = "pkg:golang/github.com/Azure/azure-sdk-for-go/sdk/azcore@v1.23.1"
+    lowered = "pkg:golang/github.com/azure/azure-sdk-for-go/sdk/azcore@v1.23.1"
+    key = ("golang", "github.com/azure/azure-sdk-for-go/sdk/azcore", "v1.23.1")
+    assert SCAN.package_key(mixed) == SCAN.package_key(lowered) == key
+    assert SCAN.package_key("pkg:golang/stdlib@go1.26.9") == ("golang", "stdlib", "v1.26.9")
+    native = "pkg:deb/debian/synthetic@1.0?arch=amd64&distro=debian-13"
+    sbom = {"packages": [{"externalRefs": [{"referenceType": "purl", "referenceLocator": purl}]}
+                         for purl in (native, mixed)]}
+    assert SCAN.spdx_inventory(sbom) == {("deb", "synthetic", "1.0"), key}
+    report = trivy_report()
+    report["Results"].append({"Target": "bin/prometheus", "Class": "lang-pkgs", "Type": "gobinary",
+                              "Packages": [{"Name": "github.com/azure/azure-sdk-for-go/sdk/azcore",
+                                            "Version": "v1.23.1", "Identifier": {"PURL": lowered}}],
+                              "Vulnerabilities": []})
+    assert SCAN.gate(report, expected={("deb", "synthetic", "1.0"), key}, image_id="sha256:" + "a" * 64,
+                     artifact="/input/runtime.oci.tar", platform="linux/amd64",
+                     reference="docker.io/library/synthetic:1.0@sha256:" + "b" * 64) == []
+
+
 def test_package_report_fields_cannot_disagree_with_inventory_purl():
     report = trivy_report()
     report["Results"][0]["Packages"][0]["Version"] = "9.0"

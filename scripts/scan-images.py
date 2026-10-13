@@ -58,8 +58,12 @@ def package_key(purl: str) -> tuple[str, str, str]:
             version = epoch + ":" + version
     elif ecosystem == "pypi":
         name = re.sub(r"[-_.]+", "-", name).lower()
-    elif ecosystem == "golang" and name == "stdlib":
-        version = re.sub(r"^(?:go|v)?(?=\d+\.\d+\.\d+$)", "v", version)
+    elif ecosystem == "golang":
+        # A Go module path is a case-insensitive identity: Syft records the declared spelling
+        # (github.com/Azure/...) while Trivy reports it lower-cased, so both compare lower-cased.
+        name = name.lower()
+        if name == "stdlib":
+            version = re.sub(r"^(?:go|v)?(?=\d+\.\d+\.\d+$)", "v", version)
     return ecosystem, name, version
 
 
