@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Browser inventory events gain per-installation state: `extension_version`, `extension_enabled`, `extension_install_source`, `extension_installed_at` and `browser_profile` on the canonical event, with network observations still rejecting them. ClickHouse migration `003_extension_inventory.sql` adds the columns; the readiness probe and the Compose health check now select `browser_profile`, so apply that migration before starting the new API, and upgrade ClickHouse, then workers, then the API, then agents. See the [upgrade procedure](docs/deployment.md#updates).
+- The agent telemetry API accepts extension wire v2: each extension record may carry `version`, `enabled`, `install_source`, `installed_at`, `user` and `profile`. Every key is optional, so v1 agents and minimal records keep validating one event per record; a wrong type rejects the batch without echoing the submitted values, an `install_source` the server does not know becomes `unknown`, and `user` is pseudonymised like process usernames. `GET /api/v1/agent/config` advertises `extension_wire: 2`.
 
 ## 0.3.0 preview — 2026-10-07
 
