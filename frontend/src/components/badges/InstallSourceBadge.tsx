@@ -16,7 +16,7 @@ const STYLES: Record<string, string> = {
 }
 const LABELS: Record<string, MessageKey> = {
   store: 'Store', user: 'User-installed', unpacked: 'Unpacked', external: 'External installer', policy: 'Policy',
-  component: 'Browser component', orphan: 'Orphan', unknown: 'Unknown source', '': 'Not reported',
+  component: 'Browser component', orphan: 'Orphan', unknown: 'Unknown source', '': 'Source not reported',
 }
 
 interface Props {

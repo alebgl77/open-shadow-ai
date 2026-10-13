@@ -122,7 +122,10 @@ describe('extension inventory view', () => {
     expect(within(rows).getByText('Enabled', { selector: 'span' })).toBeTruthy()
     expect(within(rows).getByText('Store')).toBeTruthy()
     expect(within(rows).getByText('Host-level record')).toBeTruthy()
-    expect(within(rows).getAllByText('Not reported')).toHaveLength(4)
+    expect(within(rows).getAllByText('Not reported')).toHaveLength(2)
+    // The two unreported states of a wire v1 row stay distinguishable.
+    expect(within(rows).getByText('State not reported')).toBeTruthy()
+    expect(within(rows).getByText('Source not reported')).toBeTruthy()
     expect(within(rows).getByRole('link', { name: 'Open discovery' }).getAttribute('href')).toBe('/discoveries/detection-7')
     expect(within(rows).getByText('No catalog match')).toBeTruthy()
     expect(within(rows).getByText('Absent from the latest snapshot')).toBeTruthy()
@@ -219,6 +222,16 @@ describe('extension inventory view', () => {
     expect(get).toHaveBeenCalledWith('/extensions/inventory?install_source=store&page=1&page_size=25&sort_by=last_seen_at&sort_order=desc', expect.any(Object))
     expect((screen.getByRole('combobox', { name: 'Enabled state' }) as HTMLSelectElement).value).toBe('')
     expect((screen.getByRole('combobox', { name: 'Install source' }) as HTMLSelectElement).value).toBe('store')
+  })
+
+  it('shows a multi-value install source filter from the URL instead of hiding it behind "Any source"', async () => {
+    const get = serve()
+    mount('/extensions?view=inventory&install_source=store,user')
+    await screen.findByText('Sider assistant')
+    expect(get).toHaveBeenCalledWith('/extensions/inventory?install_source=store%2Cuser&page=1&page_size=25&sort_by=last_seen_at&sort_order=desc', expect.any(Object))
+    const select = screen.getByRole('combobox', { name: 'Install source' }) as HTMLSelectElement
+    expect(select.value).toBe('store,user')
+    expect(select.selectedOptions[0].textContent).toBe('store, user')
   })
 
   it('renders empty results without claiming the absence of extensions', async () => {
@@ -384,7 +397,9 @@ describe.each(locales)('%s inventory labels', locale => {
     expect(within(rows).getByText(tr('Enabled'), { selector: 'span' })).toBeTruthy()
     expect(within(rows).getByText(tr('Store'))).toBeTruthy()
     expect(within(rows).getByText(tr('Host-level record'))).toBeTruthy()
-    expect(within(rows).getAllByText(tr('Not reported'))).toHaveLength(4)
+    expect(within(rows).getAllByText(tr('Not reported'))).toHaveLength(2)
+    expect(within(rows).getByText(tr('State not reported'))).toBeTruthy()
+    expect(within(rows).getByText(tr('Source not reported'))).toBeTruthy()
     expect(within(rows).getByText(tr('Absent from the latest snapshot'))).toBeTruthy()
     expect(within(rows).getByText('p1_alice · Default')).toBeTruthy()
     expect(screen.getByText(/p1_alice/)).toBeTruthy()

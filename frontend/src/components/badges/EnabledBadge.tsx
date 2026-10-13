@@ -8,7 +8,7 @@ const STYLES: Record<string, string> = {
   false: 'bg-slate-500/15 text-slate-400 line-through',
   unknown: 'bg-surface-700 text-slate-500',
 }
-const LABELS: Record<string, MessageKey> = { true: 'Enabled', false: 'Disabled', unknown: 'Not reported' }
+const LABELS: Record<string, MessageKey> = { true: 'Enabled', false: 'Disabled', unknown: 'State not reported' }
 
 interface Props {
   enabled: boolean | null | string

@@ -34,12 +34,12 @@ const installSourceCases = [
   ['component', 'bg-slate-500/15 text-slate-300 border border-slate-500/30', ['Browser component', 'Composant du navigateur', '浏览器组件']],
   ['orphan', 'bg-red-500/15 text-red-400 border border-red-500/30', ['Orphan', 'Orpheline', '孤立']],
   ['unknown', 'bg-slate-500/15 text-slate-400 border border-slate-500/30', ['Unknown source', 'Source inconnue', '来源未知']],
-  ['', 'bg-surface-700 text-slate-500 border border-surface-600/40', ['Not reported', 'Non rapporté', '未报告']],
+  ['', 'bg-surface-700 text-slate-500 border border-surface-600/40', ['Source not reported', 'Source non rapportée', '来源未报告']],
 ] as const
 const enabledCases = [
   [true, 'bg-emerald-500/15 text-emerald-400', ['Enabled', 'Activée', '已启用']],
   [false, 'bg-slate-500/15 text-slate-400 line-through', ['Disabled', 'Désactivée', '已禁用']],
-  [null, 'bg-surface-700 text-slate-500', ['Not reported', 'Non rapporté', '未报告']],
+  [null, 'bg-surface-700 text-slate-500', ['State not reported', 'État non rapporté', '状态未报告']],
 ] as const
 const classificationCases = [
   ['sanctioned', 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30', ['sanctioned', 'Autorisé', '已批准']],
