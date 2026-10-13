@@ -62,6 +62,8 @@ The 0.2.0 identity migration (`003`) must complete before the new API/workers st
 
 Collector hardening adds PostgreSQL migrations `004` (scoped registry/credentials) and `005` (timestamped identity membership). `init-db` applies the chain before API/worker startup. Migration `005` clears unaged historical identity arrays and counts, resets `primary_evidence` and removes `sample_values`, `sample_observations` and `network_observations` excerpts because their observation age cannot be proven; it marks risk stale while retaining detection records. Review that evidence and count reset on a restored copy. Existing shared-key clients remain compatible until you enroll scoped replacements and disable legacy access. Configure positive identity retention at most event retention, and plan explicit history/local-spool handling before enabling pseudonymization or changing the encryption key.
 
+The extension inventory adds PostgreSQL migration `006` (`006_extension_inventory`, chained after `005`), which creates `extension_inventory` (the current state of every browser extension installation per host, user, browser and profile, keyed by pseudonymous digests) and `extension_version_changes` (one row per observed version change). It only creates tables and indexes, performs no data transformation and is idempotent to re-run through Alembic; `init-db` applies it with the rest of the chain. Run it before starting the new ingest workers and API, which write to and read from these tables. Both tables hold identity-bearing rows bounded by `retention.identity_days` and are rebuilt from the agents' next inventory snapshots, so the downgrade drops them without preserving data.
+
 ```bash
 set -e
 docker compose build

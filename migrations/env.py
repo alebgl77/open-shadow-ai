@@ -9,7 +9,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from shadai.models import audit, catalog, detection, governance, user  # noqa: F401
+from shadai.models import audit, catalog, detection, extension_inventory, governance, user  # noqa: F401
 
 # Import all models so autogenerate sees them
 from shadai.models.base import Base

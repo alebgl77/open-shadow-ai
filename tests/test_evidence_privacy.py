@@ -12,11 +12,14 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from cryptography.fernet import Fernet
-from sqlalchemy import JSON, delete, func, select
+from sqlalchemy import JSON, delete, func, inspect, select
 from sqlalchemy import event as sqlalchemy_event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 from starlette.requests import Request
 
@@ -28,6 +31,14 @@ from shadai.models.catalog import CatalogItemRead
 from shadai.models.detection import DetectionORM, DetectionRead, DetectionUpdate
 from shadai.models.event import CanonicalEvent
 from shadai.models.evidence_identity import EvidenceIdentityORM
+from shadai.models.extension_inventory import (
+    INVENTORY_INSTALL_SOURCES,
+    ExtensionInventoryListResponse,
+    ExtensionInventoryORM,
+    ExtensionInventoryRead,
+    ExtensionVersionChangeORM,
+    ExtensionVersionChangeRead,
+)
 from shadai.models.governance import GovernanceORM
 from shadai.models.receipts import CorrelationReceiptORM, IngestReceiptORM
 from shadai.models.user import UserORM
@@ -52,6 +63,10 @@ async def evidence_sessions(identity_sessions, monkeypatch):
     def sqlite_advisory(connection, record):
         connection.create_function("hashtextextended", 2, lambda value, seed: 1)
         connection.create_function("pg_advisory_xact_lock", 1, lambda value: None)
+        # PostgreSQL enforces ON DELETE CASCADE; SQLite only does so with the pragma.
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
     engine = sessions.kw["bind"]
     sqlalchemy_event.listen(engine.sync_engine, "connect", sqlite_advisory)
@@ -67,6 +82,8 @@ async def evidence_sessions(identity_sessions, monkeypatch):
                     GovernanceORM.__table__,
                     CorrelationReceiptORM.__table__,
                     IngestReceiptORM.__table__,
+                    ExtensionInventoryORM.__table__,
+                    ExtensionVersionChangeORM.__table__,
                 ],
             )
         )
@@ -606,6 +623,167 @@ async def test_actual_identity_migration_clears_unaged_legacy_without_invented_d
         result = await session.get(DetectionORM, detection.detection_id)
         assert result.impacted_users_count == 0 and "Alice" not in json.dumps(result.evidence_bundle)
         assert await session.scalar(select(func.count()).select_from(EvidenceIdentityORM)) == 0
+
+
+def installation(key="a" * 64, now=datetime(2026, 10, 6, 12, tzinfo=UTC), **state):
+    values = {
+        "inventory_key": key,
+        "device_digest": "d" * 64,
+        "user_digest": "u" * 64,
+        "host_label": "p1_" + "h" * 61,
+        "user_label": "p1_" + "u" * 61,
+        "browser": "chrome",
+        "profile": "Profile 1",
+        "extension_id": "abcdefghijklmnopabcdefghijklmnop",
+        "extension_name": "Sider",
+        "version": "1.0.0",
+        "enabled": True,
+        "install_source": "store",
+        "installed_at": now - timedelta(days=3),
+        "first_seen_at": now - timedelta(days=1),
+        "last_seen_at": now,
+        "catalog_item_id": "sider",
+        "collector_id": "sensor",
+        "identity_basis": "b" * 64,
+        "last_event_id": uuid4(),
+        "wire_version": 2,
+    }
+    values.update(state)
+    return ExtensionInventoryORM(**values)
+
+
+def version_change(row, event_id=None, **state):
+    values = {
+        "inventory_key": row.inventory_key,
+        "event_id": event_id or uuid4(),
+        "extension_id": row.extension_id,
+        "extension_name": row.extension_name,
+        "browser": row.browser,
+        "host_label": row.host_label,
+        "user_label": row.user_label,
+        "profile": row.profile,
+        "from_version": "0.9.0",
+        "to_version": row.version,
+        "previous_observed_at": row.first_seen_at,
+        "observed_at": row.last_seen_at,
+        "catalog_item_id": row.catalog_item_id,
+    }
+    values.update(state)
+    return ExtensionVersionChangeORM(**values)
+
+
+def inventory_schema(conn):
+    inspector = inspect(conn)
+    return {
+        name: {
+            "columns": {column["name"]: column["nullable"] for column in inspector.get_columns(name)},
+            "indexes": {index["name"]: list(index["column_names"]) for index in inspector.get_indexes(name)},
+            "foreign_keys": inspector.get_foreign_keys(name),
+            "checks": {check["name"]: check["sqltext"] for check in inspector.get_check_constraints(name)},
+            "unique": {unique["name"]: unique["column_names"] for unique in inspector.get_unique_constraints(name)},
+        }
+        for name in inspector.get_table_names()
+        if name.startswith("extension_")
+    }
+
+
+async def test_extension_inventory_migration_matches_the_orm_and_drops_cleanly(evidence_sessions):
+    spec = importlib.util.spec_from_file_location(
+        "inventory_migration", Path("migrations/versions/006_extension_inventory.py")
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert (migration.revision, migration.down_revision) == ("006_extension_inventory", "005_evidence_identity")
+    assert ScriptDirectory.from_config(Config("alembic.ini")).get_current_head() == "006_extension_inventory"
+    assert tuple(migration.INSTALL_SOURCES) == INVENTORY_INSTALL_SOURCES
+    assert set(INVENTORY_INSTALL_SOURCES) == {
+        "", "store", "user", "unpacked", "external", "policy", "component", "orphan", "unknown"
+    }
+    engine = evidence_sessions.kw["bind"]
+
+    def run(conn, operation):
+        with Operations.context(MigrationContext.configure(conn)):
+            operation()
+
+    def upgrade(conn):
+        ExtensionVersionChangeORM.__table__.drop(conn)
+        ExtensionInventoryORM.__table__.drop(conn)
+        run(conn, migration.upgrade)
+
+    async with engine.begin() as connection:
+        await connection.run_sync(upgrade)
+        schema = await connection.run_sync(inventory_schema)
+    assert set(schema) == {"extension_inventory", "extension_version_changes"}
+    for orm in (ExtensionInventoryORM, ExtensionVersionChangeORM):
+        table = orm.__table__
+        migrated = schema[table.name]
+        assert migrated["columns"] == {column.name: column.nullable for column in table.columns}
+        assert migrated["indexes"] == {index.name: [column.name for column in index.columns] for index in table.indexes}
+    inventory, changes = schema["extension_inventory"], schema["extension_version_changes"]
+    assert inventory["checks"] == {"valid_extension_install_source": migration.INSTALL_SOURCE_CHECK}
+    assert inventory["indexes"]["idx_extension_inventory_last_seen"] == ["last_seen_at"]
+    assert changes["unique"] == {"uq_extension_version_change_event": ["event_id"]}
+    assert changes["indexes"]["idx_extension_version_changes_installation"] == ["inventory_key", "observed_at"]
+    [foreign_key] = changes["foreign_keys"]
+    assert foreign_key["referred_table"] == "extension_inventory"
+    assert foreign_key["constrained_columns"] == ["inventory_key"]
+    assert foreign_key["options"].get("ondelete", "").upper() == "CASCADE"
+    # The ORM round-trips through the migrated schema, so every mapped column exists with a compatible type.
+    row, event_id = installation(), uuid4()
+    async with evidence_sessions.begin() as session:
+        session.add(row)
+        await session.flush()
+        session.add(version_change(row, event_id))
+    async with evidence_sessions() as session:
+        stored = await session.get(ExtensionInventoryORM, row.inventory_key)
+        state = (stored.version, stored.enabled, stored.install_source, stored.wire_version)
+        assert state == ("1.0.0", True, "store", 2)
+        assert stored.last_event_id == row.last_event_id and stored.user_digest == "u" * 64
+        read = ExtensionInventoryRead.model_validate(stored)
+        assert read.present_in_latest_snapshot is True and read.detection_id is None
+        [change] = (await session.scalars(select(ExtensionVersionChangeORM))).all()
+        assert ExtensionVersionChangeRead.model_validate(change).event_id == event_id
+        assert (change.from_version, change.to_version) == ("0.9.0", "1.0.0")
+        # Agent retries carry the same event id: a change is recorded once.
+        session.add(version_change(row, event_id))
+        with pytest.raises(IntegrityError):
+            await session.flush()
+    async with evidence_sessions() as session:
+        session.add(installation(key="m" * 64, install_source="magic"))
+        with pytest.raises(IntegrityError):
+            await session.flush()
+    async with evidence_sessions.begin() as session:
+        await session.execute(delete(ExtensionInventoryORM).where(ExtensionInventoryORM.inventory_key == "a" * 64))
+    async with evidence_sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(ExtensionVersionChangeORM)) == 0
+    async with engine.begin() as connection:
+        await connection.run_sync(run, migration.downgrade)
+        assert await connection.run_sync(inventory_schema) == {}
+
+
+def test_extension_inventory_read_models_expose_labels_and_the_identity_window_only():
+    row = installation(user_label=None, user_digest=None, wire_version=1, install_source="")
+    read = ExtensionInventoryRead.model_validate(row)
+    assert read.user_label is None and read.install_source == "" and read.wire_version == 1
+    assert read.host_label == row.host_label and read.last_event_id == row.last_event_id
+    # Keyed digests and the membership basis stay inside PostgreSQL.
+    exposed = set(ExtensionInventoryRead.model_fields) | set(ExtensionVersionChangeRead.model_fields)
+    assert exposed.isdisjoint({"device_digest", "user_digest", "identity_basis"})
+    with pytest.raises(ValueError):
+        ExtensionInventoryRead.model_validate(installation(install_source="magic"))
+    response = ExtensionInventoryListResponse(
+        items=[read],
+        total=1,
+        page=1,
+        page_size=25,
+        identity_window={"days": 30, "as_of": datetime(2026, 10, 6, 12, tzinfo=UTC)},
+        identity_mode="pseudonymized",
+    )
+    assert response.identity_window.days == 30
+    with pytest.raises(ValueError):
+        ExtensionInventoryListResponse.model_validate({**response.model_dump(), "identity_window": None})
+    with pytest.raises(ValueError):
+        ExtensionInventoryListResponse.model_validate({**response.model_dump(), "identity_mode": "plain"})
 
 
 @pytest.mark.integration
