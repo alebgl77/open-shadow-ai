@@ -22,6 +22,13 @@ PRINCIPAL, SOURCE, COMPONENTS, SCAN = [load(name) for name in (
     "component_principal", "component_source", "component_scanner", "scan-images")]
 
 
+def load_models():
+    spec = importlib.util.spec_from_file_location("component_scan_models", ROOT / "tests/component_scan_models.py")
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
 def capture():
     return json.loads((ROOT / "tests/fixtures/component-scanner/clickhouse-current-amd64.json").read_bytes())
 
@@ -61,9 +68,18 @@ def matching_source_inputs(fixture, directory):
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(text.encode())
-    images = directory / "requirements/images.json"
-    images.parent.mkdir(parents=True, exist_ok=True)
-    images.write_bytes((ROOT / "requirements/images.json").read_bytes())
+    # The capture's own resolved official base/tool references replace the current pins, so the preserved
+    # historical provenance is checked against the inventory it was built from, never relabelled.
+    images = json.loads((ROOT / "requirements/images.json").read_bytes())
+    for dependency in fixture["provenance"][0]["statement"]["predicate"]["buildDefinition"].get(
+            "resolvedDependencies", []):
+        locator, _, digest = dependency["uri"].removeprefix("pkg:docker/").partition("?digest=")
+        repository, _, version = locator.rpartition("@")
+        name = next(key for key, value in images.items() if value["reference"].startswith(repository + ":"))
+        images[name]["reference"] = f"{repository}:{version}@{digest.partition('&')[0]}"
+    path = directory / "requirements/images.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(images, indent=2) + "\n")
 
 
 def bind(fixture, directory):
@@ -214,6 +230,13 @@ def test_every_real_planned_query_control_and_declared_principal_pass_actual_too
         queries.extend(query for claim in COMPONENTS.partition(fixture["sbom"], service=service,
             package_key=SCAN.package_key)["components"] for query in claim["queries"])
     assert len(queries) == 12 and "pkg:golang/github.com/tianon/gosu@1.19" in queries
+    # The Prometheus plan is projected from its synthetic model: both binaries repeat the same two queries.
+    models = load_models()
+    queries.extend(query for claim in COMPONENTS.partition(models.capture("prometheus")["sbom"], service="prometheus",
+        package_key=SCAN.package_key)["components"] for query in claim["queries"])
+    assert len(queries) == 17 and queries.count("pkg:golang/github.com/prometheus/prometheus@v0.315.0") == 2
+    assert not any(query.startswith("pkg:golang/github.com/prometheus/prometheus@3.") for query in queries)
+    assert queries.count("cpe:2.3:a:prometheus:prometheus:3.15.0:*:*:*:*:*:*:*") == 2
     for query in queries:
         runtime.validate_identifier(query)
 

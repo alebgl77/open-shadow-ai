@@ -20,6 +20,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from shadai.engine.extension_inventory import recent_version_changes, version_distribution
 from shadai.engine.governance import apply_policy
 from shadai.engine.scorer import Signal, compute_confidence, compute_risk, generate_reasoning_summary
 from shadai.models.catalog import CatalogItemRead
@@ -45,6 +46,11 @@ ENTITY_TYPE_MAP: dict[tuple[str, str], str] = {
     ("browser", "browser_extension_ai"): "browser_extension",
     ("oauth", "ai_platform"): "oauth_app",
 }
+
+
+# Entity types a network-only sighting can establish; an inventory or OAuth
+# source later names what the entity actually is.
+GENERIC_ENTITY_TYPES = frozenset({"saas_app", "api_service"})
 
 
 def _derive_entity_type(source_type: str, category: str) -> str:
@@ -92,6 +98,44 @@ class NetworkObservation(BaseModel):
         if "%" in value:
             raise ValueError("Scoped addresses are not retained")
         return str(ip_address(value)) if value else ""
+
+
+class ExtensionVersionEvidence(BaseModel):
+    """One observed version change of a catalog-matched extension, as the detection bundle keeps it.
+
+    No host, user, profile or browser value: a change says which versions and when, nothing about
+    whose installation it was. Any other key fails validation, so such entries are dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_version: str | None = Field(max_length=100)
+    to_version: str | None = Field(max_length=100)
+    observed_at: datetime
+
+    @field_validator("observed_at")
+    @classmethod
+    def observed_utc(cls, value):
+        return CanonicalEvent.timezone_required(value)
+
+
+async def _inventory_context(session, catalog_item_id: str, *, now: datetime) -> dict:
+    """Identity-free version evidence for the browser section, bounded by the identity window.
+
+    Read from the inventory the ingest worker maintains. The match is queued before the ingest
+    transaction commits, so the change an event reports may only show from the next browser event on.
+    Version churn is context for review; it never adds detection confidence.
+    """
+    changes = await recent_version_changes(session, catalog_item_id, now=now)
+    # Plain values: the bundle sanitizer validates each entry and drops one it cannot age or bound,
+    # so a malformed stored row can never fail (and endlessly retry) the correlation.
+    return {
+        "version_changes": [
+            {"from_version": change.from_version, "to_version": change.to_version, "observed_at": change.observed_at}
+            for change in changes
+        ],
+        "versions": await version_distribution(session, catalog_item_id, now=now),
+    }
 
 
 def _network_context(event: CanonicalEvent, previous: dict | None = None, *, now: datetime | None = None) -> dict:
@@ -223,6 +267,11 @@ class Correlator:
                 .limit(1)
             )
             governance = gov_result.scalar_one_or_none()
+            inventory = (
+                await _inventory_context(session, catalog_item.catalog_item_id, now=now)
+                if event.source_type == "browser"
+                else None
+            )
             gov_classification = (
                 governance.org_classification
                 if governance and governance.approval_status == "active"
@@ -240,6 +289,7 @@ class Correlator:
                     event_ts,
                     now,
                     gov_classification,
+                    inventory=inventory,
                 )
                 if governance:
                     apply_policy(detection, governance)
@@ -266,6 +316,7 @@ class Correlator:
                     event_ts,
                     now,
                     gov_classification,
+                    inventory=inventory,
                 )
                 if governance:
                     apply_policy(detection, governance)
@@ -283,6 +334,8 @@ class Correlator:
         event_ts: datetime,
         now: datetime,
         gov_classification: str | None,
+        *,
+        inventory: dict | None = None,
     ) -> DetectionORM:
         entity_type = _derive_entity_type(event.source_type, catalog_item.category)
 
@@ -348,6 +401,7 @@ class Correlator:
                         if value not in ("", None)
                         else [],
                         **(_network_context(event, now=now) if event.source_type == "network" else {}),
+                        **(inventory if inventory is not None and event.source_type == "browser" else {}),
                     },
                     "confidence_factors": conf_factors,
                     "risk_factors": risk_factors,
@@ -367,6 +421,8 @@ class Correlator:
         event_ts: datetime,
         now: datetime,
         gov_classification: str | None,
+        *,
+        inventory: dict | None = None,
     ) -> None:
         if detection.first_seen_at.tzinfo is None:
             detection.first_seen_at = detection.first_seen_at.replace(tzinfo=UTC)
@@ -381,6 +437,9 @@ class Correlator:
         if event.source_type not in current_sources:
             current_sources.append(event.source_type)
             detection.source_types = current_sources
+        derived_type = _derive_entity_type(event.source_type, detection.entity_category or "")
+        if detection.entity_type in GENERIC_ENTITY_TYPES and derived_type not in GENERIC_ENTITY_TYPES:
+            detection.entity_type = derived_type
 
         # Update evidence bundle
         bundle = sanitize_evidence(detection.evidence_bundle, now=now)
@@ -432,6 +491,9 @@ class Correlator:
             src_ev["sample_observations"] = samples + [sample]
         if event.source_type == "network":
             src_ev.update(_network_context(event, src_ev, now=now))
+        if event.source_type == "browser" and inventory is not None:
+            # Replaced, not merged: the inventory is the current state; the sanitizer ages and bounds it.
+            src_ev.update(inventory)
         bundle[event.source_type] = src_ev
         bundle = sanitize_evidence(bundle, now=now)
 
@@ -445,8 +507,9 @@ class Correlator:
                     Signal(
                         source_type=src_type,
                         confidence_base=src_data["confidence_base"],
-                        # Repeated packets are not independent evidence of AI use.
-                        event_count=0 if src_type == "network" else src_data.get("event_count", 1),
+                        # Repeated packets and repeated inventory polls (an installed
+                        # extension is reported every cycle) are not independent evidence.
+                        event_count=0 if src_type in ("network", "browser") else src_data.get("event_count", 1),
                         match_field=src_data.get("matched_field", ""),
                     )
                 )

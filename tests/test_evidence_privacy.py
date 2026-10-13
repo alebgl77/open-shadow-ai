@@ -3,20 +3,25 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from cryptography.fernet import Fernet
-from sqlalchemy import JSON, delete, func, select
+from sqlalchemy import JSON, delete, func, inspect, select
 from sqlalchemy import event as sqlalchemy_event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 from starlette.requests import Request
 
@@ -28,11 +33,19 @@ from shadai.models.catalog import CatalogItemRead
 from shadai.models.detection import DetectionORM, DetectionRead, DetectionUpdate
 from shadai.models.event import CanonicalEvent
 from shadai.models.evidence_identity import EvidenceIdentityORM
+from shadai.models.extension_inventory import (
+    INVENTORY_INSTALL_SOURCES,
+    ExtensionInventoryListResponse,
+    ExtensionInventoryORM,
+    ExtensionInventoryRead,
+    ExtensionVersionChangeORM,
+    ExtensionVersionChangeRead,
+)
 from shadai.models.governance import GovernanceORM
 from shadai.models.receipts import CorrelationReceiptORM, IngestReceiptORM
 from shadai.models.user import UserORM
-from shadai.utils.privacy import keyed_identity, refresh_identity_counts, sanitize_evidence
-from shadai.workers.purge import maintain_personal_evidence, scrub_personal_history
+from shadai.utils.privacy import IDENTITY_FIELDS, keyed_identity, refresh_identity_counts, sanitize_evidence
+from shadai.workers.purge import PERSONAL_EVENT_COLUMNS, maintain_personal_evidence, scrub_personal_history
 
 
 def observation(**kwargs):
@@ -52,6 +65,10 @@ async def evidence_sessions(identity_sessions, monkeypatch):
     def sqlite_advisory(connection, record):
         connection.create_function("hashtextextended", 2, lambda value, seed: 1)
         connection.create_function("pg_advisory_xact_lock", 1, lambda value: None)
+        # PostgreSQL enforces ON DELETE CASCADE; SQLite only does so with the pragma.
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
     engine = sessions.kw["bind"]
     sqlalchemy_event.listen(engine.sync_engine, "connect", sqlite_advisory)
@@ -67,6 +84,8 @@ async def evidence_sessions(identity_sessions, monkeypatch):
                     GovernanceORM.__table__,
                     CorrelationReceiptORM.__table__,
                     IngestReceiptORM.__table__,
+                    ExtensionInventoryORM.__table__,
+                    ExtensionVersionChangeORM.__table__,
                 ],
             )
         )
@@ -275,6 +294,81 @@ def test_legacy_shapes_and_sample_variants_fail_closed_at_exact_utc_edge():
     assert clean["endpoint"]["sample_values"] == ["Edge"]
     assert clean["network"]["network_observations"] == []
     assert "browser" not in clean and "users" not in clean and "_users" not in clean
+
+
+def test_browser_version_evidence_survives_only_well_formed_aged_and_identity_free():
+    config = get_config()
+    config.retention.identity_days = 1
+    now = datetime(2026, 10, 6, 12, tzinfo=UTC)
+    edge = now - timedelta(days=1)
+
+    def change(observed_at, **state):
+        return {"from_version": "1.0", "to_version": "1.1", "observed_at": observed_at, **state}
+
+    recent = [change((now - timedelta(minutes=index)).isoformat(), to_version=f"2.{index}") for index in range(12)]
+    browser = {
+        "first_seen": edge.isoformat(),
+        "last_seen": now.isoformat(),
+        "event_count": 150,
+        "confidence_base": 0.95,
+        "matched_field": "extension_id",
+        "version_changes": [
+            change(edge.astimezone(timezone(timedelta(hours=2))).isoformat(), to_version="edge"),
+            change((edge - timedelta(microseconds=1)).isoformat(), to_version="expired"),
+            change(edge.replace(tzinfo=None).isoformat(), to_version="unaged"),
+            change((now + timedelta(minutes=5, microseconds=1)).isoformat(), to_version="future"),
+            change(now.isoformat(), host_label="WS-ALICE-01"),
+            change(now.isoformat(), user_label="alice", profile="Profile 1"),
+            change(now.isoformat(), from_version="x" * 101),
+            change(now.isoformat(), from_version=1),
+            # An offset that pushes the instant past year 9999 in UTC is malformed, never fatal.
+            change("9999-12-31T23:59:59-14:00", to_version="overflow"),
+            {"from_version": "1.0", "observed_at": now.isoformat()},
+            "WS-ALICE-01",
+            change(now.isoformat(), from_version=None, to_version=None),
+        ],
+        "versions": {
+            "1.1": 3,
+            "": 1,
+            "boolean": True,
+            "negative": -1,
+            "zero": 0,
+            "fraction": 1.5,
+            "x" * 101: 1,
+            "nested": {"host_label": "WS-ALICE-01"},
+        },
+    }
+    clean = sanitize_evidence({"browser": browser}, now=now)
+    section = clean["browser"]
+    assert "WS-ALICE-01" not in json.dumps(clean) and "alice" not in json.dumps(clean)
+    assert section["version_changes"] == [
+        {"from_version": "1.0", "to_version": "edge", "observed_at": edge.isoformat().replace("+00:00", "Z")},
+        {"from_version": None, "to_version": None, "observed_at": now.isoformat().replace("+00:00", "Z")},
+    ]
+    assert section["versions"] == {"1.1": 3, "": 1}
+    # Polls are not independent evidence on the read path either.
+    assert "high_volume" not in {factor["factor"] for factor in clean["confidence_factors"]}
+    assert sanitize_evidence(clean, now=now) == clean
+
+    # The newest ten changes and the ten most reported versions are kept, in a stable order.
+    many = {f"1.{index}": index + 1 for index in range(12)}
+    bounded = {**browser, "version_changes": recent, "versions": many}
+    bounded = sanitize_evidence({"browser": bounded}, now=now)["browser"]
+    assert [value["to_version"] for value in bounded["version_changes"]] == [f"2.{index}" for index in range(9, -1, -1)]
+    assert bounded["versions"] == {f"1.{index}": index + 1 for index in range(11, 1, -1)}
+
+    # A distribution is as old as its section: unknown, expired or malformed ages keep nothing.
+    unaged = {key: value for key, value in browser.items() if key != "last_seen"}
+    for last_seen in ((edge - timedelta(microseconds=1)).isoformat(), edge.replace(tzinfo=None).isoformat(), 1):
+        assert sanitize_evidence({"browser": {**browser, "last_seen": last_seen}}, now=now)["browser"]["versions"] == {}
+    assert sanitize_evidence({"browser": unaged}, now=now)["browser"]["versions"] == {}
+    malformed = {**browser, "version_changes": {"a": 1}, "versions": [["1.1", 3]]}
+    malformed = sanitize_evidence({"browser": malformed}, now=now)["browser"]
+    assert (malformed["version_changes"], malformed["versions"]) == ([], {})
+
+    # Only the browser section may carry inventory evidence.
+    endpoint = sanitize_evidence({"endpoint": {**browser, "matched_field": "process_name"}}, now=now)["endpoint"]
+    assert "version_changes" not in endpoint and "versions" not in endpoint
 
 
 async def test_reads_project_current_counts_and_risk_without_orm_writes(evidence_sessions):
@@ -504,6 +598,8 @@ async def test_retained_member_sorting_pages_cutoff_and_uuid_ties(evidence_sessi
 
 
 class HistoricalClickHouse:
+    """Answers the scrub's statements and pins that each one names exactly the personal columns."""
+
     def __init__(self, count=1, *, complete=True, failure=False):
         self.ids = [str(uuid4()) for _ in range(count)]
         self.complete, self.failure, self.calls = complete, failure, []
@@ -514,9 +610,14 @@ class HistoricalClickHouse:
             if self.failure:
                 raise RuntimeError("mutation failure")
             assert kwargs["settings"] == {"mutations_sync": 2}
+            assignments = query.split(" UPDATE ", 1)[1].split(" WHERE ", 1)[0].split(", ")
+            assert assignments == [f"{name} = ''" for name in PERSONAL_EVENT_COLUMNS]
             if self.complete:
                 self.ids = [identifier for identifier in self.ids if identifier not in params["ids"]]
             return []
+        # Selection and verification use one predicate over the same columns the mutation blanks.
+        predicate = re.search(r"AND \((.*?)\)", query).group(1).split(" OR ")
+        assert predicate == [f"{name} != ''" for name in PERSONAL_EVENT_COLUMNS]
         if query.startswith("SELECT DISTINCT"):
             return [(identifier,) for identifier in self.ids[: params["limit"]]]
         selected = [identifier for identifier in self.ids if "ids" not in params or identifier in params["ids"]]
@@ -539,6 +640,22 @@ async def test_historical_cleanup_is_bounded_resumable_idempotent_and_preserves_
                 now,
                 None,
             )
+            if index == 0:
+                # Version history and per-version host counts derive from the inventory the scrub empties.
+                detection.evidence_bundle = {
+                    **detection.evidence_bundle,
+                    "browser": {
+                        "first_seen": now.isoformat(),
+                        "last_seen": now.isoformat(),
+                        "event_count": 1,
+                        "confidence_base": 0.9,
+                        "matched_field": "extension_id",
+                        "version_changes": [
+                            {"from_version": "1.0", "to_version": "1.1", "observed_at": now.isoformat()}
+                        ],
+                        "versions": {"1.1": 1},
+                    },
+                }
             session.add(detection)
             await session.flush()
             ids.append(detection.detection_id)
@@ -553,23 +670,79 @@ async def test_historical_cleanup_is_bounded_resumable_idempotent_and_preserves_
         session.add_all(
             [IngestReceiptORM(event_id=uuid4()), CorrelationReceiptORM(event_id=uuid4(), catalog_item_id="old")]
         )
+        # Installation rows name the host, the user (or none for a wire v1 row) and the profile.
+        alice = installation(key="a" * 64, user_label="Alice")
+        host = installation(key="h" * 64, user_label=None, user_digest=None, wire_version=1, install_source="")
+        session.add_all([alice, host])
+        await session.flush()
+        session.add(version_change(alice))
     ch = HistoricalClickHouse(2)
     first = await scrub_personal_history(get_config(), sessions, ch, batch_size=1, max_batches=1)
     assert first["complete"] is False and first["clickhouse_complete"] is False and first["next_detection_id"]
+    assert first["inventory_rows_scrubbed"] == 2
     second = await scrub_personal_history(
         get_config(), sessions, ch, batch_size=1, max_batches=1, after_detection_id=UUID(first["next_detection_id"])
     )
-    assert second["complete"] is True
+    assert second["complete"] is True and second["inventory_rows_scrubbed"] == 0
     repeated = await scrub_personal_history(get_config(), sessions, ch, batch_size=2, max_batches=2)
     assert repeated["complete"] is True
+    # The ClickHouse scrub blanks the profile directory name along with the identifiers.
+    assert "browser_profile != ''" in ch.calls[0][0]
+    assert "browser_profile = ''" in next(query for query, _, _ in ch.calls if query.startswith("ALTER"))
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(EvidenceIdentityORM)) == 0
+        for table in (ExtensionInventoryORM, ExtensionVersionChangeORM):
+            assert await session.scalar(select(func.count()).select_from(table)) == 0
         assert await session.scalar(select(func.count()).select_from(IngestReceiptORM)) == 1
         assert await session.scalar(select(func.count()).select_from(CorrelationReceiptORM)) == 1
         assert (await session.get(UserORM, user.user_id)).username == "Console Alice"
         for identifier in ids:
             detection = await session.get(DetectionORM, identifier)
             assert "Alice" not in json.dumps(detection.evidence_bundle) and detection.primary_evidence is None
+        browser = (await session.get(DetectionORM, ids[0])).evidence_bundle["browser"]
+        assert (browser["version_changes"], browser["versions"]) == ([], {})
+
+
+def test_personal_event_columns_cover_identity_fields_and_the_browser_profile():
+    assert set(PERSONAL_EVENT_COLUMNS) == {*IDENTITY_FIELDS, "src_ip", "browser_profile"}
+    event = CanonicalEvent(
+        tenant_id="test-org", source_type="browser", username="Alice", browser_profile="Profile 1", src_ip="192.0.2.10"
+    )
+    columns = event.to_clickhouse_dict()
+    # Every scrubbed column is a text column of the events table, so blanking it to '' is valid.
+    assert all(isinstance(columns[name], str) for name in PERSONAL_EVENT_COLUMNS)
+    assert "browser_profile" in Path("migrations/clickhouse/003_extension_inventory.sql").read_text()
+
+
+class ResumedInventoryWriter:
+    """A writer that was not quiesced: it stores an installation once the scrub has emptied the tables."""
+
+    def __init__(self, sessions):
+        self.sessions, self.written = sessions, False
+
+    def __call__(self):
+        return self.sessions()
+
+    @asynccontextmanager
+    async def begin(self):
+        async with self.sessions.begin() as session:
+            yield session
+        if not self.written:
+            self.written = True
+            async with self.sessions.begin() as session:
+                session.add(installation())
+
+
+async def test_an_installation_stored_after_the_inventory_scrub_denies_completion(evidence_sessions):
+    result = await scrub_personal_history(
+        get_config(), ResumedInventoryWriter(evidence_sessions), HistoricalClickHouse(0)
+    )
+    assert result["clickhouse_complete"] is True and result["inventory_rows_scrubbed"] == 0
+    assert result["sql_complete"] is False and result["complete"] is False and result["next_detection_id"] is None
+    async with evidence_sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(ExtensionInventoryORM)) == 1
+    again = await scrub_personal_history(get_config(), evidence_sessions, HistoricalClickHouse(0))
+    assert again["complete"] is True and again["inventory_rows_scrubbed"] == 1
 
 
 @pytest.mark.parametrize("failure", [False, True])
@@ -606,6 +779,167 @@ async def test_actual_identity_migration_clears_unaged_legacy_without_invented_d
         result = await session.get(DetectionORM, detection.detection_id)
         assert result.impacted_users_count == 0 and "Alice" not in json.dumps(result.evidence_bundle)
         assert await session.scalar(select(func.count()).select_from(EvidenceIdentityORM)) == 0
+
+
+def installation(key="a" * 64, now=datetime(2026, 10, 6, 12, tzinfo=UTC), **state):
+    values = {
+        "inventory_key": key,
+        "device_digest": "d" * 64,
+        "user_digest": "u" * 64,
+        "host_label": "p1_" + "h" * 61,
+        "user_label": "p1_" + "u" * 61,
+        "browser": "chrome",
+        "profile": "Profile 1",
+        "extension_id": "abcdefghijklmnopabcdefghijklmnop",
+        "extension_name": "Sider",
+        "version": "1.0.0",
+        "enabled": True,
+        "install_source": "store",
+        "installed_at": now - timedelta(days=3),
+        "first_seen_at": now - timedelta(days=1),
+        "last_seen_at": now,
+        "catalog_item_id": "sider",
+        "collector_id": "sensor",
+        "identity_basis": "b" * 64,
+        "last_event_id": uuid4(),
+        "wire_version": 2,
+    }
+    values.update(state)
+    return ExtensionInventoryORM(**values)
+
+
+def version_change(row, event_id=None, **state):
+    values = {
+        "inventory_key": row.inventory_key,
+        "event_id": event_id or uuid4(),
+        "extension_id": row.extension_id,
+        "extension_name": row.extension_name,
+        "browser": row.browser,
+        "host_label": row.host_label,
+        "user_label": row.user_label,
+        "profile": row.profile,
+        "from_version": "0.9.0",
+        "to_version": row.version,
+        "previous_observed_at": row.first_seen_at,
+        "observed_at": row.last_seen_at,
+        "catalog_item_id": row.catalog_item_id,
+    }
+    values.update(state)
+    return ExtensionVersionChangeORM(**values)
+
+
+def inventory_schema(conn):
+    inspector = inspect(conn)
+    return {
+        name: {
+            "columns": {column["name"]: column["nullable"] for column in inspector.get_columns(name)},
+            "indexes": {index["name"]: list(index["column_names"]) for index in inspector.get_indexes(name)},
+            "foreign_keys": inspector.get_foreign_keys(name),
+            "checks": {check["name"]: check["sqltext"] for check in inspector.get_check_constraints(name)},
+            "unique": {unique["name"]: unique["column_names"] for unique in inspector.get_unique_constraints(name)},
+        }
+        for name in inspector.get_table_names()
+        if name.startswith("extension_")
+    }
+
+
+async def test_extension_inventory_migration_matches_the_orm_and_drops_cleanly(evidence_sessions):
+    spec = importlib.util.spec_from_file_location(
+        "inventory_migration", Path("migrations/versions/006_extension_inventory.py")
+    )
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    assert (migration.revision, migration.down_revision) == ("006_extension_inventory", "005_evidence_identity")
+    assert ScriptDirectory.from_config(Config("alembic.ini")).get_current_head() == "006_extension_inventory"
+    assert tuple(migration.INSTALL_SOURCES) == INVENTORY_INSTALL_SOURCES
+    assert set(INVENTORY_INSTALL_SOURCES) == {
+        "", "store", "user", "unpacked", "external", "policy", "component", "orphan", "unknown"
+    }
+    engine = evidence_sessions.kw["bind"]
+
+    def run(conn, operation):
+        with Operations.context(MigrationContext.configure(conn)):
+            operation()
+
+    def upgrade(conn):
+        ExtensionVersionChangeORM.__table__.drop(conn)
+        ExtensionInventoryORM.__table__.drop(conn)
+        run(conn, migration.upgrade)
+
+    async with engine.begin() as connection:
+        await connection.run_sync(upgrade)
+        schema = await connection.run_sync(inventory_schema)
+    assert set(schema) == {"extension_inventory", "extension_version_changes"}
+    for orm in (ExtensionInventoryORM, ExtensionVersionChangeORM):
+        table = orm.__table__
+        migrated = schema[table.name]
+        assert migrated["columns"] == {column.name: column.nullable for column in table.columns}
+        assert migrated["indexes"] == {index.name: [column.name for column in index.columns] for index in table.indexes}
+    inventory, changes = schema["extension_inventory"], schema["extension_version_changes"]
+    assert inventory["checks"] == {"valid_extension_install_source": migration.INSTALL_SOURCE_CHECK}
+    assert inventory["indexes"]["idx_extension_inventory_last_seen"] == ["last_seen_at"]
+    assert changes["unique"] == {"uq_extension_version_change_event": ["event_id"]}
+    assert changes["indexes"]["idx_extension_version_changes_installation"] == ["inventory_key", "observed_at"]
+    [foreign_key] = changes["foreign_keys"]
+    assert foreign_key["referred_table"] == "extension_inventory"
+    assert foreign_key["constrained_columns"] == ["inventory_key"]
+    assert foreign_key["options"].get("ondelete", "").upper() == "CASCADE"
+    # The ORM round-trips through the migrated schema, so every mapped column exists with a compatible type.
+    row, event_id = installation(), uuid4()
+    async with evidence_sessions.begin() as session:
+        session.add(row)
+        await session.flush()
+        session.add(version_change(row, event_id))
+    async with evidence_sessions() as session:
+        stored = await session.get(ExtensionInventoryORM, row.inventory_key)
+        state = (stored.version, stored.enabled, stored.install_source, stored.wire_version)
+        assert state == ("1.0.0", True, "store", 2)
+        assert stored.last_event_id == row.last_event_id and stored.user_digest == "u" * 64
+        read = ExtensionInventoryRead.model_validate(stored)
+        assert read.present_in_latest_snapshot is True and read.detection_id is None
+        [change] = (await session.scalars(select(ExtensionVersionChangeORM))).all()
+        assert ExtensionVersionChangeRead.model_validate(change).event_id == event_id
+        assert (change.from_version, change.to_version) == ("0.9.0", "1.0.0")
+        # Agent retries carry the same event id: a change is recorded once.
+        session.add(version_change(row, event_id))
+        with pytest.raises(IntegrityError):
+            await session.flush()
+    async with evidence_sessions() as session:
+        session.add(installation(key="m" * 64, install_source="magic"))
+        with pytest.raises(IntegrityError):
+            await session.flush()
+    async with evidence_sessions.begin() as session:
+        await session.execute(delete(ExtensionInventoryORM).where(ExtensionInventoryORM.inventory_key == "a" * 64))
+    async with evidence_sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(ExtensionVersionChangeORM)) == 0
+    async with engine.begin() as connection:
+        await connection.run_sync(run, migration.downgrade)
+        assert await connection.run_sync(inventory_schema) == {}
+
+
+def test_extension_inventory_read_models_expose_labels_and_the_identity_window_only():
+    row = installation(user_label=None, user_digest=None, wire_version=1, install_source="")
+    read = ExtensionInventoryRead.model_validate(row)
+    assert read.user_label is None and read.install_source == "" and read.wire_version == 1
+    assert read.host_label == row.host_label and read.last_event_id == row.last_event_id
+    # Keyed digests and the membership basis stay inside PostgreSQL.
+    exposed = set(ExtensionInventoryRead.model_fields) | set(ExtensionVersionChangeRead.model_fields)
+    assert exposed.isdisjoint({"device_digest", "user_digest", "identity_basis"})
+    with pytest.raises(ValueError):
+        ExtensionInventoryRead.model_validate(installation(install_source="magic"))
+    response = ExtensionInventoryListResponse(
+        items=[read],
+        total=1,
+        page=1,
+        page_size=25,
+        identity_window={"days": 30, "as_of": datetime(2026, 10, 6, 12, tzinfo=UTC)},
+        identity_mode="pseudonymized",
+    )
+    assert response.identity_window.days == 30
+    with pytest.raises(ValueError):
+        ExtensionInventoryListResponse.model_validate({**response.model_dump(), "identity_window": None})
+    with pytest.raises(ValueError):
+        ExtensionInventoryListResponse.model_validate({**response.model_dump(), "identity_mode": "plain"})
 
 
 @pytest.mark.integration

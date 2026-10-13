@@ -12,6 +12,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 NetworkProtocol = Literal["DNS", "TLS", "QUIC", "HTTP"]
 NETWORK_PROTOCOLS = ("DNS", "TLS", "QUIC", "HTTP")
+# How a browser installation came to exist, as reported by the agent. "" means the collector
+# did not report it (wire v1); "unknown" means it reported that it could not read it.
+ExtensionInstallSource = Literal[
+    "", "store", "user", "unpacked", "external", "policy", "component", "orphan", "unknown"
+]
+EXTENSION_INSTALL_SOURCES = ("store", "user", "unpacked", "external", "policy", "component", "orphan", "unknown")
+# Browser inventory state that never belongs on a network observation.
+EXTENSION_INVENTORY_FIELDS = (
+    "extension_version", "extension_enabled", "extension_install_source", "extension_installed_at",
+    "browser_profile",
+)
 
 
 def network_hostname(value: str) -> str:
@@ -83,6 +94,13 @@ class CanonicalEvent(BaseModel):
     browser_name: str = ""
     extension_id: str = ""
     extension_name: str = ""
+    # Per-installation inventory state (wire v2): defaults mean "not reported", so v1 agents,
+    # queued v1 JSON and the generic ingest path keep validating unchanged.
+    extension_version: str = Field(default="", max_length=100)
+    extension_enabled: bool | None = None
+    extension_install_source: ExtensionInstallSource = ""
+    extension_installed_at: datetime | None = None
+    browser_profile: str = Field(default="", max_length=255)
 
     # Software/service context
     software_name: str = ""
@@ -109,9 +127,11 @@ class CanonicalEvent(BaseModel):
     identity_object_id: str = ""
     identity_sid: str = ""
 
-    @field_validator("timestamp", "normalized_at")
+    @field_validator("timestamp", "normalized_at", "extension_installed_at")
     @classmethod
     def timezone_required(cls, value):
+        if value is None:
+            return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("Timestamps require a timezone")
         return value.astimezone(UTC)
@@ -135,8 +155,10 @@ class CanonicalEvent(BaseModel):
                     "extension_name", "software_name", "service_name", "container_name", "container_image",
                     "local_port",
                     "oauth_app_id", "oauth_app_name", "oauth_scopes", "url_path", "user_agent", "raw_ref",
+                    *EXTENSION_INVENTORY_FIELDS,
                 )
-            ):
+            ) or self.extension_enabled is not None:
+                # `extension_enabled=False` is falsy but is still a browser inventory claim.
                 raise ValueError("Network observations contain only network metadata, without identity or content")
             if self.protocol not in NETWORK_PROTOCOLS:
                 raise ValueError("Network protocol must be DNS, TLS, QUIC or HTTP")

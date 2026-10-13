@@ -14,8 +14,14 @@ from shadai.database import init_clickhouse
 from shadai.models.audit import AuditLogORM
 from shadai.models.detection import DetectionORM
 from shadai.models.evidence_identity import EvidenceIdentityORM
+from shadai.models.extension_inventory import ExtensionInventoryORM, ExtensionVersionChangeORM
 from shadai.models.receipts import CorrelationReceiptORM, IngestReceiptORM
-from shadai.utils.privacy import identity_cutoff, refresh_identity_counts, sanitize_evidence
+from shadai.utils.privacy import (
+    expire_extension_inventory,
+    identity_cutoff,
+    refresh_identity_counts,
+    sanitize_evidence,
+)
 from shadai.workers.probe import ProcessProbe
 
 logger = structlog.get_logger()
@@ -64,6 +70,9 @@ async def purge_once(config, sessions, clickhouse):
                 delete(receipt).where(receipt.received_at < now - timedelta(days=config.retention.receipt_days))
             )
     await maintain_personal_evidence(config, sessions, now=now)
+    async with sessions.begin() as session:
+        # Installation rows and version history are identity evidence bounded by the same window.
+        await expire_extension_inventory(session, now=now, config=config)
 
 
 async def maintain_personal_evidence(config, sessions, *, now: datetime, batch_size: int = 500):
@@ -102,6 +111,9 @@ PERSONAL_EVENT_COLUMNS = (
     "identity_object_id",
     "identity_sid",
     "src_ip",
+    # A browser profile directory name is not an identity, but it is personal history once the
+    # identifiers it accompanied are gone. The column arrives with ClickHouse migration 003.
+    "browser_profile",
 )
 
 
@@ -152,6 +164,13 @@ async def scrub_personal_history(
         )
         ch_complete = remaining[0][0] == 0
     now, cursor, detections_count, sql_complete = datetime.now(UTC), after_detection_id, 0, False
+    async with sessions.begin() as session:
+        # Every installation row names a host and a user (plainly or as an alias) and a profile,
+        # and both tables are bounded by the identity window, so they are emptied in one step
+        # rather than paged; version history goes explicitly, not through the cascade. The
+        # inventory is rebuilt from the next snapshots.
+        await session.execute(delete(ExtensionVersionChangeORM))
+        inventory_count = (await session.execute(delete(ExtensionInventoryORM))).rowcount
     for _ in range(max_batches):
         async with sessions.begin() as session:
             query = select(DetectionORM).order_by(DetectionORM.detection_id).limit(batch_size).with_for_update()
@@ -173,6 +192,10 @@ async def scrub_personal_history(
                         continue
                     if "sample_values" in section or "sample_observations" in section:
                         section["sample_values"], section["sample_observations"] = [], []
+                    # Version history and per-version host counts derive from the inventory rows
+                    # this scrub deletes; the next browser event rebuilds them from fresh evidence.
+                    if "version_changes" in section or "versions" in section:
+                        section["version_changes"], section["versions"] = [], {}
                     for observation in section.get("network_observations", []):
                         observation["src_ip"] = ""
                 bundle["_risk_score_stale"] = True
@@ -207,7 +230,10 @@ async def scrub_personal_history(
                 )
             )
             remaining_members = await session.scalar(select(func.count()).select_from(EvidenceIdentityORM))
-            sql_complete = unclean == 0 and remaining_members == 0
+            remaining_inventory = 0
+            for table in (ExtensionInventoryORM, ExtensionVersionChangeORM):
+                remaining_inventory += await session.scalar(select(func.count()).select_from(table))
+            sql_complete = unclean == 0 and remaining_members == 0 and remaining_inventory == 0
             if not sql_complete:
                 cursor = None
     return {
@@ -216,6 +242,7 @@ async def scrub_personal_history(
         "sql_complete": sql_complete,
         "event_batches": event_batches,
         "detections_scrubbed": detections_count,
+        "inventory_rows_scrubbed": inventory_count,
         "next_detection_id": None if sql_complete or cursor is None else str(cursor),
     }
 

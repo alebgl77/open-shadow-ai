@@ -22,16 +22,20 @@ flowchart TD
     Q --> MATCH["Ingest worker + open catalog"]
     MATCH --> CH["ClickHouse: observed events"]
     MATCH --> MQ["Redis matches"]
+    MATCH --> INV["PostgreSQL extension inventory / version changes: ingest receipt transaction"]
     MQ --> COR["Correlation worker"]
     COR --> PG["PostgreSQL: detections / materialized risk / receipts"]
     PG --> MEMBERS["Per-observation identity membership / current distinct-ID projection"]
+    INV -. version evidence without identities .-> COR
     RET["Retention / explicit bounded historical scrub"] --> CH
     RET --> PG
     RET --> MEMBERS
+    RET --> INV
     OPS["Server contacts + client-reported counters / worker progress"] --> VIEW["Authorized API + evidence / operations interface"]
     CH --> VIEW
     PG --> VIEW
     MEMBERS --> VIEW
+    INV --> VIEW
 ```
 
 The diagram shows a single-organization install. It does not promise automatic identity joins or complete source coverage. AD export uses the event API; Entra can enqueue through the collector pipeline. The interface separates inventory and network observations from instrumented usage.
@@ -40,8 +44,10 @@ The [passive network collector](network-analysis.md) imports metadata files or l
 
 HTTP ingestion binds a scoped credential to an immutable collector, tenant and allowed source types. Discovery and age limits are verified and persisted before endpoint/network delivery, including after offline bootstrap. Local spools preserve stable bytes/IDs for at-least-once delivery within finite capacity and TTL; transport/capture losses remain unknown. Legacy shared-key access is explicitly unattributed and can be disabled after enrollment. Remote clients require HTTPS with certificate validation. The syslog receiver has a different trust boundary: its TCP/UDP messages are not cryptographically authenticated by the application. Restrict it to trusted network sources with firewall allowlists, and use a trusted TLS syslog relay where transport protection is required. A validated event schema does not authenticate the network sender.
 
+The ingest worker also maintains the browser extension inventory. For every browser inventory event that names an extension, matched or not, it updates one `extension_inventory` row per installation (keyed digests of tenant, device, user, browser, profile and extension; post-privacy host and user labels; the last reported version, enabled state, install source and install time) and adds an `extension_version_changes` row when the version differs. It does so after the ClickHouse insert and before queueing the match, inside the transaction that writes the ingest receipt and under an advisory lock taken after the event's own lock: a ClickHouse or queue failure rolls the inventory back with the receipt, a redelivered event changes nothing and an older event never overwrites newer state. The correlation worker reads version evidence without host, user or profile values from these tables for extension detections; the purge worker expires them with the identity window and the encryption-key basis; `/api/v1/extensions` and the console's **Inventory** and **Version changes** views read them, identity-bearing rows for analysts and administrators only. See [browser extension inventory](collectors.md#browser-extension-inventory).
+
 A directory record does not demonstrate a model call. Model identifiers, token quantities and cost metadata require an instrumented source and retain their provenance. Cost estimates must not be presented as invoices. Unknown data stays unknown.
 
-PostgreSQL stores operational state, per-observation identity membership and durable idempotency receipts; ClickHouse stores event evidence; Redis holds processing queues and retained source records plus bounded dead-letter pointers. Pending work, lag, retained entries and lifetime activity are distinct measurements. Worker progress and advisory client counters do not prove complete capture. Metrics require an administrator or an independent read-only bearer token.
+PostgreSQL stores operational state, per-observation identity membership, the browser extension inventory and durable idempotency receipts; ClickHouse stores event evidence; Redis holds processing queues and retained source records plus bounded dead-letter pointers. Pending work, lag, retained entries and lifetime activity are distinct measurements. Worker progress and advisory client counters do not prove complete capture. Metrics require an administrator or an independent read-only bearer token.
 
 Identity retention changes current counts independently of a materialized risk snapshot; `risk_score_stale` and nullable `risk_calculated_at` expose that difference. Optional server HMAC pseudonymization does not scrub history, plaintext local queues or backups. Historical maintenance requires quiescence and verified bounded mutations. Database backups must be coordinated with local spools, Redis/AOF policy and matching keys. See [collector operations](collector-operations.md), [deployment](deployment.md) and [capacity planning](capacity.md).

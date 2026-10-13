@@ -48,7 +48,11 @@ async def test_live_migration_catalog_ingestion_concurrency_and_reclaim(queue_re
     redis = queue_redis
     ch = init_clickhouse(config.database)
     # Execute the same fresh-install schema files as container initialization.
-    for path in ("docker/clickhouse-init/001_create_database.sql", "migrations/clickhouse/002_event_metadata.sql"):
+    for path in (
+        "docker/clickhouse-init/001_create_database.sql",
+        "migrations/clickhouse/002_event_metadata.sql",
+        "migrations/clickhouse/003_extension_inventory.sql",
+    ):
         for statement in Path(path).read_text().split(";"):
             if statement.strip():
                 await asyncio.to_thread(ch.execute, statement)

@@ -372,25 +372,6 @@ def test_complete_subject_and_package_inventory_passes():
                      reference="docker.io/library/synthetic:1.0@sha256:" + "b" * 64) == []
 
 
-def test_pinned_trivy_cyclonedx_schema_subject_and_inventory():
-    # Schema follows Trivy 0.75.0 sbom/io/encode.go and sbom/cyclonedx/marshal.go.
-    reference = "synthetic:1.0@sha256:" + "b" * 64
-    report = {"bomFormat": "CycloneDX", "specVersion": "1.7", "metadata": {"component": {
-        "type": "container", "name": reference, "properties": [
-            {"name": "aquasecurity:trivy:ImageID", "value": "sha256:" + "a" * 64}]}},
-        "components": [{"type": "library", "name": "synthetic", "version": "1.0",
-                        "purl": "pkg:deb/debian/synthetic@1.0?arch=amd64"}]}
-    assert SCAN.cyclone_inventory(report, reference=reference) == ({("deb", "synthetic", "1.0")}, "sha256:" + "a" * 64)
-    with pytest.raises(ValueError, match="subject mismatch"):
-        SCAN.cyclone_inventory(report, reference="other:1.0@sha256:" + "c" * 64)
-    report["components"] = [{"type": "library", "name": "stdlib", "version": "go1.26.0",
-                             "purl": "pkg:golang/stdlib@go1.26.0"}]
-    assert SCAN.cyclone_inventory(report, reference=reference)[0] == {("golang", "stdlib", "v1.26.0")}
-    report["components"] = []
-    with pytest.raises(ValueError, match="empty"):
-        SCAN.cyclone_inventory(report, reference=reference)
-
-
 @pytest.mark.parametrize("mutation", ["empty", "missing_inventory", "duplicate_target", "duplicate_package",
                                      "missing_package", "wrong_version", "wrong_image", "wrong_artifact",
                                      "wrong_platform", "wrong_reference", "wrong_schema", "wrong_scanner"])
@@ -538,6 +519,30 @@ def test_spdx_inventory_accepts_encoded_epochs_and_normalizes_python_names():
     assert SCAN.package_key("pkg:deb/debian/openssl@3.5.0-1?epoch=1&arch=arm64") == ("deb", "openssl", "1:3.5.0-1")
 
 
+def test_go_module_paths_compare_case_insensitively_between_sbom_and_trivy():
+    # Syft keeps the declared module path spelling; Trivy lower-cases it. Both must land on one key.
+    mixed = "pkg:golang/github.com/Azure/azure-sdk-for-go/sdk/azcore@v1.23.1"
+    lowered = "pkg:golang/github.com/azure/azure-sdk-for-go/sdk/azcore@v1.23.1"
+    key = ("golang", "github.com/azure/azure-sdk-for-go/sdk/azcore", "v1.23.1")
+    assert SCAN.package_key(mixed) == SCAN.package_key(lowered) == key
+    assert SCAN.package_key("pkg:golang/stdlib@go1.26.9") == ("golang", "stdlib", "v1.26.9")
+    native = "pkg:deb/debian/synthetic@1.0?arch=amd64&distro=debian-13"
+    sbom = {"packages": [{"externalRefs": [{"referenceType": "purl", "referenceLocator": purl}]}
+                         for purl in (native, mixed)]}
+    sbom["packages"][1]["name"] = "github.com/Azure/azure-sdk-for-go/sdk/azcore"
+    # Maintained runtimes carry Go modules; app images keep only their OS and Python inventory.
+    assert SCAN.spdx_inventory(sbom, service=True) == {("deb", "synthetic", "1.0"), key}
+    assert SCAN.spdx_inventory(sbom) == {("deb", "synthetic", "1.0")}
+    report = trivy_report()
+    report["Results"].append({"Target": "bin/prometheus", "Class": "lang-pkgs", "Type": "gobinary",
+                              "Packages": [{"Name": "github.com/azure/azure-sdk-for-go/sdk/azcore",
+                                            "Version": "v1.23.1", "Identifier": {"PURL": lowered}}],
+                              "Vulnerabilities": []})
+    assert SCAN.gate(report, expected={("deb", "synthetic", "1.0"), key}, image_id="sha256:" + "a" * 64,
+                     artifact="/input/runtime.oci.tar", platform="linux/amd64",
+                     reference="docker.io/library/synthetic:1.0@sha256:" + "b" * 64) == []
+
+
 def test_package_report_fields_cannot_disagree_with_inventory_purl():
     report = trivy_report()
     report["Results"][0]["Packages"][0]["Version"] = "9.0"
@@ -611,7 +616,7 @@ def maintained_export_contract(job):
     assert job["strategy"]["fail-fast"] is False
     assert job["strategy"]["matrix"] == {
         "os": ["ubuntu-latest", "ubuntu-24.04-arm"],
-        "service": ["postgres", "clickhouse", "redis", "node-exporter"],
+        "service": ["postgres", "clickhouse", "redis", "node-exporter", "prometheus"],
     }
     steps = job["steps"]
     assert all("continue-on-error" not in step for step in steps)

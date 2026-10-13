@@ -1,6 +1,11 @@
-FROM python:3.12.15-slim-trixie@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+FROM python:3.12.15-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SHADAI_INTEGRATION=1
+# DSA-6549-1: the official image still ships liblzma5 5.8.1-1+deb13u1; install the exact fixed Debian package.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends liblzma5=5.8.1-1+deb13u2 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md alembic.ini ./
 COPY src/ src/
 COPY agent/ agent/

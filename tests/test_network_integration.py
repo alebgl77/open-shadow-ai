@@ -45,7 +45,11 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     ch = init_clickhouse(config.database)
     # Apply the existing schema only; the network source introduces no database columns.
-    for path in ("docker/clickhouse-init/001_create_database.sql", "migrations/clickhouse/002_event_metadata.sql"):
+    for path in (
+        "docker/clickhouse-init/001_create_database.sql",
+        "migrations/clickhouse/002_event_metadata.sql",
+        "migrations/clickhouse/003_extension_inventory.sql",
+    ):
         for statement in Path(path).read_text().split(";"):
             if statement.strip():
                 await asyncio.to_thread(ch.execute, statement)

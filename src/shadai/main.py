@@ -21,6 +21,7 @@ from shadai.api.collectors import router as collectors_router
 from shadai.api.dashboard import router as dashboard_router
 from shadai.api.detections import router as detections_router
 from shadai.api.exports import router as exports_router
+from shadai.api.extensions import router as extensions_router
 from shadai.api.governance import router as governance_router
 from shadai.api.ingestion import router as ingestion_router
 from shadai.api.network import router as network_router
@@ -34,6 +35,10 @@ from shadai.security.crypto import init_crypto
 from shadai.security.scim import SCIMError
 from shadai.utils.logging import setup_logging
 from shadai.utils.metrics import operational_metrics
+
+# Selects the column added by the newest ClickHouse migration (003_extension_inventory.sql);
+# the Compose health check selects the same column.
+CLICKHOUSE_SCHEMA_PROBE = "SELECT event_id, evidence_type, browser_profile FROM events LIMIT 0"
 
 
 @asynccontextmanager
@@ -91,6 +96,7 @@ app.include_router(agent_router)
 app.include_router(collectors_router)
 app.include_router(ingestion_router)
 app.include_router(network_router)
+app.include_router(extensions_router)
 app.include_router(operations_router)
 app.include_router(scim_router)
 app.include_router(sso_router)
@@ -133,11 +139,10 @@ async def readiness():
     except Exception:
         checks["redis"] = False
     try:
+        # Probe the newest migrated column so a missing ClickHouse migration reports
+        # "unavailable" instead of letting ingestion retry inserts forever.
         await asyncio.wait_for(
-            asyncio.to_thread(
-                get_clickhouse().execute, "SELECT event_id, evidence_type, identity_sid FROM events LIMIT 0"
-            ),
-            timeout=5,
+            asyncio.to_thread(get_clickhouse().execute, CLICKHOUSE_SCHEMA_PROBE), timeout=5
         )
         checks["clickhouse"] = True
     except Exception:

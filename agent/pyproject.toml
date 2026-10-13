@@ -1,6 +1,6 @@
 [project]
 name = "shadai-agent"
-version = "0.1.0"
+version = "0.3.0"
 description = "ShadAI Endpoint Agent — collects process, container, local AI, and browser extension telemetry"
 requires-python = ">=3.10"
 dependencies = [

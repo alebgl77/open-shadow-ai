@@ -3,7 +3,9 @@
 The optional [monitoring overlay](../docker-compose.monitoring.yml) loads
 [alert rules](../deploy/monitoring/alerts.yaml) for the authenticated
 `open-shadow-ai` target. Follow [private token provisioning](collector-operations.md#authenticate-monitoring)
-first. Prometheus remains on the private backend network with no published port;
+first. Prometheus is the maintained 3.15.0 recipe built locally from the official
+`prom/prometheus:v3.15.0` base (`pull_policy: build`, see the maintenance notice);
+it remains on the private backend network with no published port;
 API and Prometheus retain separate private token copies and their existing UIDs.
 The overlay adds no notification service or receiver. A firing rule alone does
 not notify anybody, and these pilot defaults do not certify an SLO or capacity.

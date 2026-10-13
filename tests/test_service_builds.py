@@ -26,6 +26,13 @@ PINS = load("verify-image-pins")
 SCAN = load("scan-images")
 
 
+def load_models():
+    spec = importlib.util.spec_from_file_location("component_scan_models", ROOT / "tests/component_scan_models.py")
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
 @pytest.fixture
 def service_tree(tmp_path):
     for directory in ("requirements", "docker", "deploy/service-builds"):
@@ -50,15 +57,27 @@ def test_actual_recipes_inventory_and_deployed_roles_are_complete(service_tree):
     PINS.check_references(service_tree)
     images = PINS.inventory(service_tree)
     assert {name for name, value in images.items() if value["role"] == "derived-runtime"} == set(PINS.SERVICES)
-    assert {name for name, value in images.items() if value["role"] == "runtime"} == {"prometheus"}
+    # No externally pulled runtime remains: every deployed service image is built from a reviewed recipe.
+    assert not any(value["role"] == "runtime" for value in images.values()) and "runtime" not in PINS.ROLES.values()
     assert all("@sha256:" in value["reference"] for value in images.values() if value["role"] == "build-only")
+    assert images["prometheus-base"] == {"role": "build-only", "reference": "prom/prometheus:v3.15.0@sha256:"
+                                         "efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e"}
+    assert images["prometheus"] == {"role": "derived-runtime", "reference": "shadai/prometheus:3.15.0-maintained.2",
+                                    "dockerfile": "deploy/service-builds/Dockerfile.prometheus"}
 
 
 @pytest.mark.parametrize("mutation", ["missing_service", "missing_base", "unknown_name", "wrong_role", "missing_role",
-                                      "bad_digest", "changed_functional_version"])
+                                      "bad_digest", "changed_functional_version", "external_runtime",
+                                      "prometheus_base_deployed", "prometheus_other_release"])
 def test_inventory_cannot_omit_or_reclassify_a_runtime(mutation):
     images = copy.deepcopy(PINS.inventory())
-    if mutation == "missing_service":
+    if mutation == "external_runtime":
+        images["prometheus"] = {"role": "runtime", "reference": images["prometheus-base"]["reference"]}
+    elif mutation == "prometheus_base_deployed":
+        images["prometheus-base"]["role"] = "derived-runtime"
+    elif mutation == "prometheus_other_release":
+        images["prometheus-base"]["reference"] = "prom/prometheus:v3.16.0@sha256:" + "a" * 64
+    elif mutation == "missing_service":
         del images["postgres"]
     elif mutation == "missing_base":
         del images["postgres-base"]
@@ -79,11 +98,50 @@ def test_inventory_cannot_omit_or_reclassify_a_runtime(mutation):
 @pytest.mark.parametrize("mutation", ["missing_service", "missing_input", "missing_architecture",
                                       "wrong_apk_architecture",
                                       "wrong_apk_hash", "wrong_apk_signature", "wrong_source_hash", "wrong_source_host",
-                                      "floating_toolchain", "wrong_runtime_tag", "boolean_schema", "wrong_prefix"])
+                                      "floating_toolchain", "wrong_runtime_tag", "boolean_schema", "wrong_prefix",
+                                      "archive_extra_field", "zip_untyped", "zip_wrong_kind", "zip_wrong_h1",
+                                      "zip_wrong_module_version", "zip_wrong_hash", "zip_wrong_url", "zip_wrong_prefix",
+                                      "zip_other_commit", "zip_missing_ui", "ui_wrong_url", "ui_wrong_hash",
+                                      "ui_bool_bytes", "ui_extra_field", "prometheus_version_drift",
+                                      "prometheus_missing_notice"])
 def test_maintained_manifest_requires_exact_bound_inputs(service_tree, mutation):
     def mutate(manifest):
+        prometheus = manifest["components"]["prometheus"]
         if mutation == "missing_service":
             del manifest["services"]["redis"]
+        elif mutation == "archive_extra_field":
+            manifest["components"]["gosu"]["source_kind"] = "github-archive"
+        elif mutation == "zip_untyped":
+            del prometheus["source_kind"]
+        elif mutation == "zip_wrong_kind":
+            prometheus["source_kind"] = "github-archive"
+        elif mutation == "zip_wrong_h1":
+            prometheus["zip_h1"] = "h1:" + "A" * 43 + "="
+        elif mutation == "zip_wrong_module_version":
+            prometheus["module_version"] = "v0.316.0"
+        elif mutation == "zip_wrong_hash":
+            prometheus["source_sha256"] = "c" * 64
+        elif mutation == "zip_wrong_url":
+            prometheus["source_url"] = "https://codeload.github.com/prometheus/prometheus/tar.gz/" + \
+                prometheus["commit"]
+        elif mutation == "zip_wrong_prefix":
+            prometheus["archive_prefix"] = "prometheus-" + prometheus["commit"]
+        elif mutation == "zip_other_commit":
+            prometheus["commit"] = "d" * 40
+        elif mutation == "zip_missing_ui":
+            del prometheus["web_ui"]
+        elif mutation == "ui_wrong_url":
+            prometheus["web_ui"]["url"] = prometheus["web_ui"]["url"].replace("3.15.0.tar.gz", "3.16.0.tar.gz")
+        elif mutation == "ui_wrong_hash":
+            prometheus["web_ui"]["sha256"] = "e" * 64
+        elif mutation == "ui_bool_bytes":
+            prometheus["web_ui"]["bytes"] = True
+        elif mutation == "ui_extra_field":
+            prometheus["web_ui"]["allow_unverified"] = False
+        elif mutation == "prometheus_version_drift":
+            manifest["services"]["prometheus"]["functional_version"] = "3.15.1"
+        elif mutation == "prometheus_missing_notice":
+            del manifest["files"]["requirements/service-builds/prometheus/NOTICE"]
         elif mutation == "missing_input":
             manifest["files"].pop("requirements/service-builds/gosu/go.sum")
         elif mutation == "missing_architecture":
@@ -315,28 +373,73 @@ def test_release_sources_and_only_approved_module_difference():
     before = (directory / "upstream.go.mod").read_text()
     after = (directory / "go.mod").read_text()
     assert after == before.replace("go 1.25.0\n", "go 1.26.0\n").replace(
-        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.56.0").replace(
-        "golang.org/x/text v0.40.0", "golang.org/x/text v0.41.0")
-    added_sums = set((directory / "go.sum").read_text().splitlines()) - \
-        set((directory / "upstream.go.sum").read_text().splitlines())
-    assert len(added_sums) == 6
-    assert all(line.startswith(("golang.org/x/crypto v0.55.0", "golang.org/x/crypto v0.56.0",
-                                "golang.org/x/text v0.41.0")) for line in added_sums)
+        "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0").replace(
+        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.57.0").replace(
+        "golang.org/x/net v0.57.0", "golang.org/x/net v0.60.0").replace(
+        "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0").replace(
+        "golang.org/x/text v0.40.0", "golang.org/x/text v0.42.0")
+    maintained_sums = set((directory / "go.sum").read_text().splitlines())
+    upstream_sums = set((directory / "upstream.go.sum").read_text().splitlines())
+    added_sums = maintained_sums - upstream_sums
+    assert len(added_sums) == 10
+    assert all(line.startswith(("golang.org/x/crypto v0.57.0", "golang.org/x/net v0.60.0",
+                                "golang.org/x/sync v0.23.0", "golang.org/x/sys v0.48.0",
+                                "golang.org/x/text v0.42.0")) for line in added_sums)
+    removed_sums = upstream_sums - maintained_sums  # Only the superseded publisher versions leave the tidy graph.
+    assert len(removed_sums) == 10
+    assert all(line.startswith(("golang.org/x/crypto v0.54.0", "golang.org/x/net v0.57.0",
+                                "golang.org/x/sync v0.22.0", "golang.org/x/sys v0.47.0",
+                                "golang.org/x/text v0.40.0")) for line in removed_sums)
     gosu = ROOT / "requirements/service-builds/gosu"
     assert (gosu / "go.mod").read_text() == (gosu / "upstream.go.mod").read_text().replace(
         "go 1.20\n", "go 1.25.0\n").replace("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")
     gosu_sums = set((gosu / "go.sum").read_text().splitlines()) - \
         set((gosu / "upstream.go.sum").read_text().splitlines())
     assert len(gosu_sums) == 2 and all(line.startswith("golang.org/x/sys v0.44.0") for line in gosu_sums)
+    prometheus = ROOT / "requirements/service-builds/prometheus"
+    upstream = (prometheus / "upstream.go.mod").read_text()
+    assert "go 1.26.0\n" in upstream and "toolchain" not in upstream
+    assert (prometheus / "go.mod").read_text() == upstream.replace(
+        "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0").replace(
+        "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0").replace(
+        "golang.org/x/text v0.41.0", "golang.org/x/text v0.42.0").replace(
+        "golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.57.0").replace(
+        "golang.org/x/net v0.58.0", "golang.org/x/net v0.60.0").replace(
+        "golang.org/x/term v0.45.0", "golang.org/x/term v0.46.0")
+    added = set((prometheus / "go.sum").read_text().splitlines()) - \
+        set((prometheus / "upstream.go.sum").read_text().splitlines())
+    removed = set((prometheus / "upstream.go.sum").read_text().splitlines()) - \
+        set((prometheus / "go.sum").read_text().splitlines())
+    assert len(added) == 12 and all(line.startswith((
+        "golang.org/x/crypto v0.57.0", "golang.org/x/net v0.60.0", "golang.org/x/sync v0.23.0",
+        "golang.org/x/sys v0.48.0", "golang.org/x/term v0.46.0", "golang.org/x/text v0.42.0")) for line in added)
+    assert len(removed) == 12 and all(line.startswith((
+        "golang.org/x/crypto v0.56.0", "golang.org/x/net v0.58.0", "golang.org/x/sync v0.22.0",
+        "golang.org/x/sys v0.47.0", "golang.org/x/term v0.45.0", "golang.org/x/text v0.41.0")) for line in removed)
+    modules = (prometheus / "modules.txt").read_text().splitlines()
+    assert modules[0] == "github.com/prometheus/prometheus"
+    assert {"golang.org/x/net v0.60.0", "golang.org/x/crypto v0.57.0", "golang.org/x/sys v0.48.0",
+            "golang.org/x/text v0.42.0", "golang.org/x/term v0.46.0", "golang.org/x/sync v0.23.0"} <= set(modules)
+    assert not any(line.startswith(("golang.org/x/net v0.58.0", "golang.org/x/crypto v0.56.0")) for line in modules)
+    assert (prometheus / "LICENSE").read_text().startswith("                                 Apache License")
+    assert "Prometheus" in (prometheus / "NOTICE").read_text()
 
 
 @pytest.mark.parametrize("component,before,after", [
     ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.1.0"),
     ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.45.0"),
     ("gosu", "github.com/moby/sys/user v0.1.0", "github.com/moby/sys/user v0.2.0"),
-    ("node-exporter", "golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.55.0"),
-    ("node-exporter", "golang.org/x/text v0.41.0", "golang.org/x/text v0.42.0"),
+    ("node-exporter", "golang.org/x/crypto v0.57.0", "golang.org/x/crypto v0.56.0"),
+    ("node-exporter", "golang.org/x/net v0.60.0", "golang.org/x/net v0.57.0"),
+    ("node-exporter", "golang.org/x/sys v0.48.0", "golang.org/x/sys v0.49.0"),
+    ("node-exporter", "golang.org/x/text v0.42.0", "golang.org/x/text v0.43.0"),
     ("node-exporter", "go 1.26.0", "go 1.25.0"),
+    ("prometheus", "golang.org/x/net v0.60.0", "golang.org/x/net v0.58.0"),
+    ("prometheus", "golang.org/x/net v0.60.0", "golang.org/x/net v0.61.0"),
+    ("prometheus", "golang.org/x/crypto v0.57.0", "golang.org/x/crypto v0.56.0"),
+    ("prometheus", "golang.org/x/term v0.46.0", "golang.org/x/term v0.45.0"),
+    ("prometheus", "go 1.26.0", "go 1.27.0"),
+    ("prometheus", "github.com/prometheus/common v0.71.0", "github.com/prometheus/common v0.71.1"),
 ])
 def test_refreshed_hash_cannot_authorize_stale_or_unapproved_go_delta(service_tree, component, before, after):
     import hashlib
@@ -367,27 +470,66 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
                           "go mod verify", "go list -m all | cmp", "go build -trimpath -buildvcs=false"):
                 assert guard in recipe
             assert "USER " not in recipe  # The exact official runtime user/entrypoint is inherited.
+        if service == "prometheus":
+            # Publisher module zip authenticated by the Go checksum database, pinned by SHA256, prebuilt UI
+            # pinned by SHA256, upstream build tags and both binaries smoke-tested in the final runtime.
+            manifest = json.loads((ROOT / "requirements/service-builds/manifest.json").read_text())
+            component = manifest["components"]["prometheus"]
+            for guard in ("go mod download -json github.com/prometheus/prometheus@v0.315.0",
+                          "grep -F '\"Sum\": \"" + component["zip_h1"] + "\",'",
+                          "grep -F '\"Hash\": \"" + component["commit"] + "\",'",
+                          component["source_sha256"] + "  /go/pkg/mod/cache/download/github.com/prometheus/prometheus"
+                          "/@v/v0.315.0.zip' | sha256sum -c -",
+                          "unzip -q /go/pkg/mod/cache/download/github.com/prometheus/prometheus/@v/v0.315.0.zip",
+                          "wget -O /tmp/web-ui.tar.gz " + component["web_ui"]["url"],
+                          component["web_ui"]["sha256"] + "  /tmp/web-ui.tar.gz' | sha256sum -c -",
+                          "cp embed.go.tmpl embed.go", "gzip -c", "sort -z | xargs -0 echo //go:embed >> embed.go",
+                          "echo var EmbedFS embed.FS >> embed.go",
+                          "-tags netgo,builtinassets", "version.Version=3.15.0-shadai.2",
+                          "version.Revision=" + component["commit"], "-o /out/prometheus ./cmd/prometheus",
+                          "-o /out/promtool ./cmd/promtool", "COPY --from=build /out/prometheus /out/promtool /bin/",
+                          "COPY --from=build /src/LICENSE /src/NOTICE /usr/local/share/licenses/shadai/prometheus/",
+                          'io.shadai.maintenance.version="v3.15.0-shadai.2"',
+                          "RUN /bin/prometheus --version && /bin/promtool --version"):
+                assert guard in recipe, guard
+            assert recipe.count("go build ") == 2 and "gzip -n" not in recipe  # busybox gzip has no -n flag.
+            assert "codeload.github.com" not in recipe and "GOFLAGS=-mod=mod" not in recipe
         if service == "postgres":
             assert 'case "$(apk --print-arch)" in' in recipe and "ARG TARGETARCH" not in recipe
             assert "apk add --no-network /packages/zlib.apk" in recipe and "apk info -e 'zlib=1.3.2-r1'" in recipe
             assert "--mount=type=bind,from=build,source=/packages,target=/packages,ro" in recipe
-            assert 'gosu --version | grep -F "1.19 (go1.26.6 " && test "$(gosu nobody id -u)" = 65534' in recipe
+            assert 'gosu --version | grep -F "1.19 (go1.26.9 " && test "$(gosu nobody id -u)" = 65534' in recipe
 
 
-@pytest.mark.parametrize("version", ["go1.26.6", "1.26.6", "v1.26.6"])
+@pytest.mark.parametrize("version", ["go1.26.9", "1.26.9", "v1.26.9"])
 def test_go_standard_library_inventory_uses_one_semantic_version(version):
-    assert SCAN.package_key(f"pkg:golang/stdlib@{version}") == ("golang", "stdlib", "v1.26.6")
+    assert SCAN.package_key(f"pkg:golang/stdlib@{version}") == ("golang", "stdlib", "v1.26.9")
 
 
 def test_service_sbom_retains_entire_go_and_os_inventory():
-    purls = ["pkg:apk/alpine/libcrypto3@3.5.9-r0", "pkg:golang/stdlib@go1.26.6",
+    purls = ["pkg:apk/alpine/libcrypto3@3.5.9-r0", "pkg:golang/stdlib@go1.26.9",
              "pkg:golang/golang.org/x/crypto@v0.55.0"]
     sbom = {"packages": [{"externalRefs": [{"referenceType": "purl", "referenceLocator": p}]} for p in purls]}
+    sbom["packages"][1]["name"] = "stdlib"
+    sbom["packages"][2]["name"] = "golang.org/x/crypto"
     assert SCAN.spdx_inventory(sbom, service=True) == {SCAN.package_key(p) for p in purls}
     sbom["packages"].append({"externalRefs": [{"referenceType": "purl",
                                               "referenceLocator": "pkg:npm/unexpected@1.0.0"}]})
     with pytest.raises(ValueError, match="Unsupported"):
         SCAN.spdx_inventory(sbom, service=True)
+
+
+def test_reference_only_infrastructure_scan_no_longer_exists(tmp_path):
+    output = tmp_path / "output"
+    result = subprocess.run([sys.executable, str(ROOT / "scripts/scan-images.py"), "--infrastructure",
+                             "--platform", "linux/amd64", "--output", str(output)],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 2 and not output.exists()
+    assert "the following arguments are required: --input, --image" in result.stderr
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    assert "infrastructure-security" not in workflow["jobs"]
+    assert "infrastructure" not in json.dumps(workflow["jobs"]["signed-image-evidence"]["needs"])
+    assert "--infrastructure" not in (ROOT / ".github/workflows/ci.yml").read_text()
 
 
 def test_build_only_names_cannot_be_scanned_as_pretend_runtime(tmp_path):
@@ -446,3 +588,22 @@ def test_test_image_removes_complete_installer_after_locked_install_and_runtime_
     assert 'CMD ["python", "-m", "pytest"' in recipe
     for name in ('api', 'worker', 'collector'):
         assert 'pip uninstall' not in (ROOT / f'docker/Dockerfile.{name}').read_text()
+
+
+def test_go_purl_queries_carry_the_manifest_module_versions_of_the_reviewed_sources():
+    # Go advisory ranges are keyed by module version: github.com/prometheus/prometheus v0.315.0 is release 3.15.0,
+    # so a purl at 3.15.0 would compare above every affected range and never match; gosu and node_exporter
+    # release numbers equal their module versions. CPE queries keep the release number that NVD CPEs use.
+    scanner = load("component_scanner")
+    components = json.loads((ROOT / "requirements/service-builds/manifest.json").read_bytes())["components"]
+    assert set(scanner.MODULE_VERSIONS) == set(scanner.RELEASES) == set(components)
+    assert scanner.MODULE_VERSIONS["prometheus"] == components["prometheus"]["module_version"] == "v0.315.0"
+    assert scanner.RELEASES["prometheus"] == components["prometheus"]["tag"].removeprefix("v") == "3.15.0"
+    for name in ("gosu", "node-exporter"):
+        assert scanner.MODULE_VERSIONS[name] == scanner.RELEASES[name] == components[name]["tag"].removeprefix("v")
+    partition = scanner.partition(load_models().capture("prometheus")["sbom"], service="prometheus",
+                                  package_key=SCAN.package_key)
+    for claim in partition["components"]:
+        if claim["observed_unversioned"]:
+            assert claim["queries"][0] == "pkg:golang/github.com/prometheus/prometheus@v0.315.0"
+            assert claim["queries"][1] == "cpe:2.3:a:prometheus:prometheus:3.15.0:*:*:*:*:*:*:*"

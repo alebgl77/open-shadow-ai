@@ -2,7 +2,7 @@
 
 import json
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock
 from uuid import uuid4
@@ -20,7 +20,7 @@ from shadai.engine.catalog_loader import build_catalog_index
 from shadai.engine.correlator import Correlator, _derive_entity_type
 from shadai.engine.matcher import CatalogMatcher
 from shadai.models.catalog import CatalogItemRead
-from shadai.models.event import NETWORK_PROTOCOLS, CanonicalEvent
+from shadai.models.event import EXTENSION_INVENTORY_FIELDS, NETWORK_PROTOCOLS, CanonicalEvent
 from shadai.security.auth import get_current_user
 from shadai.workers.ingest import STREAMS, EventProcessor
 
@@ -55,6 +55,11 @@ def test_normalized_protocol_hosts_and_addresses_use_existing_columns(protocol):
     assert _derive_entity_type("network", "ai_platform") == "api_service"
     assert _derive_entity_type("network", "llm_chat") == "saas_app"
     assert set(event.to_clickhouse_dict()) == set(CanonicalEvent.model_fields) - {"privacy_stamp"}
+    assert set(EXTENSION_INVENTORY_FIELDS) == {
+        "extension_version", "extension_enabled", "extension_install_source", "extension_installed_at",
+        "browser_profile",
+    }
+    assert set(EXTENSION_INVENTORY_FIELDS) <= set(event.to_clickhouse_dict())
     event.privacy_stamp = "a" * 64
     assert "privacy_stamp" not in event.to_clickhouse_dict()
 
@@ -91,10 +96,45 @@ def test_network_address_validation(field, value):
     {"oauth_scopes": ["scope"]}, {"url_path": "/chat?secret=x"}, {"user_agent": "private-client"},
     {"raw_ref": "packet-body"}, {"collector_id": ""}, {"parser_version": "x" * 256},
     {"protocol": "tls"}, {"protocol": "TCP"}, {"packet_body": "secret"},
+    {"extension_version": "1.2.3"}, {"extension_enabled": True}, {"extension_enabled": False},
+    {"extension_install_source": "store"}, {"extension_install_source": "unknown"},
+    {"extension_installed_at": datetime(2026, 1, 1, tzinfo=UTC)}, {"browser_profile": "Default"},
 ])
 def test_network_observations_reject_identity_content_and_usage_claims(fields):
     with pytest.raises(ValidationError):
         observation(**fields)
+
+
+def test_extension_inventory_fields_are_browser_context_with_truthful_defaults():
+    for fields in ({"extension_version": "1.2.3"}, {"extension_enabled": False}, {"browser_profile": "Default"}):
+        with pytest.raises(ValidationError, match="only network metadata"):
+            observation(**fields)
+    with pytest.raises(ValidationError, match="require a timezone"):
+        CanonicalEvent(source_type="browser", extension_id="abc", extension_installed_at=datetime(2026, 1, 1))
+    for value in ("magic", "STORE", None):
+        with pytest.raises(ValidationError):
+            CanonicalEvent(source_type="browser", extension_id="abc", extension_install_source=value)
+    for fields in ({"extension_version": "x" * 101}, {"browser_profile": "x" * 256}):
+        with pytest.raises(ValidationError):
+            CanonicalEvent(source_type="browser", extension_id="abc", **fields)
+    # A wire v1 record reports nothing: "" and None are distinct from "unknown"/False.
+    unreported = CanonicalEvent(source_type="browser", extension_id="abc", extension_installed_at=None)
+    assert unreported.extension_installed_at is None and unreported.extension_enabled is None
+    assert unreported.extension_install_source == unreported.extension_version == unreported.browser_profile == ""
+    installed = datetime(2026, 1, 1, 12, tzinfo=timezone(timedelta(hours=2)))
+    reported = CanonicalEvent(
+        source_type="browser", evidence_type="inventory", extension_id="abc", extension_version="1.2.3",
+        extension_enabled=False, extension_install_source="unknown", extension_installed_at=installed,
+        browser_profile="Profile 1",
+    )
+    assert reported.extension_installed_at == datetime(2026, 1, 1, 10, tzinfo=UTC)
+    assert reported.extension_enabled is False and reported.extension_install_source == "unknown"
+    row = reported.to_clickhouse_dict()
+    assert row["extension_installed_at"] == reported.extension_installed_at and row["extension_enabled"] is False
+    assert row["extension_version"] == "1.2.3" and row["browser_profile"] == "Profile 1"
+    # Queued JSON round-trips through the workers' strict re-validation unchanged.
+    queued = CanonicalEvent.model_validate_json(reported.model_dump_json())
+    assert queued.to_clickhouse_dict() == row
 
 
 @pytest.mark.parametrize(("protocol", "fields"), [

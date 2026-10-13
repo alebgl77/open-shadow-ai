@@ -16,11 +16,11 @@ Understand which AI services and tools appear in your environment, where each si
 
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
 
-The backend is development preview **0.3.0**; the standalone endpoint agent is **0.1.0**. The English, French and Simplified Chinese handbooks provide equivalent implementation procedures. Detailed references and historical validation records retain their stated language and source-specific scope.
+The backend is development preview **0.3.0**; the standalone endpoint agent is **0.3.0** (the published `v0.3.0` prerelease ships agent 0.1.0). The English, French and Simplified Chinese handbooks provide equivalent implementation procedures. Detailed references and historical validation records retain their stated language and source-specific scope.
 
 The console offers English, French and Simplified Chinese before and after sign-in. A validated browser-local language preference is separate from authentication; English is the default when no preference is available or storage is blocked. Raw source data and machine/API identifiers retain their original values. See [language coverage](docs/README.md).
 
-These language options were introduced on `main` by [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). The published `v0.3.0` prerelease at `49a58d7` predates localization. Both source revisions declare `0.3.0`; record the exact deployed commit when checking availability and CI evidence.
+These language options were introduced on `main` by [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). The published `v0.3.0` prerelease at `49a58d7` predates localization and the extension inventory introduced by [PR #15](https://github.com/alebgl77/open-shadow-ai/pull/15). Both source revisions declare `0.3.0`; record the exact deployed commit when checking availability and CI evidence.
 
 ![Open Shadow AI investigation dashboard with synthetic demo data](docs/assets/dashboard-desktop.webp)
 
@@ -75,7 +75,7 @@ On Windows, use `./scripts/bootstrap.ps1` in place of the Bash bootstrap. Both p
 
 Wait for the new workers to initialize their actual Redis groups before reconciliation; retry if initialization is still in progress. On upgrades, stop all legacy writers/workers/replay clients before starting the indexed version. Readiness requires the reconciled retention schema. See [queue retention (English reference)](docs/queue-retention.md) and [qualification (English reference)](docs/production-qualification.md) for failure behavior and the isolated rehearsal.
 
-Open [localhost:3000](http://localhost:3000). PostgreSQL migrations run in the `migrate` service before the API starts; both ClickHouse schema files load on a fresh event-store volume. [Updating an existing installation (English reference)](docs/deployment.md#updates) requires a separate ClickHouse migration.
+Open [localhost:3000](http://localhost:3000). PostgreSQL migrations run in the `migrate` service before the API starts; the three ClickHouse schema files load on a fresh event-store volume. [Updating an existing installation (English reference)](docs/deployment.md#updates) requires separate ClickHouse migrations.
 
 Enabling collectors is deliberate:
 
@@ -99,6 +99,7 @@ Optional [OIDC sign-in and SCIM provisioning (English reference)](docs/sso-scim.
 | DNS/proxy parsers and syslog collector | Implemented; parser and listener must match the source |
 | [Passive network analysis (English reference)](docs/network-analysis.md) | Zeek/Suricata/TShark metadata imports, optional offline PCAP or explicit live sensor, and `/network` evidence view; observed names do not prove AI requests |
 | Endpoint agent | Implemented process/container/runtime/extension inventory; OS and fleet rollout verification pending |
+| Browser extension inventory | Implemented per-installation state (version, enabled, install source, user, profile) for accessible local users/profiles on agent 0.3.0 hosts, version-change history and audited export in **Extensions**; presence evidence kept for the identity window, not usage |
 | Microsoft Entra collector | Implemented service-principal inventory and optional grants; AI matching requires reviewed application-ID mappings; live tenant validation pending |
 | On-prem Active Directory | OU-scoped read-only PowerShell exporter; RSAT/live AD validation pending |
 | Generic event ingestion | Authenticated, bounded batches; custom adapters remain your integration work |
@@ -125,7 +126,7 @@ The default configuration never stores URL paths, query strings or user agents. 
 
 Per-observation identity membership expires independently (default at most 30 days); displayed counts are distinct observed identifiers, not staff headcount. Optional server pseudonymization affects new processing and does not scrub history or plaintext local spools. Risk scores retain their last calculated snapshot and expose a nullable calculation time and stale marker. Historical cleanup is an explicit bounded maintenance operation; see [identity retention and pseudonymization (English reference)](docs/collector-operations.md#retain-and-pseudonymize-identities).
 
-DNS resolution indicates contact with a domain, not a completed AI interaction. An installed extension or directory application indicates presence or permission, not usage. Model identifiers are declared evidence; token totals and costs require instrumentation. Cost calculations remain estimates unless reconciled against provider billing.
+DNS resolution indicates contact with a domain, not a completed AI interaction. An installed extension or directory application indicates presence or permission, not usage. The browser extension inventory supports incident review, not employee monitoring: its rows and export are limited to analysts and administrators, the current privacy setting applies to newly processed host/user labels while existing labels can retain their previous form until the next snapshot, and rows expire with the identity window. Model identifiers are declared evidence; token totals and costs require instrumentation. Cost calculations remain estimates unless reconciled against provider billing.
 
 Unmanaged devices, unobserved encrypted DNS, local tools, shared domains, embedded SaaS AI and gateway bypasses can leave gaps. See the [coverage guide (English reference)](docs/collectors.md) and [market analysis (English reference)](docs/market-analysis.md).
 

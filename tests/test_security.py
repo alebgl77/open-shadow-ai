@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from queue_fakes import admission_fake
 
-from shadai.api.agent import TelemetryBatch, _validate_api_key
+from shadai.api.agent import TelemetryBatch, _validate_api_key, extension_record, extension_wire_version
 from shadai.api.ingestion import EventBatch, InputEvent, prepare_event
 from shadai.config import ServerSettings, get_config, validate_security
 from shadai.models.event import CanonicalEvent
@@ -128,6 +128,94 @@ def test_measurement_unknown_stays_null():
         EventBatch(events=[])
     with pytest.raises(ValidationError):
         TelemetryBatch(hostname="a", timestamp="2026-01-01T00:00:00Z", processes=[{"name": {"bad": "value"}}])
+
+
+FULL_EXTENSION_RECORD = {
+    "id": "a" * 32,
+    "name": "AI helper",
+    "browser": "chrome",
+    "version": "1.2.3",
+    "enabled": False,
+    "install_source": "policy",
+    "installed_at": "2026-01-01T02:00:00+02:00",
+    "user": "alice",
+    "profile": "Profile 1",
+}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"extensions": [{"enabled": "yes"}]},
+        {"extensions": [{"enabled": 1}]},
+        {"extensions": [{"installed_at": "2026-01-01T00:00:00"}]},
+        {"extensions": [{"installed_at": 1767225600}]},
+        {"extensions": [{"installed_at": ""}]},
+        {"extensions": [{"installed_at": "1767225600"}]},
+        {"extensions": [{"user": "x" * 256}]},
+        {"extensions": [{"profile": "x" * 256}]},
+        {"extensions": [{"browser": "b" * 65}]},
+        {"extensions": [{"version": True}]},
+        {"extensions": [{"version": [1, 2]}]},
+        {"extensions": [{"version": "1" * 101}]},
+        {"extensions": [{"install_source": 7}]},
+        {"extensions": [{"id": "a", "name": None}]},
+        {"agent_version": "x" * 101},
+    ],
+)
+def test_extension_wire_v2_rejects_mistyped_or_unbounded_records(fields):
+    """Types are strict: the agent brings records within the contract before sending."""
+    with pytest.raises(ValidationError):
+        TelemetryBatch(hostname="a", timestamp="2026-01-01T00:00:00Z", **fields)
+
+
+def test_extension_wire_v2_accepts_minimal_lenient_and_full_records():
+    records = [
+        {"id": "a"},
+        {"id": "a", "browser": "chrome"},
+        {"id": "a", "install_source": "magic"},
+        FULL_EXTENSION_RECORD,
+        {"id": "a", "future_key": {"nested": True}},
+        # The shape released agents 0.1.0 and 0.2.0 send: version and permissions, no v2 marker.
+        {"id": "a", "name": "AI helper", "version": "1.2.3", "browser": "chrome", "permissions": ["tabs"]},
+        {"id": "a", "version": 2},
+    ]
+    batch = TelemetryBatch(
+        hostname="a", timestamp="2026-01-01T00:00:00Z", agent_version="x" * 100, extensions=records
+    )
+    # Records stay the submitted dicts, so `received` counts one event per record.
+    assert batch.extensions == records
+    assert [extension_wire_version(record) for record in records] == [1, 1, 2, 2, 1, 1, 1]
+    # A released agent copies the manifest version as is; a numeric one is still that version.
+    assert extension_record(records[5]).version == "1.2.3" and extension_record(records[6]).version == "2"
+    # Lenient on values: a token this server does not know never quarantines a snapshot.
+    assert extension_record(records[2]).install_source == "unknown"
+    minimal = extension_record(records[0])
+    assert minimal.enabled is None and minimal.installed_at is None and minimal.install_source == "unknown"
+    assert minimal.version == minimal.user == minimal.profile == minimal.browser == ""
+    full = extension_record(FULL_EXTENSION_RECORD)
+    assert full.installed_at == datetime(2026, 1, 1, tzinfo=UTC) and full.installed_at.tzinfo == UTC
+    assert full.enabled is False and full.install_source == "policy"
+    assert (full.version, full.user, full.profile) == ("1.2.3", "alice", "Profile 1")
+    zulu = extension_record({"id": "a", "installed_at": "2026-01-01T00:00:00Z"})
+    assert zulu.installed_at == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_extension_record_rejection_never_echoes_submitted_values():
+    from shadai.main import app
+
+    client = TestClient(app)
+    snapshot = {
+        "hostname": "ws-001",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "extensions": [{"id": "a", "user": "alice-private-name", "enabled": "yes"}],
+    }
+    response = client.post(
+        "/api/v1/agent/telemetry", json=snapshot, headers={"X-API-Key": get_config().security.agent_api_key}
+    )
+    assert response.status_code == 422
+    assert "alice-private-name" not in response.text
+    assert response.json()["detail"][0]["msg"] == "Value error, Invalid telemetry extension record"
 
 
 def test_api_auth_cors_size_and_error_redaction():

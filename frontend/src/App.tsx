@@ -11,7 +11,6 @@ import DemoEntry from '@/pages/DemoEntry'
 import Dashboard from '@/pages/Dashboard'
 import DiscoveryList from '@/pages/DiscoveryList'
 import DetectionDetail from '@/pages/DetectionDetail'
-import UserView from '@/pages/UserView'
 import OAuthApps from '@/pages/OAuthApps'
 import Extensions from '@/pages/Extensions'
 import LocalAI from '@/pages/LocalAI'
@@ -49,7 +48,6 @@ export default function App() {
                     <Route path="/dashboard" element={<Dashboard />} />
                     <Route path="/discoveries" element={<DiscoveryList />} />
                     <Route path="/discoveries/:id" element={<DetectionDetail />} />
-                    <Route path="/users" element={<UserView />} />
                     <Route path="/oauth-apps" element={<OAuthApps />} />
                     <Route path="/extensions" element={<Extensions />} />
                     <Route path="/local-ai" element={<LocalAI />} />

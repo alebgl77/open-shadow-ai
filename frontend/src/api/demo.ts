@@ -1,8 +1,9 @@
 import { AxiosError, AxiosHeaders, type AxiosAdapter } from 'axios'
-import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, type Detection } from './detections'
+import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, type Detection, type TimelineEntry } from './detections'
 import type { Governance, CatalogItem } from '@/types'
 import { csvCell } from '@/lib/export'
 import { NETWORK_PROTOCOLS, type NetworkEvent, type NetworkProtocol } from './network'
+import { CATALOG_MATCHES, ENABLED_STATES, IDENTITY_DAYS_DEFAULT, INSTALL_SOURCES, INVENTORY_SORT_COLUMNS, SORT_ORDERS, enabledState, type ExtensionInventoryItem, type ExtensionVersionChange, type InventorySortColumn, type StoredInstallSource } from './inventory'
 
 const NOW = Date.now()
 const ago = (hours: number) => new Date(NOW - hours * 3600000).toISOString()
@@ -38,7 +39,7 @@ let detections = seedDetections()
 let policies: Governance[] = [{ governance_id: 'demo-policy-1', target_type: 'catalog_item', target_id: 'catalog-3', org_classification: 'sanctioned', owner: 'IT governance', exception_policy: null, enforcement_mode: 'audit', justification: 'Synthetic example of an approved organizational tool.', approved_by: 'Demo reviewer', approved_at: ago(48), approved_until: null, created_by: 'demo-reviewer', created_at: ago(48), updated_at: ago(48) }]
 const audit: Array<Record<string, unknown>> = []
 export function resetDemo() { detections = seedDetections(); policies = policies.slice(0, 1); audit.length = 0 }
-const catalog: CatalogItem[] = seeds.map(([name, type, , , , , , source, sample], i) => ({ catalog_item_id: `catalog-${i + 1}`, canonical_name: name, aliases: [], category: type, vendor: name, description: 'Synthetic demo catalog entry.', domains: ['dns', 'proxy'].includes(source) ? [sample] : [], processes: source === 'endpoint' ? [name.toLowerCase()] : [], url_patterns: [], extension_ids: [], oauth_app_ids: [], local_ports: [], local_paths: [], container_patterns: [], user_agent_patterns: [], rule_tags: [], default_trust_level: 'unknown', status: 'active', source_of_truth: 'synthetic demo', local_override: false, created_at: ago(72), updated_at: ago(2) }))
+const catalog: CatalogItem[] = seeds.map(([name, type, , , , , , source, sample], i) => ({ catalog_item_id: `catalog-${i + 1}`, canonical_name: name, aliases: [], category: type, vendor: name, description: 'Synthetic demo catalog entry.', domains: ['dns', 'proxy'].includes(source) ? [sample] : [], processes: source === 'endpoint' ? [name.toLowerCase()] : [], url_patterns: [], extension_ids: source === 'browser' ? [sample] : [], oauth_app_ids: [], local_ports: [], local_paths: [], container_patterns: [], user_agent_patterns: [], rule_tags: [], default_trust_level: 'unknown', status: 'active', source_of_truth: 'synthetic demo', local_override: false, created_at: ago(72), updated_at: ago(2) }))
 
 const networkEvents: NetworkEvent[] = Array.from({ length: 36 }, (_, index) => {
   const protocol = NETWORK_PROTOCOLS[index % NETWORK_PROTOCOLS.length]
@@ -54,6 +55,122 @@ const networkEvents: NetworkEvent[] = Array.from({ length: 36 }, (_, index) => {
     catalog_match_id: matched ? `catalog-${index % 3 + 1}` : null,
   }
 })
+
+// Extension inventory: fictional hosts, opaque user aliases (as a pseudonymised deployment would show) and illustrative versions.
+const DEMO_HOSTS = ['demo-host-01', 'demo-host-02', 'demo-host-03']
+const DEMO_USERS = ['p1_4f2a9c1e7b3d', 'p1_9d0b7e2c5a81', 'p1_c37e1a8f06d4']
+const DEMO_BROWSERS = ['chrome', 'edge', 'firefox', 'safari']
+const DEMO_EXTENSIONS: Array<[string, string, boolean]> = [
+  ['demo-extension-id', 'Sider', true], ['bfnaelmomeimhlpmgjnjophhpkkoljpa', 'Grammar helper', false], ['cjpalhdlnbpafiamejdnhcphjbkeiagm', 'Tab organizer', false],
+  ['{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d}', 'Reader mode', false], ['nkbihfbeogaeaoehlefnkodbefgpgknn', 'Clipboard sync', false], ['com.example.safari.notes', 'Notes sidebar', false],
+]
+const extensionInventory: ExtensionInventoryItem[] = Array.from({ length: 24 }, (_, index) => {
+  const [extension_id, extension_name, matched] = DEMO_EXTENSIONS[index % DEMO_EXTENSIONS.length]
+  const browser = DEMO_BROWSERS[index % DEMO_BROWSERS.length]
+  const legacy = index % 11 === 10 // a host whose agent still sends wire v1 records
+  const version = legacy || index % 7 === 6 ? null : `${1 + index % 3}.${index % 5}.${index % 2}`
+  return {
+    inventory_key: (index + 1).toString(16).padStart(64, '0'), host_label: DEMO_HOSTS[index % DEMO_HOSTS.length],
+    user_label: legacy ? null : DEMO_USERS[Math.floor(index / 8)], browser, profile: legacy ? '' : index % 5 === 4 ? 'Profile 1' : 'Default',
+    extension_id, extension_name, version, enabled: legacy || index % 3 === 0 ? null : index % 3 === 1,
+    install_source: legacy ? '' : INSTALL_SOURCES[index % INSTALL_SOURCES.length],
+    installed_at: !legacy && ['chrome', 'edge'].includes(browser) ? ago(24 * (10 + index)) : null,
+    first_seen_at: ago(24 * (index % 10 + 1)), last_seen_at: ago(index % 9 === 8 ? 30 : index / 6),
+    catalog_item_id: matched ? 'catalog-6' : null, detection_id: matched ? 'demo-6' : null,
+    collector_id: `demo-agent-0${index % 3 + 1}`, last_event_id: `demo-inventory-event-${index + 1}`,
+    wire_version: legacy ? 1 : 2, present_in_latest_snapshot: index % 9 !== 8,
+  }
+})
+const extensionVersionChanges: ExtensionVersionChange[] = extensionInventory.flatMap((item, index) => item.version === null ? [] : [{
+  change_id: `demo-change-${index + 1}`, inventory_key: item.inventory_key, event_id: item.last_event_id,
+  extension_id: item.extension_id, extension_name: item.extension_name, browser: item.browser, host_label: item.host_label, user_label: item.user_label, profile: item.profile,
+  from_version: index % 6 === 0 ? null : `${1 + index % 3}.${Math.max(0, index % 5 - 1)}.0`, to_version: item.version,
+  previous_observed_at: ago(index * 9 + 12), observed_at: ago(index * 9 + .5), catalog_item_id: item.catalog_item_id,
+}])
+// What the correlator keeps for a catalog-matched extension: the newest ten changes and hosts per version, no host or user.
+function demoVersionEvidence(catalogItemId: string | null) {
+  const changes = extensionVersionChanges.filter(change => catalogItemId !== null && change.catalog_item_id === catalogItemId)
+    .sort((a, b) => b.observed_at.localeCompare(a.observed_at)).slice(0, 10)
+  const hosts = new Map<string, Set<string>>()
+  for (const item of extensionInventory.filter(row => catalogItemId !== null && row.catalog_item_id === catalogItemId)) {
+    hosts.set(item.version ?? '', (hosts.get(item.version ?? '') ?? new Set()).add(item.host_label))
+  }
+  return { changes, versions: Object.fromEntries([...hosts].map(([version, names]) => [version, names.size])) }
+}
+function withVersionEvidence(detection: Detection): Detection {
+  const browser = detection.evidence_bundle.browser
+  if (!browser || typeof browser !== 'object' || Array.isArray(browser)) return detection
+  const { changes, versions } = demoVersionEvidence(detection.catalog_item_id)
+  const version_changes = [...changes].reverse().map(({ from_version, to_version, observed_at }) => ({ from_version, to_version, observed_at }))
+  return { ...detection, evidence_bundle: { ...detection.evidence_bundle, browser: { ...browser, version_changes, versions } } }
+}
+function demoTimeline(detection: Detection): TimelineEntry[] {
+  const changes = demoVersionEvidence(detection.catalog_item_id).changes.map(change => ({
+    type: 'extension_version_change', timestamp: change.observed_at, browser: change.browser, from_version: change.from_version, to_version: change.to_version,
+    description: `${change.browser} extension updated ${change.from_version ?? 'not reported'} -> ${change.to_version ?? 'not reported'}`,
+  }))
+  return [
+    { type: 'first_seen', timestamp: detection.first_seen_at, description: 'Synthetic source signal first observed' },
+    { type: 'last_seen', timestamp: detection.last_seen_at, description: 'Most recent synthetic evidence' }, ...changes,
+  ].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+}
+const identityWindow = () => ({ days: IDENTITY_DAYS_DEFAULT, as_of: new Date().toISOString() })
+const IDENTITY_MODE = 'pseudonymized' as const
+
+function pageOf<T>(items: T[], params: URLSearchParams) {
+  const page = Math.max(1, Number(params.get('page') || 1))
+  const page_size = Math.max(1, Math.min(100, Number(params.get('page_size') || 25)))
+  return { items: items.slice((page - 1) * page_size, page * page_size), total: items.length, page, page_size }
+}
+
+function inventoryRows(params: URLSearchParams): ExtensionInventoryItem[] {
+  let items = extensionInventory
+  const host = params.get('host'); const browser = params.get('browser'); const enabled = params.get('enabled'); const source = params.get('install_source')
+  const match = params.get('catalog_match'); const id = params.get('extension_id'); const search = params.get('search')?.toLowerCase()
+  if (host) items = items.filter(item => item.host_label.toLowerCase().includes(host.toLowerCase()))
+  if (browser) items = items.filter(item => browser.split(',').includes(item.browser))
+  if (enabled) {
+    if (!(ENABLED_STATES as readonly string[]).includes(enabled)) throw new Error('Invalid inventory filter')
+    items = items.filter(item => enabledState(item.enabled) === enabled)
+  }
+  if (source) {
+    const sources = source.split(',')
+    if (sources.some(value => !(INSTALL_SOURCES as readonly string[]).includes(value))) throw new Error('Invalid install source')
+    items = items.filter(item => sources.includes(item.install_source))
+  }
+  if (match) {
+    if (!(CATALOG_MATCHES as readonly string[]).includes(match)) throw new Error('Invalid inventory filter')
+    items = items.filter(item => (item.catalog_item_id !== null) === (match === 'matched'))
+  }
+  if (id) items = items.filter(item => item.extension_id === id)
+  if (search) items = items.filter(item => item.extension_name.toLowerCase().includes(search) || item.extension_id.toLowerCase().includes(search))
+  const sort = params.get('sort_by') || 'last_seen_at'; const order = params.get('sort_order') || 'desc'
+  if (!(INVENTORY_SORT_COLUMNS as readonly string[]).includes(sort) || !(SORT_ORDERS as readonly string[]).includes(order)) throw new Error('Invalid sort')
+  const column = sort as InventorySortColumn; const direction = order === 'asc' ? 1 : -1
+  return [...items].sort((a, b) => {
+    const left = a[column]; const right = b[column]
+    if (left === null || right === null) return left === right ? 0 : left === null ? 1 : -1 // "Not reported" stays last either way
+    return String(left).localeCompare(String(right)) * direction || a.inventory_key.localeCompare(b.inventory_key)
+  })
+}
+
+function inventorySummary() {
+  const by_install_source = Object.fromEntries(['', ...INSTALL_SOURCES].map(source => [source, 0])) as Record<StoredInstallSource, number>
+  const by_browser: Record<string, number> = {}; const by_enabled = { true: 0, false: 0, unknown: 0 }
+  for (const item of extensionInventory) {
+    by_install_source[item.install_source] += 1
+    by_browser[item.browser] = (by_browser[item.browser] || 0) + 1
+    by_enabled[enabledState(item.enabled)] += 1
+  }
+  return {
+    installations: extensionInventory.length, hosts: new Set(extensionInventory.map(item => item.host_label)).size,
+    extensions: new Set(extensionInventory.map(item => item.extension_id)).size, catalog_matched: extensionInventory.filter(item => item.catalog_item_id).length,
+    by_enabled, by_browser: Object.fromEntries(Object.entries(by_browser).sort()), by_install_source,
+    version_changes_7d: extensionVersionChanges.filter(change => Date.parse(change.observed_at) >= Date.now() - 7 * 86400000).length,
+    identity_window: identityWindow(), identity_mode: IDENTITY_MODE,
+    limitations: ['These hosts, users and installations are fictional.', 'Installation is presence evidence, not usage; the inventory supports incident review, not employee monitoring.', 'Only hosts running the endpoint agent with browser collection are covered; other browsers and hosts are unknown.', 'Installations and version history are kept for the identity retention window only.'],
+  }
+}
 
 function networkInWindow(params: URLSearchParams) {
   const hours = Number(params.get('hours') || 24)
@@ -101,6 +218,31 @@ export function demoRequest(method: string, input: string, body: Record<string, 
     const page_size = Math.max(1, Math.min(100, Number(params.get('page_size') || 20)))
     return { items: events.slice((page - 1) * page_size, page * page_size), total: events.length, page, page_size }
   }
+  if (path === '/extensions/inventory/summary') return inventorySummary()
+  if (path === '/extensions/inventory') return { ...pageOf(inventoryRows(params), params), identity_window: identityWindow(), identity_mode: IDENTITY_MODE }
+  if (path.startsWith('/extensions/inventory/') && path.endsWith('/versions')) {
+    const key = decodeURIComponent(path.split('/')[3]); const installation = extensionInventory.find(item => item.inventory_key === key)
+    if (!installation) throw new Error('Demo installation not found')
+    const changes = extensionVersionChanges.filter(change => change.inventory_key === key).sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))
+    return { installation, changes, identity_window: identityWindow(), identity_mode: IDENTITY_MODE }
+  }
+  if (path === '/extensions/version-changes') {
+    const now = Date.now(); const cutoff = now - IDENTITY_DAYS_DEFAULT * 86400000
+    const bound = (name: string, fallback: number) => { const raw = params.get(name); if (!raw) return fallback; const value = Date.parse(raw); if (!Number.isFinite(value)) throw new Error('Invalid version change window'); return value }
+    const since = Math.max(bound('since', cutoff), cutoff); const until = Math.min(bound('until', now), now)
+    const browser = params.get('browser'); const host = params.get('host'); const id = params.get('extension_id')
+    const changes = extensionVersionChanges.filter(change => { const observed = Date.parse(change.observed_at); return observed >= since && observed <= until })
+      .filter(change => (!browser || browser.split(',').includes(change.browser)) && (!host || change.host_label.toLowerCase().includes(host.toLowerCase())) && (!id || change.extension_id === id))
+      .sort((a, b) => Date.parse(b.observed_at) - Date.parse(a.observed_at))
+    return { ...pageOf(changes, params), since: new Date(since).toISOString(), until: new Date(until).toISOString(), identity_window: identityWindow(), identity_mode: IDENTITY_MODE }
+  }
+  if (path === '/exports/extension-inventory' && method === 'post') {
+    const items = inventoryRows(params)
+    const filters = Object.fromEntries([...params].filter(([key]) => !['format', 'sort_by', 'sort_order'].includes(key)))
+    audit.unshift({ audit_id: String(audit.length + 1), timestamp: new Date().toISOString(), username: 'Demo reviewer', action: 'export_extension_inventory', resource_type: null, resource_id: null, ip_address: null, details: { format: 'csv', count: items.length, filters } })
+    const rows = [['host_label', 'user_label', 'browser', 'profile', 'extension_id', 'extension_name', 'version', 'enabled', 'install_source', 'installed_at', 'first_seen_at', 'last_seen_at', 'present_in_latest_snapshot', 'catalog_item_id'], ...items.map(item => [item.host_label, item.user_label ?? '', item.browser, item.profile, item.extension_id, item.extension_name, item.version ?? '', enabledState(item.enabled), item.install_source, item.installed_at ?? '', item.first_seen_at, item.last_seen_at, item.present_in_latest_snapshot, item.catalog_item_id ?? ''])]
+    return `# WARNING: Synthetic demo export. ${ANTI_HR_NOTICE}\n` + rows.map(row => row.map(csvCell).join(',')).join('\r\n')
+  }
   if (path === '/detections' && method === 'get') {
     const items = matchingDetections(params, 'last_seen_at')
     const page = Math.max(1, Number(params.get('page') || 1)); const size = Math.max(10, Math.min(100, Number(params.get('page_size') || 25)))
@@ -116,12 +258,12 @@ export function demoRequest(method: string, input: string, body: Record<string, 
   if (path.startsWith('/detections/')) {
     const id = path.split('/')[2]; const found = detections.find(d => d.detection_id === id)
     if (!found) throw new Error('Demo detection not found')
-    if (path.endsWith('/timeline')) return [{ type: 'first_seen', timestamp: found.first_seen_at, description: 'Synthetic source signal first observed' }, { type: 'last_seen', timestamp: found.last_seen_at, description: 'Most recent synthetic evidence' }]
+    if (path.endsWith('/timeline')) return demoTimeline(found)
     if (method === 'patch') {
       Object.assign(found, body, { updated_at: new Date().toISOString(), reviewed_at: new Date().toISOString() })
       audit.unshift({ audit_id: String(audit.length + 1), timestamp: new Date().toISOString(), username: 'Demo reviewer', action: 'detection.update', resource_type: 'detection', resource_id: id, ip_address: null })
     }
-    return { ...found }
+    return withVersionEvidence({ ...found })
   }
   if (path === '/catalog') return catalog.filter(item => !params.get('search') || item.canonical_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
   if (path === '/governance') {

@@ -276,10 +276,19 @@ def test_snapshot_wire_allowlist_discards_raw_paths_and_ignored_data():
         "model_files": [{"path": "/private/model.gguf"}],
         "containers": [{"name": "local", "image": "ollama:latest", "mounts": "/secret/path"}],
         "local_ai_hits": [{"process_name": "ollama", "tool_name": "Ollama", "url": "/secret"}],
+        "extensions": [{"id": "a" * 32, "name": "Tidy", "browser": "chrome", "version": "1.0", "enabled": True,
+                        "install_source": "store", "installed_at": "2026-01-15T10:30:00+00:00", "user": "alice",
+                        "profile": "Default", "permissions": ["<all_urls>", "tabs"], "host_app": "Tidy.app",
+                        "path": "/secret/extension"}],
     })
     encoded = json.dumps(batch)
     assert "secret" not in encoded and "model_files" not in encoded and "prompt" not in encoded
+    assert "permissions" not in encoded and "host_app" not in encoded and "all_urls" not in encoded
     assert batch["processes"] == [{"name": "ollama"}]
+    assert batch["extensions"] == [{"id": "a" * 32, "name": "Tidy", "browser": "chrome", "version": "1.0",
+                                    "enabled": True, "install_source": "store",
+                                    "installed_at": "2026-01-15T10:30:00+00:00", "user": "alice",
+                                    "profile": "Default"}]
 
 
 @pytest.mark.parametrize("status", [301, 403, 422])

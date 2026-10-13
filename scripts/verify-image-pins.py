@@ -16,17 +16,40 @@ ACCEPT = ", ".join(
         "application/vnd.docker.distribution.manifest.list.v2+json",
     ]
 )
-SERVICES = ("postgres", "clickhouse", "redis", "node-exporter")
+SERVICES = ("postgres", "clickhouse", "redis", "node-exporter", "prometheus")
 APP_IMAGES = ("api", "worker", "collector", "test", "frontend")
 BUILD_IMAGES = ("python", "node", "nginx", "trivy", "buildkit", "sbom-generator", "golang",
-                "postgres-base", "clickhouse-base", "redis-base", "node-exporter-base")
-ROLES = {**dict.fromkeys(BUILD_IMAGES, "build-only"), "prometheus": "runtime",
-         **dict.fromkeys(SERVICES, "derived-runtime")}
-VERSIONS = {"postgres": "16.15", "clickhouse": "25.8.33.6", "redis": "7.4.11", "node-exporter": "1.12.1"}
+                "postgres-base", "clickhouse-base", "redis-base", "node-exporter-base", "prometheus-base")
+ROLES = {**dict.fromkeys(BUILD_IMAGES, "build-only"), **dict.fromkeys(SERVICES, "derived-runtime")}
+VERSIONS = {"postgres": "16.15", "clickhouse": "25.8.33.6", "redis": "7.4.11", "node-exporter": "1.12.1",
+            "prometheus": "3.15.0"}
 SERVICE_BASES = {"postgres-base": "postgres:16.15-alpine3.24",
                  "clickhouse-base": "clickhouse/clickhouse-server:25.8.33.6-alpine",
                  "redis-base": "redis:7.4.11-alpine3.21",
-                 "node-exporter-base": "quay.io/prometheus/node-exporter:v1.12.1"}
+                 "node-exporter-base": "quay.io/prometheus/node-exporter:v1.12.1",
+                 "prometheus-base": "prom/prometheus:v3.15.0"}
+GO_COMPONENTS = ("gosu", "node-exporter", "prometheus")
+# Every Go source is an exact publisher release commit. gosu and node_exporter are bound to the
+# GitHub release archive; Prometheus is bound to the publisher's Go module zip, which the Go
+# checksum database authenticates (h1) and which is additionally pinned by its SHA256 bytes.
+GITHUB_ARCHIVES = {"gosu": ("tianon/gosu", "1.19"), "node-exporter": ("prometheus/node_exporter", "v1.12.1")}
+GO_MODULE_ZIPS = {"prometheus": ("prometheus/prometheus", "v3.15.0", "v0.315.0")}
+GO_MODULE_FIELDS = {"source_kind", "repository", "tag", "commit", "module", "module_version", "zip_h1",
+                    "source_url", "source_sha256", "archive_prefix", "web_ui"}
+GO_DELTAS = {
+    "gosu": (("go 1.20\n", "go 1.25.0\n"), ("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")),
+    "node-exporter": (("go 1.25.0\n", "go 1.26.0\n"), ("golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0"),
+                      ("golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.57.0"),
+                      ("golang.org/x/net v0.57.0", "golang.org/x/net v0.60.0"),
+                      ("golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0"),
+                      ("golang.org/x/text v0.40.0", "golang.org/x/text v0.42.0")),
+    "prometheus": (("golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0"),
+                   ("golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0"),
+                   ("golang.org/x/text v0.41.0", "golang.org/x/text v0.42.0"),
+                   ("golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.57.0"),
+                   ("golang.org/x/net v0.58.0", "golang.org/x/net v0.60.0"),
+                   ("golang.org/x/term v0.45.0", "golang.org/x/term v0.46.0")),
+}
 APK_VERSIONS = {"postgres": ("v3.24", {"zlib": "1.3.2-r1"}),
                 "clickhouse": ("v3.24", {"libcrypto3": "3.5.9-r0", "libssl3": "3.5.9-r0", "zlib": "1.3.2-r1"}),
                 "redis": ("v3.21", {"libcrypto3": "3.3.7-r2", "libssl3": "3.3.7-r2", "zlib": "1.3.2-r1"})}
@@ -77,13 +100,14 @@ def check_service_builds(root: Path, images: dict) -> dict:
     manifest = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_service_manifest_object)
     if not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or \
             type(manifest.get("recipe_version")) is not int or \
-            manifest.get("schema") != 1 or manifest.get("recipe_version") != 1 or \
+            manifest.get("schema") != 1 or manifest.get("recipe_version") != 2 or \
             set(manifest.get("services", {})) != set(SERVICES):
         raise ValueError("Incomplete or unknown maintained service manifest")
     files = {f"requirements/service-builds/{component}/{name}"
-             for component in ("gosu", "node-exporter")
+             for component in GO_COMPONENTS
              for name in ("go.mod", "go.sum", "modules.txt", "LICENSE", "go.mod.diff",
                           "upstream.go.mod", "upstream.go.sum")}
+    files.add("requirements/service-builds/prometheus/NOTICE")
     files |= {images[name]["dockerfile"] for name in SERVICES}
     files |= {"requirements/service-builds/.gitattributes", "deploy/service-builds/.gitattributes",
               "requirements/service-builds/NOTICE.md"}
@@ -99,12 +123,12 @@ def check_service_builds(root: Path, images: dict) -> dict:
         if version != VERSIONS[name] or service.get("base") != name + "-base" or \
                 service.get("dockerfile") != images[name]["dockerfile"] or \
                 service.get("runtime_tag") != images[name]["reference"] or \
-                images[name]["reference"] != f"shadai/{name}:{version}-maintained.1":
+                images[name]["reference"] != f"shadai/{name}:{version}-maintained.2":
             raise ValueError(f"Maintained service recipe/reference mismatch: {name}")
-    if manifest.get("toolchain") != {"version": "go1.26.6", "image": "golang", "goproxy": "https://proxy.golang.org",
+    if manifest.get("toolchain") != {"version": "go1.26.9", "image": "golang", "goproxy": "https://proxy.golang.org",
                                      "gosumdb": "sum.golang.org", "gotoolchain": "local"}:
         raise ValueError("Maintained Go toolchain or checksum database mismatch")
-    if not images["golang"]["reference"].startswith("golang:1.26.6-alpine3.24@sha256:"):
+    if not images["golang"]["reference"].startswith("golang:1.26.9-alpine3.24@sha256:"):
         raise ValueError("Maintained Go image must use the exact approved compiler version")
     recipes = {name: (root / images[name]["dockerfile"]).read_text(encoding="utf-8") for name in SERVICES}
     for name, recipe in recipes.items():
@@ -112,30 +136,63 @@ def check_service_builds(root: Path, images: dict) -> dict:
         if bases != [images["golang"]["reference"], images[name + "-base"]["reference"]]:
             raise ValueError("Maintained recipe must use its exact compiler/fetch and service base images")
     components = manifest.get("components", {})
-    if set(components) != {"gosu", "node-exporter"}:
+    if type(components) is not dict or set(components) != set(GO_COMPONENTS):
         raise ValueError("Incomplete maintained source inventory")
-    for name, repository, tag in (("gosu", "tianon/gosu", "1.19"),
-                                  ("node-exporter", "prometheus/node_exporter", "v1.12.1")):
+    for name in GO_COMPONENTS:
         component = components[name]
+        if type(component) is not dict or any(type(key) is not str for key in component) or \
+                any(type(component[key]) is not str for key in component if key != "web_ui"):
+            raise ValueError("Maintained source inventory requires typed string fields")
         commit = component.get("commit", "")
-        if component.get("repository") != repository or component.get("tag") != tag or \
-                not re.fullmatch(r"[a-f0-9]{40}", commit) or \
-                component.get("source_url") != f"https://codeload.github.com/{repository}/tar.gz/{commit}" or \
-                component.get("archive_prefix") != repository.rsplit("/", 1)[1] + "-" + commit or \
-                not re.fullmatch(r"[a-f0-9]{64}", component.get("source_sha256", "")):
-            raise ValueError("Maintained source must be an exact publisher release commit and archive SHA256")
+        bound = [component.get("source_sha256", "")]
+        if name in GITHUB_ARCHIVES:
+            repository, tag = GITHUB_ARCHIVES[name]
+            if set(component) != {"repository", "tag", "commit", "source_url", "source_sha256", "archive_prefix"} or \
+                    component["repository"] != repository or component["tag"] != tag or \
+                    not re.fullmatch(r"[a-f0-9]{40}", commit) or \
+                    component["source_url"] != f"https://codeload.github.com/{repository}/tar.gz/{commit}" or \
+                    component["archive_prefix"] != repository.rsplit("/", 1)[1] + "-" + commit or \
+                    not re.fullmatch(r"[a-f0-9]{64}", component["source_sha256"]):
+                raise ValueError("Maintained source must be an exact publisher release commit and archive SHA256")
+            bound.append(component["source_url"])
+        else:
+            repository, tag, module_version = GO_MODULE_ZIPS[name]
+            module = "github.com/" + repository
+            if set(component) != GO_MODULE_FIELDS or component["source_kind"] != "go-module-zip" or \
+                    component["repository"] != repository or component["tag"] != tag or \
+                    not re.fullmatch(r"[a-f0-9]{40}", commit) or component["module"] != module or \
+                    component["module_version"] != module_version or \
+                    not re.fullmatch(r"h1:[A-Za-z0-9+/]{43}=", component["zip_h1"]) or \
+                    component["source_url"] != f"https://proxy.golang.org/{module}/@v/{module_version}.zip" or \
+                    not re.fullmatch(r"[a-f0-9]{64}", component["source_sha256"]) or \
+                    component["archive_prefix"] != f"{module}@{module_version}":
+                raise ValueError("Maintained module source must be an exact publisher release commit, checksum "
+                                 "database hash and zip SHA256")
+            web_ui = component["web_ui"]
+            if type(web_ui) is not dict or any(type(key) is not str for key in web_ui) or \
+                    set(web_ui) != {"url", "sha256", "bytes"} or type(web_ui["url"]) is not str or \
+                    type(web_ui["sha256"]) is not str or type(web_ui["bytes"]) is not int or \
+                    web_ui["url"] != (f"https://github.com/{repository}/releases/download/{tag}/"
+                                      f"prometheus-web-ui-{tag[1:]}.tar.gz") or \
+                    not re.fullmatch(r"[a-f0-9]{64}", web_ui["sha256"]) or web_ui["bytes"] <= 0:
+                raise ValueError("Maintained web UI assets must be the publisher's release asset pinned by SHA256")
+            # The recipe compares the proxy's reported checksum-database hash and origin commit, then the
+            # exact zip bytes, before unpacking; every one of those literals must be the manifest's.
+            bound += [f"{module}@{module_version}", f'"Sum": "{component["zip_h1"]}",', f'"Hash": "{commit}",',
+                      component["archive_prefix"], f"/go/pkg/mod/cache/download/{module}/@v/{module_version}.zip",
+                      web_ui["url"], web_ui["sha256"]]
         directory = root / "requirements/service-builds" / name
         upstream = (directory / "upstream.go.mod").read_text(encoding="utf-8")
         maintained = (directory / "go.mod").read_text(encoding="utf-8")
-        expected = upstream.replace("go 1.20\n", "go 1.25.0\n").replace(
-            "golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0"
-        ) if name == "gosu" else upstream.replace("go 1.25.0\n", "go 1.26.0\n").replace(
-            "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.56.0"
-        ).replace("golang.org/x/text v0.40.0", "golang.org/x/text v0.41.0")
+        expected = upstream
+        for before, after in GO_DELTAS[name]:
+            if before not in upstream:
+                raise ValueError("Approved targeted dependency update does not apply to the upstream module file")
+            expected = expected.replace(before, after)
         if maintained != expected:
             raise ValueError("Maintained module changes exceed the approved targeted dependency updates")
         recipe = recipes["postgres" if name == "gosu" else name]
-        if component["source_url"] not in recipe or component["source_sha256"] not in recipe or \
+        if any(value not in recipe for value in bound) or \
                 any(manifest["files"][f"requirements/service-builds/{name}/{filename}"] not in recipe
                     for filename in ("go.mod", "go.sum", "modules.txt")):
             raise ValueError("Maintained recipe is not bound to its exact source and module locks")

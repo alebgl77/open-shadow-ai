@@ -8,7 +8,7 @@ Cette roadmap décrit **six étapes futures, planifiées ou exploratoires** : un
 
 ## Le socle disponible aujourd’hui
 
-Open Shadow AI rapproche un catalogue et des règles déterministes avec des [observations réseau (référence en anglais)](../network-analysis.md), des inventaires de postes et des [signaux AD/Entra (référence en anglais)](../microsoft.md). L’[architecture (référence en anglais)](../architecture.md) distingue présence, observation et usage instrumenté ; les files des collecteurs restent bornées. [OIDC/SCIM (référence en anglais)](../sso-scim.md) est facultatif. Les [recettes de qualification (référence en anglais)](../production-qualification.md) ne certifient pas un parc AD, un fournisseur d’identité ou un cluster réel.
+Open Shadow AI rapproche un catalogue et des règles déterministes avec des [observations réseau (référence en anglais)](../network-analysis.md), des inventaires de postes (dont un [inventaire des extensions de navigateur (référence en anglais)](../collectors.md#browser-extension-inventory) avec historique des versions) et des [signaux AD/Entra (référence en anglais)](../microsoft.md). L’[architecture (référence en anglais)](../architecture.md) distingue présence, observation et usage instrumenté ; les files des collecteurs restent bornées. [OIDC/SCIM (référence en anglais)](../sso-scim.md) est facultatif. Les [recettes de qualification (référence en anglais)](../production-qualification.md) ne certifient pas un parc AD, un fournisseur d’identité ou un cluster réel.
 
 Aujourd’hui : une organisation par installation, aucun moteur d’inférence intégré. Les signatures Ollama/vLLM servent à découvrir des outils ; elles ne les connectent pas. Un nom DNS ne révèle ni prompt, ni tokens, ni facture.
 

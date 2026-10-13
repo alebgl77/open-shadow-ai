@@ -10,7 +10,7 @@ This roadmap describes **six future stages, planned or exploratory**: a directio
 <a id="le-socle-disponible-aujourdhui"></a>
 ## The foundation available today
 
-Open Shadow AI combines a catalog and deterministic rules with [network observations](network-analysis.md), endpoint inventories and [AD/Entra signals](microsoft.md). The [architecture](architecture.md) distinguishes presence, observation and instrumented usage; collector queues remain bounded. [OIDC/SCIM](sso-scim.md) is optional. [Qualification procedures](production-qualification.md) do not certify an AD fleet, identity provider or real cluster.
+Open Shadow AI combines a catalog and deterministic rules with [network observations](network-analysis.md), endpoint inventories (including a [browser extension inventory](collectors.md#browser-extension-inventory) with version history) and [AD/Entra signals](microsoft.md). The [architecture](architecture.md) distinguishes presence, observation and instrumented usage; collector queues remain bounded. [OIDC/SCIM](sso-scim.md) is optional. [Qualification procedures](production-qualification.md) do not certify an AD fleet, identity provider or real cluster.
 
 Today: one organization per installation, with no integrated inference engine. Ollama/vLLM signatures discover tools; they do not connect to them. A DNS name reveals no prompt, tokens or invoice.
 

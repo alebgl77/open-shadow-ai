@@ -10,7 +10,7 @@
 <a id="le-socle-disponible-aujourdhui"></a>
 ## 当前可用的基础
 
-Open Shadow AI 将目录中的签名和确定性规则与[网络观测（英文参考）](../network-analysis.md)、终端清单及 [AD/Entra 信号（英文参考）](../microsoft.md)相结合。[架构（英文参考）](../architecture.md)区分工具存在、实际观测与通过埋点报告的使用情况；采集器的队列设有上限。[OIDC/SCIM（英文参考）](../sso-scim.md)为可选功能。[验收验证流程（英文参考）](../production-qualification.md)不构成对实际 AD 设备群、身份提供商或集群的认证。
+Open Shadow AI 将目录中的签名和确定性规则与[网络观测（英文参考）](../network-analysis.md)、终端清单（包括带版本历史的[浏览器扩展清单（英文参考）](../collectors.md#browser-extension-inventory)）及 [AD/Entra 信号（英文参考）](../microsoft.md)相结合。[架构（英文参考）](../architecture.md)区分工具存在、实际观测与通过埋点报告的使用情况；采集器的队列设有上限。[OIDC/SCIM（英文参考）](../sso-scim.md)为可选功能。[验收验证流程（英文参考）](../production-qualification.md)不构成对实际 AD 设备群、身份提供商或集群的认证。
 
 目前，每个部署仅服务一个组织，未集成推理引擎。Ollama/vLLM 签名用于发现这些工具，不会连接它们。DNS 名称无法揭示提示词、词元数或账单。
 

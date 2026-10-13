@@ -2,6 +2,8 @@
 
 The original SPDX observations are retained. A source release projection is an
 explicit claim about build inputs, never a version observed in an UNKNOWN binary.
+The Go purl query carries the main module's Go module version (the version the Go
+advisory data is keyed by), while the CPE queries carry the release number.
 """
 
 import copy
@@ -14,6 +16,7 @@ import stat
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import unquote
 from uuid import uuid4
 
 FAILURE_STAGES = frozenset({
@@ -236,8 +239,28 @@ COMPONENTS = {
           "cpe:2.3:a:redis:redis:7.4.11:*:*:*:*:*:*:*")),
     ),
     "clickhouse": (),
+    # Both Prometheus binaries are built from the same main module and release source; each is a
+    # separate unversioned main-module observation with its own binary evidence.
+    "prometheus": (
+        ("busybox", "1.38.0", "/bin/busybox", None,
+         ("cpe:2.3:a:busybox:busybox:1.38.0:*:*:*:*:*:*:*",)),
+        ("github.com/prometheus/prometheus", None, "/bin/prometheus", "prometheus",
+         ("cpe:2.3:a:prometheus:prometheus:*:*:*:*:*:*:*:*",)),
+        ("github.com/prometheus/prometheus", None, "/bin/promtool", "prometheus",
+         ("cpe:2.3:a:prometheus:prometheus:*:*:*:*:*:*:*:*",)),
+    ),
 }
-RELEASES = {"gosu": "1.19", "node-exporter": "1.12.1"}
+RELEASES = {"gosu": "1.19", "node-exporter": "1.12.1", "prometheus": "3.15.0"}
+# Go module versions of the same reviewed sources (requirements/service-builds/manifest.json): the Go advisory
+# data that Grype matches a pkg:golang purl against is keyed by module version, which for Prometheus is
+# v0.315.0 for release 3.15.0; a purl at 3.15.0 would compare above every affected range and never match.
+MODULE_VERSIONS = {"gosu": "1.19", "node-exporter": "1.12.1", "prometheus": "v0.315.0"}
+
+
+def source_info(definition):
+    name, version, path = definition[:3]
+    return ("acquired package info from go module information: " if version is None else
+            "acquired package info from the following paths: ") + path
 
 
 def canonical(value):
@@ -258,10 +281,34 @@ def unique(items, field):
     return result
 
 
+def validate_go_module_paths(sbom):
+    """Require one original case-sensitive Go path per scanner comparison alias."""
+    paths = {}
+    for package in sbom.get("packages", []):
+        references = package.get("externalRefs", [])
+        if not isinstance(references, list):
+            raise ValueError("Software package has no identity")
+        for reference in references:
+            purl = reference.get("referenceLocator")
+            if reference.get("referenceType") != "purl" or not isinstance(purl, str) or \
+                    not purl.startswith("pkg:golang/"):
+                continue
+            identity = purl[len("pkg:golang/"):].split("#", 1)[0].split("?", 1)[0]
+            raw_path = unquote(identity.rpartition("@")[0] if "@" in identity else identity)
+            name = package.get("name")
+            if not isinstance(name, str) or not name or name != raw_path:
+                raise ValueError("Original Go module name differs from its PURL path or is missing")
+            alias = raw_path.lower()
+            if alias in paths and paths[alias] != raw_path:
+                raise ValueError("Ambiguous original Go module paths for scanner comparison")
+            paths[alias] = raw_path
+
+
 def partition(sbom, *, service, package_key):
     """Assign every software package exactly once; retain all original observations."""
     before = digest(sbom)
     packages = unique(sbom.get("packages"), "SPDXID")
+    validate_go_module_paths(sbom)
     files = unique(sbom.get("files"), "SPDXID")
     relationships = sbom.get("relationships")
     if not isinstance(relationships, list) or any(not isinstance(r, dict) for r in relationships) or \
@@ -275,7 +322,10 @@ def partition(sbom, *, service, package_key):
         raise ValueError("Unsupported identityless SPDX package")
     if service not in COMPONENTS:
         raise ValueError("Unsupported maintained component")
-    native, assigned, claims = set(), set(), []
+    # Several source-projected binaries in one runtime each carry their own copy of a shared
+    # dependency; the SBOM then lists that dependency once per binary.
+    shared_dependencies = len({d[2] for d in COMPONENTS[service] if d[3]}) > 1
+    native, native_instances, assigned, claims = set(), set(), set(), []
     for package_id, package in packages.items():
         if package_id == DOCUMENT_ROOT:
             continue
@@ -290,7 +340,11 @@ def partition(sbom, *, service, package_key):
         if len(purls) != 1 or len({canonical(r) for r in refs}) != len(refs):
             raise ValueError("Software package identity is missing or ambiguous")
         purl = purls[0]
-        definition = next((d for d in COMPONENTS[service] if package.get("name") == d[0]), None)
+        definitions = [d for d in COMPONENTS[service] if package.get("name") == d[0]]
+        definition = definitions[0] if len(definitions) == 1 else next(
+            (d for d in definitions if package.get("sourceInfo") == source_info(d)), None)
+        if definitions and definition is None:
+            raise ValueError("Complement component binary path mismatch")
         if definition is None:
             key = package_key(purl)
             observed_version = package.get("versionInfo")
@@ -299,24 +353,24 @@ def partition(sbom, *, service, package_key):
             if key[0] not in {"deb", "apk", "golang"} or observed_version != key[2] or \
                     service == "clickhouse" and (key[0] != "apk" or "clickhouse" in key[1].lower()):
                 raise ValueError("Unsupported or inconsistent native software package")
-            if key in native:
+            instance = (key, package.get("sourceInfo")) if shared_dependencies else key
+            if instance in native_instances:
                 raise ValueError("Duplicate native software package identity")
+            native_instances.add(instance)
             native.add(key)
             continue
         name, version, path, source_component, cpes = definition
         expected_purl = f"pkg:golang/{name}" if version is None else f"pkg:generic/{name}@{version}"
         if purl != expected_purl or package.get("versionInfo") != (version or "UNKNOWN"):
             raise ValueError("Complement component identity/version mismatch")
-        if name in assigned:
+        if (name, path) in assigned:
             raise ValueError("Duplicate complement component")
-        assigned.add(name)
+        assigned.add((name, path))
         observed_cpes = [r.get("referenceLocator") for r in refs
                          if r.get("referenceType") in {"cpe23Type", "cpe22Type"}]
         if sorted(observed_cpes) != sorted(cpes) or len(refs) != 1 + len(cpes):
             raise ValueError("Complement component CPE inventory mismatch")
-        expected_info = ("acquired package info from go module information: " if version is None else
-                         "acquired package info from the following paths: ") + path
-        if package.get("sourceInfo") != expected_info:
+        if package.get("sourceInfo") != source_info(definition):
             raise ValueError("Complement component binary path mismatch")
         evidence = [r for r in relationships if r.get("spdxElementId") == package_id and
                     r.get("relationshipType") == "OTHER"]
@@ -335,19 +389,22 @@ def partition(sbom, *, service, package_key):
         queries = []
         if source_component:
             projected_version = RELEASES[source_component]
-            queries.append(f"pkg:golang/{name}@{projected_version}")
+            projected_module_version = MODULE_VERSIONS[source_component]
+            queries.append(f"pkg:golang/{name}@{projected_module_version}")
             queries.extend(cpe.replace(":*:", f":{projected_version}:", 1) for cpe in cpes)
         else:
             projected_version = version
+            projected_module_version = None
             queries.extend(cpes)
         claims.append({"spdx_id": package_id, "original_package": copy.deepcopy(package),
                        "original_relationships": copy.deepcopy([r for r in relationships if
                             r.get("spdxElementId") == package_id or r.get("relatedSpdxElement") == package_id]),
                        "original_binary_file": copy.deepcopy(binary), "binary_path": path,
                        "source_component": source_component, "source_release_projection": projected_version
-                       if source_component else None, "observed_unversioned": version is None,
+                       if source_component else None, "source_module_projection": projected_module_version,
+                       "observed_unversioned": version is None,
                        "binary_version_claim": version, "queries": queries})
-    if assigned != {d[0] for d in COMPONENTS[service]} or not native or digest(sbom) != before:
+    if assigned != {(d[0], d[2]) for d in COMPONENTS[service]} or not native or digest(sbom) != before:
         raise ValueError("Incomplete component assignment or SPDX changed")
     return {"spdx_sha256": before, "native": native, "components": claims,
             "software_package_count": len(packages) - 1}
@@ -494,26 +551,30 @@ def validate_sentinel_report(report, *, query, configuration, database_status, r
 def bind_components(partition, *, documents, service, platform, root, service_manifest, expected_source, binder):
     """Bind exact file evidence to the selected rootFS and source projections to BuildKit."""
     layers = {descriptor["digest"] for descriptor in documents["manifest"]["layers"]}
-    source_proof = None
+    source_proof, projected, bound = None, (), set()
     for claim in partition["components"]:
         binary_layer = claim["original_binary_file"]["comment"].split(" ")[1]
         if binary_layer not in layers:
             raise ValueError("Complement binary evidence layer is outside selected image")
         if claim["source_component"]:
-            if source_proof is not None:
+            if source_proof is None:
+                source_proof = binder(documents["provenance"]["statement"]["predicate"], service=service,
+                                      platform=platform, selected_manifest=documents["manifest"], root=root,
+                                      service_manifest=service_manifest, expected_source=expected_source)
+                projected = tuple(source_proof.get("binary_paths", [source_proof.get("binary_path")]))
+            if claim["binary_path"] in bound:
                 raise ValueError("Ambiguous main-module source projection")
-            source_proof = binder(documents["provenance"]["statement"]["predicate"], service=service,
-                                  platform=platform, selected_manifest=documents["manifest"], root=root,
-                                  service_manifest=service_manifest, expected_source=expected_source)
-            if source_proof["binary_copy_layer"] != binary_layer or \
-                    source_proof["binary_path"] != claim["binary_path"]:
+            if source_proof["binary_copy_layer"] != binary_layer or claim["binary_path"] not in projected:
                 raise ValueError("Observed binary does not correspond to locked source copy output")
-            claim["source_proof"] = source_proof
+            bound.add(claim["binary_path"])
+            claim["source_proof"] = copy.deepcopy(source_proof)
         else:
             claim["source_proof"] = {"claim_kind": "observed_subject_bound_binary_inventory",
                                      "binary_path": claim["binary_path"], "binary_layer": binary_layer,
                                      "binary_version_claim": claim["binary_version_claim"]}
         claim["source_proof_sha256"] = digest(claim["source_proof"])
+    if bound != set(projected):
+        raise ValueError("Source projection binary is missing from the SBOM observations")
     return partition
 
 
@@ -525,7 +586,8 @@ def declare_clickhouse(partition, *, receipt, receipt_sha256, source_proof):
     claim = {"assignment_kind": "declared_principal_binary", "spdx_id": None, "original_spdx_ids": [],
              "original_package": None, "original_relationships": [], "original_binary_file": None,
              "original_inventory_observation": "absent", "binary_path": "/usr/bin/clickhouse",
-             "source_component": None, "source_release_projection": None, "observed_unversioned": False,
+             "source_component": None, "source_release_projection": None, "source_module_projection": None,
+             "observed_unversioned": False,
              "binary_version_claim": None, "declared_version": "25.8.33.6",
              "observed_cli_version": receipt["observation"]["version"],
              "principal_observation_sha256": receipt_sha256,

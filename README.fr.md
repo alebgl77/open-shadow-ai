@@ -15,11 +15,11 @@ Comprenez quels services et outils d'IA apparaissent dans votre environnement, d
 
 > Logiciel en phase initiale, destiné à l'évaluation et aux pilotes maîtrisés. Une organisation par installation. Docker, Kubernetes et les environnements Microsoft réels exigent une validation opérationnelle sur votre infrastructure ; aucune certification ni aucun SLA de production ne sont revendiqués.
 
-Le backend est en préversion **0.3.0** ; l'agent autonome pour les postes est en version **0.1.0**. Les guides anglais, français et chinois simplifié proposent les mêmes procédures de mise en œuvre. Les références détaillées et comptes rendus historiques conservent leur langue indiquée et la portée propre à leurs sources.
+Le backend est en préversion **0.3.0** ; l'agent autonome pour les postes est en version **0.3.0** (la préversion publiée `v0.3.0` livre l'agent 0.1.0). Les guides anglais, français et chinois simplifié proposent les mêmes procédures de mise en œuvre. Les références détaillées et comptes rendus historiques conservent leur langue indiquée et la portée propre à leurs sources.
 
 La console propose l'anglais, le français et le chinois simplifié avant et après connexion. La préférence de langue validée, locale au navigateur, est séparée de l'authentification ; l'anglais est utilisé sans préférence disponible ou si le stockage est bloqué. Les données brutes des sources et identifiants techniques/API conservent leurs valeurs originales. Voir la [couverture linguistique](docs/README.md).
 
-Ces langues ont été introduites sur `main` par le [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). La préversion publiée `v0.3.0`, au commit `49a58d7`, précède la localisation. Les deux révisions sources déclarent `0.3.0` ; consignez le commit exact déployé pour vérifier les fonctionnalités disponibles et leurs preuves CI.
+Ces langues ont été introduites sur `main` par le [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). La préversion publiée `v0.3.0`, au commit `49a58d7`, précède la localisation et l’inventaire des extensions introduit par la [PR nº 15](https://github.com/alebgl77/open-shadow-ai/pull/15). Les deux révisions sources déclarent `0.3.0` ; consignez le commit exact déployé pour vérifier les fonctionnalités disponibles et leurs preuves CI.
 
 ![Interface d'investigation Open Shadow AI avec des données de démonstration synthétiques](docs/assets/dashboard-desktop.webp)
 
@@ -74,7 +74,7 @@ Sous Windows, remplacez le bootstrap Bash par `./scripts/bootstrap.ps1`. Les deu
 
 Attendez que les nouveaux workers initialisent leurs groupes Redis réels avant la réconciliation ; réessayez si cette initialisation est encore en cours. Lors d'une mise à niveau, arrêtez tous les anciens producteurs, workers et clients de rejeu avant de lancer la version indexée. La readiness exige le schéma de rétention réconcilié. Consultez la [rétention des files (référence en anglais)](docs/queue-retention.md) et la [qualification (référence en anglais)](docs/production-qualification.md) pour les comportements de panne et la répétition isolée.
 
-Ouvrez [localhost:3000](http://localhost:3000). Les migrations PostgreSQL s'exécutent dans le service `migrate` avant le démarrage de l'API ; les deux schémas ClickHouse sont chargés sur un volume neuf. La [mise à jour d'une installation existante (référence en anglais)](docs/deployment.md#updates) exige une migration ClickHouse distincte.
+Ouvrez [localhost:3000](http://localhost:3000). Les migrations PostgreSQL s'exécutent dans le service `migrate` avant le démarrage de l'API ; les trois schémas ClickHouse sont chargés sur un volume neuf. La [mise à jour d'une installation existante (référence en anglais)](docs/deployment.md#updates) exige des migrations ClickHouse distinctes.
 
 L'activation des collecteurs est explicite :
 
@@ -98,6 +98,7 @@ La [connexion OIDC et le provisionnement SCIM facultatifs (référence en anglai
 | Parseurs DNS/proxy et collecteur syslog | Implémentés ; le parseur et le listener doivent correspondre à la source |
 | [Analyse réseau passive (référence en anglais)](docs/network-analysis.md) | Imports de métadonnées Zeek/Suricata/TShark, PCAP hors ligne facultatif ou capteur live explicitement choisi, vue des preuves `/network` ; les noms observés ne prouvent pas des requêtes IA |
 | Agent pour les postes | Inventaire des processus, conteneurs, runtimes et extensions implémenté ; vérification par OS et déploiement de parc à réaliser |
+| Inventaire des extensions de navigateur | État par installation (version, activation, source d'installation, utilisateur, profil) pour les utilisateurs/profils locaux accessibles des postes équipés de l’agent 0.3.0, historique des changements de version et export audité dans **Extensions** implémentés ; preuve de présence conservée pendant la fenêtre d'identité, pas d'usage |
 | Collecteur Microsoft Entra | Inventaire des service principals et grants facultatifs implémenté ; classification IA fondée sur des mappings d'application-ID revus ; validation sur tenant réel à réaliser |
 | Active Directory local | Exporteur PowerShell en lecture seule, limité aux OU ; validation RSAT/AD réel à réaliser |
 | Ingestion générique d'événements | Lots authentifiés et bornés ; les adaptateurs personnalisés restent votre travail d'intégration |
@@ -124,7 +125,7 @@ La configuration par défaut ne stocke jamais les chemins d'URL, chaînes de req
 
 L'appartenance d'une identité expire indépendamment selon chaque observation (par défaut au plus 30 jours) ; les comptes affichés portent sur des identifiants distincts observés, pas sur l'effectif salarié. La pseudonymisation facultative du serveur affecte les nouveaux traitements et ne nettoie ni l'historique ni les files locales en clair. Les scores de risque conservent leur dernier calcul et exposent une date nullable ainsi qu'un indicateur d'obsolescence. Le nettoyage historique est une maintenance explicite et bornée ; voir [rétention et pseudonymisation des identités (référence en anglais)](docs/collector-operations.md#retain-and-pseudonymize-identities).
 
-Une résolution DNS indique un contact avec un domaine, pas une interaction IA achevée. Une extension installée ou une application d'annuaire indique présence ou autorisation, pas usage. Les identifiants de modèle sont des preuves déclarées ; les totaux de tokens et coûts nécessitent une instrumentation. Les coûts calculés restent des estimations jusqu'à leur rapprochement avec la facturation du fournisseur.
+Une résolution DNS indique un contact avec un domaine, pas une interaction IA achevée. Une extension installée ou une application d'annuaire indique présence ou autorisation, pas usage. L'inventaire des extensions de navigateur sert à l'examen d'incidents, pas à la surveillance des salariés : ses lignes et son export sont réservés aux analystes et administrateurs, le réglage actuel de confidentialité s’applique aux nouveaux traitements des libellés de poste et d’utilisateur, tandis que les libellés existants peuvent conserver leur forme précédente jusqu’au prochain instantané et les lignes expirent avec la fenêtre d'identité. Les identifiants de modèle sont des preuves déclarées ; les totaux de tokens et coûts nécessitent une instrumentation. Les coûts calculés restent des estimations jusqu'à leur rapprochement avec la facturation du fournisseur.
 
 Postes non gérés, DNS chiffré non observé, outils locaux, domaines partagés, IA intégrée aux SaaS et contournements de passerelle peuvent laisser des angles morts. Consultez le [guide de couverture (référence en anglais)](docs/collectors.md) et l'[analyse de marché (référence en anglais)](docs/market-analysis.md).
 

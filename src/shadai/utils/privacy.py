@@ -8,10 +8,11 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
-from sqlalchemy import delete, func, inspect, select
+from sqlalchemy import delete, func, inspect, or_, select
 
 from shadai.config import get_config
 from shadai.models.evidence_identity import EvidenceIdentityORM
+from shadai.models.extension_inventory import ExtensionInventoryORM, ExtensionVersionChangeORM
 
 IDENTITY_FIELDS = ("user_id", "username", "device_id", "hostname", "identity_object_id", "identity_sid")
 IDENTITY_PROVIDERS = frozenset({"", "active_directory", "entra", "entra_id", "ldap", "scim", "unknown"})
@@ -37,6 +38,23 @@ SAMPLE_FIELDS = frozenset(
         *IDENTITY_FIELDS,
     }
 )
+SECTION_KEYS = frozenset(
+    {
+        "first_seen",
+        "last_seen",
+        "event_count",
+        "matched_field",
+        "confidence_base",
+        "protocol_counts",
+        "sample_values",
+        "sample_observations",
+        "network_observations",
+    }
+)
+# Identity-free inventory evidence of a catalog-matched extension; only the browser section carries it.
+BROWSER_SECTION_KEYS = frozenset({"version_changes", "versions"})
+# Version changes and version counts retained per detection, like the bounded observation samples.
+VERSION_EVIDENCE_LIMIT = 10
 
 
 def derived_key(label: str, config=None) -> bytes:
@@ -135,6 +153,45 @@ def retain_samples(values, *, now: datetime, cutoff: datetime) -> list[dict]:
     return sorted(retained, key=lambda sample: (sample["observed_at"], sample["field"], sample["value"]))[-10:]
 
 
+def retain_versions(values, *, last_seen, now: datetime, cutoff: datetime) -> dict[str, int]:
+    """Hosts per last reported version, aged by the section it was computed for.
+
+    The distribution is recomputed whenever a browser event updates the section, so it is as old as
+    the section's last_seen; a section that is older than the window, or of unknown age, retains none.
+    """
+    seen = observed_time(last_seen)
+    if seen is None or seen < cutoff or seen > now + timedelta(minutes=5) or not isinstance(values, dict):
+        return {}
+    counts = [
+        (version, hosts)
+        for version, hosts in values.items()
+        if isinstance(version, str)
+        and len(version) <= 100
+        and isinstance(hosts, int)
+        and not isinstance(hosts, bool)
+        and 0 < hosts <= 2**63 - 1
+    ]
+    # The most reported versions first; "" is an installation whose agent reported no version.
+    return dict(sorted(counts, key=lambda count: (-count[1], count[0]))[:VERSION_EVIDENCE_LIMIT])
+
+
+def retain_version_changes(values, *, now: datetime, cutoff: datetime) -> list[dict]:
+    """Observed version changes inside the window, oldest first; any other shape is dropped."""
+    from shadai.engine.correlator import ExtensionVersionEvidence
+
+    retained = []
+    for value in values if isinstance(values, list) else []:
+        try:
+            change = ExtensionVersionEvidence.model_validate(value)
+        except (ValueError, TypeError, OverflowError):
+            # An offset that pushes a stored date past year 9999 in UTC is malformed, not fatal.
+            continue
+        if cutoff <= change.observed_at <= now + timedelta(minutes=5):
+            retained.append(change)
+    retained.sort(key=lambda change: (change.observed_at, change.from_version or "", change.to_version or ""))
+    return [change.model_dump(mode="json") for change in retained[-VERSION_EVIDENCE_LIMIT:]]
+
+
 def sanitize_evidence(bundle, *, now: datetime | None = None, config=None) -> dict:
     """Read and maintenance boundary: unknown-age shapes fail closed."""
     now = now or datetime.now(UTC)
@@ -162,22 +219,8 @@ def sanitize_evidence(bundle, *, now: datetime | None = None, config=None) -> di
         if not isinstance(section, dict):
             clean.pop(source)
             continue
-        section = {
-            key: value
-            for key, value in section.items()
-            if key
-            in {
-                "first_seen",
-                "last_seen",
-                "event_count",
-                "matched_field",
-                "confidence_base",
-                "protocol_counts",
-                "sample_values",
-                "sample_observations",
-                "network_observations",
-            }
-        }
+        keys = SECTION_KEYS | BROWSER_SECTION_KEYS if source == "browser" else SECTION_KEYS
+        section = {key: value for key, value in section.items() if key in keys}
         clean[source] = section
         matched_field = section.get("matched_field", "")
         if not isinstance(matched_field, str) or matched_field not in SAMPLE_FIELDS | {"", "url_path", "user_agent"}:
@@ -200,6 +243,12 @@ def sanitize_evidence(bundle, *, now: datetime | None = None, config=None) -> di
             section["network_observations"] = sorted(observations, key=lambda observation: observation["timestamp"])[
                 -10:
             ]
+        if "version_changes" in section:
+            section["version_changes"] = retain_version_changes(section["version_changes"], now=now, cutoff=cutoff)
+        if "versions" in section:
+            section["versions"] = retain_versions(
+                section["versions"], last_seen=section.get("last_seen"), now=now, cutoff=cutoff
+            )
     # Historical free-form factor descriptions cannot carry old names forward.
     from shadai.engine.scorer import Signal, compute_confidence
 
@@ -211,7 +260,8 @@ def sanitize_evidence(bundle, *, now: datetime | None = None, config=None) -> di
                 signal = Signal(
                     source_type=source,
                     confidence_base=section["confidence_base"],
-                    event_count=0 if source == "network" else section.get("event_count", 1),
+                    # Repeated packets and inventory polls are not independent evidence (as in the correlator).
+                    event_count=0 if source in ("network", "browser") else section.get("event_count", 1),
                     match_field=section.get("matched_field", ""),
                 )
                 if 0 <= signal.confidence_base <= 1 and 0 <= signal.event_count <= 2**63 - 1:
@@ -356,3 +406,27 @@ async def expire_identity_members(session, *, now: datetime, config=None) -> Non
     await session.execute(
         delete(EvidenceIdentityORM).where(EvidenceIdentityORM.last_seen_at < identity_cutoff(now, config=config))
     )
+
+
+async def expire_extension_inventory(session, *, now: datetime, config=None) -> None:
+    """Installations and their version history never outlive the identity window or a changed key.
+
+    A row written under another membership basis (a rotated encryption key) is never found under
+    its key again, so it is forgotten here. Version history is deleted explicitly rather than
+    through the foreign-key cascade, and history older than the window expires on its own even
+    while the installation it belongs to is still being reported.
+    """
+    cutoff = identity_cutoff(now, config=config)
+    expired = or_(
+        ExtensionInventoryORM.last_seen_at < cutoff,
+        ExtensionInventoryORM.identity_basis != membership_basis(config),
+    )
+    await session.execute(
+        delete(ExtensionVersionChangeORM).where(
+            or_(
+                ExtensionVersionChangeORM.observed_at < cutoff,
+                ExtensionVersionChangeORM.inventory_key.in_(select(ExtensionInventoryORM.inventory_key).where(expired)),
+            )
+        )
+    )
+    await session.execute(delete(ExtensionInventoryORM).where(expired))

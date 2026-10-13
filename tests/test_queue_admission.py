@@ -254,7 +254,8 @@ def test_local_archive_verification_never_connects_to_redis(tmp_path, monkeypatc
     connector.assert_not_called()
 
 
-def test_legacy_children_keep_actual_endpoint_snapshot_identity_across_retries(monkeypatch):
+@pytest.mark.parametrize("wire_version", [1, 2])
+def test_legacy_children_keep_actual_endpoint_snapshot_identity_across_retries(monkeypatch, wire_version):
     from shadai_agent import main as client
 
     app = FastAPI()
@@ -277,9 +278,15 @@ def test_legacy_children_keep_actual_endpoint_snapshot_identity_across_retries(m
         return ["ok", *(f"{i+1}-0" for i in range(number))]
     redis = SimpleNamespace(eval=evaluate)
     monkeypatch.setattr(agent, "get_redis", AsyncMock(return_value=redis))
+    extensions = [{"id": f"ext{i}", "browser": "chrome"} for i in range(500)]
+    if wire_version == 2:
+        # Full per-installation records: 500 of them must still fit one Redis admission (2 MiB).
+        extensions = [{**record, "name": f"Extension {i}", "version": "1.2.3", "enabled": i % 2 == 0,
+                       "install_source": "store", "installed_at": "2026-01-01T00:00:00+00:00",
+                       "user": f"user{i}", "profile": "Default"} for i, record in enumerate(extensions)]
     snapshot = {"hostname": "synthetic", "timestamp": datetime.now(UTC).isoformat(), "agent_version": "legacy",
                 "processes": [{"name": f"p{i}", "username": "same"} for i in range(500)],
-                "extensions": [{"id": f"ext{i}", "browser": "chrome"} for i in range(500)]}
+                "extensions": extensions}
     original = json.dumps(snapshot, indent=2).encode()
     children = client.delivery_payloads(original)
     assert len(children) == 2
@@ -296,6 +303,11 @@ def test_legacy_children_keep_actual_endpoint_snapshot_identity_across_retries(m
         assert all(datetime.fromisoformat(row["timestamp"]) == instant and
                    datetime.fromisoformat(row["normalized_at"]) == instant
                    and row["tenant_id"] == "test-org" and row["collector_id"] == "sensor-original" for row in retry)
+    browser_rows = [row for rows in observed[:2] for row in rows if row["source_type"] == "browser"]
+    assert len(browser_rows) == 500
+    expected_profile, expected_version = ("Default", "1.2.3") if wire_version == 2 else ("", "")
+    assert all(row["browser_profile"] == expected_profile and row["extension_version"] == expected_version
+               for row in browser_rows)
     principal.collector_id = "another-enrolled-sensor"
     assert client.send_once("https://synthetic.test", original, {}, True) == 1000
     assert {row["event_id"] for rows in observed[:2] for row in rows}.isdisjoint(

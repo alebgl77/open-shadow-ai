@@ -2,11 +2,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
+from test_evidence_privacy import evidence_sessions as evidence_sessions
 
 from shadai.engine.catalog_loader import build_catalog_index
 from shadai.engine.matcher import CatalogMatcher
 from shadai.models.catalog import CatalogItemRead
 from shadai.models.event import CanonicalEvent
+from shadai.models.extension_inventory import ExtensionInventoryORM
+from shadai.models.receipts import IngestReceiptORM
 from shadai.utils.queue_admission import QUEUE_ADMIT
 from shadai.utils.queueing import PermanentMessageError
 from shadai.workers.ingest import EventProcessor
@@ -27,6 +31,8 @@ class Transaction:
 
 
 class Session:
+    """Receipts only: the events below are never browser inventory, which needs the real tables."""
+
     def __init__(self):
         self.receipts, self.pending = set(), set()
         self.execute = AsyncMock()
@@ -151,6 +157,43 @@ async def test_clickhouse_failure_never_enqueues_or_acks():
     assert not session.receipts
     redis.xadd.assert_not_called()
     redis.xack.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [None, "clickhouse", "enqueue"])
+async def test_browser_inventory_commits_with_the_receipt_or_not_at_all(evidence_sessions, failure):
+    redis = AsyncMock()
+    redis.hgetall.return_value = {}
+    redis.incr.return_value = 1
+    admission = ["denied", "full"] if failure == "enqueue" else ["ok", "1-0"]
+    redis.eval.side_effect = lambda script, *args: admission if script == QUEUE_ADMIT else [1, 0]
+
+    def persist(*args):
+        if failure == "clickhouse":
+            raise RuntimeError()
+
+    item = CatalogItemRead(
+        catalog_item_id="sider", canonical_name="Sider", category="browser_extension_ai", extension_ids=["abc"]
+    )
+    processor = EventProcessor(
+        redis, SimpleNamespace(execute=persist), evidence_sessions, CatalogMatcher(build_catalog_index([item]))
+    )
+    event = CanonicalEvent(
+        tenant_id="test-org", source_type="browser", evidence_type="inventory", hostname="host-a", extension_id="abc"
+    )
+    consumer = StreamConsumer(redis, "ingest_group", "w", ["events:browser"])
+    completed = await consumer.process("events:browser", "1-0", {"data": event.model_dump_json()}, processor)
+    async with evidence_sessions() as session:
+        receipt = await session.get(IngestReceiptORM, event.event_id)
+        rows = (await session.scalars(select(ExtensionInventoryORM))).all()
+    if failure is None:
+        assert completed and receipt is not None
+        assert [(row.extension_id, row.catalog_item_id, row.last_event_id) for row in rows] == [
+            ("abc", "sider", event.event_id)
+        ]
+    else:
+        # The inventory write happened inside the receipt transaction, so the failure undid both.
+        assert not completed and receipt is None and rows == []
+        redis.xack.assert_not_called()
 
 
 async def test_empty_catalog_never_consumes_queued_work(monkeypatch):

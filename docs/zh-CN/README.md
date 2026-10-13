@@ -2,7 +2,7 @@
 
 [English](../en/README.md) | [Français](../fr/README.md) | [简体中文](README.md)
 
-本手册帮助基础设施与身份管理专业人员从范围受限的评估，推进到经过运维评审的试点。内容覆盖后端开发预览版 **0.3.0** 和独立终端代理 **0.1.0**。操作流程于 **2026-10-08** 以源代码提交 `49a58d778d3014879e30a3ac5334df45cd426dbf` 为基线核对。三语言控制台与手册通过[提交 `7a12513eb1e1e3a800ba8d71f4726a3b5045b669`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669)合并到 `main`。已发布的 `v0.3.0` 预发行版位于提交 `49a58d7`，早于本地化功能；两个源代码修订均声明版本 `0.3.0`。核对功能可用性与 CI 证据时，应记录实际部署的准确提交。后续代码变更需要各自的操作验证和 CI 证据。除非具体流程另有说明，所有命令均从仓库根目录执行。命令示例保留详细流程中的语法；执行前，必须将仅用于文档示例的主机名、ID、路径和网络接口替换为已审核的实际值。
+本手册帮助基础设施与身份管理专业人员从范围受限的评估，推进到经过运维评审的试点。内容覆盖后端开发预览版 **0.3.0** 和独立终端代理 **0.3.0**。操作流程于 **2026-10-08** 以源代码提交 `49a58d778d3014879e30a3ac5334df45cd426dbf` 为基线核对；浏览器扩展清单相关流程（代理 0.3.0、ClickHouse 迁移 `003`、PostgreSQL 迁移 `006`）由 [PR #15](https://github.com/alebgl77/open-shadow-ai/pull/15) 于 **2026-10-13** 引入，超出该核心操作基线。三语言控制台与手册通过[提交 `7a12513eb1e1e3a800ba8d71f4726a3b5045b669`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669)合并到 `main`。已发布的 `v0.3.0` 预发行版位于提交 `49a58d7`，早于本地化功能和扩展清单，附带代理 0.1.0；两个源代码修订均声明后端版本 `0.3.0`。核对功能可用性与 CI 证据时，应记录实际部署的准确提交。后续代码变更需要各自的操作验证和 CI 证据。除非具体流程另有说明，所有命令均从仓库根目录执行。命令示例保留详细流程中的语法；执行前，必须将仅用于文档示例的主机名、ID、路径和网络接口替换为已审核的实际值。
 
 每个部署仅服务**一个组织**。`tenant_id` 用于检查范围，不构成隔离边界。本项目不声称具备生产认证、SLA、经测量的企业级吞吐量、自动化设备群部署或全面 AI 检测能力。英语、法语和简体中文手册提供完整且等效的流程；详细链接文档均明确标为英文参考。历史审计与变更日志保留各自的语言和验证范围。现有动态示意图使用法语标注与合成数据。[路线图](roadmap.md)说明未来阶段及其交付门槛。
 
@@ -12,12 +12,12 @@
 
 记录部署负责人、数据负责人、各来源负责人、试点设备/OU/网段、获准采集的字段、保留期、访问角色和停止条件。从一个来源开始，准备已知的合成正例和非 AI 反例。将准确的源提交、镜像摘要、配置版本和 CI 结果与试点证据一起保存。仅凭服务健康状态截图，无法证明采集完整或归属正确。
 
-API 对数据接入和控制台访问进行身份验证。Redis 将九个来源流传递给接入工作进程，将 `matches` 流传递给关联工作进程。ClickHouse 保存事件元数据；PostgreSQL 保存目录、检测记录、身份、处理回执和访问状态。数据清理与显式队列维护各有职责。前端展示这些证据，不会扫描设备群。参见[架构（英文参考）](../architecture.md)与[来源覆盖范围（英文参考）](../collectors.md)。
+API 对数据接入和控制台访问进行身份验证。Redis 将九个来源流传递给接入工作进程，将 `matches` 流传递给关联工作进程。ClickHouse 保存事件元数据；PostgreSQL 保存目录、检测记录、身份、处理回执、浏览器扩展清单和访问状态。数据清理与显式队列维护各有职责。前端展示这些证据，不会扫描设备群。参见[架构（英文参考）](../architecture.md)与[来源覆盖范围（英文参考）](../collectors.md)。
 
 | 信号 | 可支持的结论 | 尚不能证明的内容 |
 |---|---|---|
 | DNS、SNI、HTTP Host、代理元数据 | 在已记录的观测位置看到名称或连接 | 已完成的 AI 请求、内容、员工身份、模型、词元数或账单 |
-| 终端进程/容器/运行时/扩展 | 资产存在或被观测到正在运行 | 实际模型使用或所有用户的浏览器配置文件 |
+| 终端进程/容器/运行时/扩展 | 资产存在或被观测到正在运行；在运行代理 0.3.0 的主机上，每个本地用户的浏览器扩展安装及其报告的版本、启用状态和安装来源 | 实际模型或扩展使用；代理无法读取的浏览器、配置文件和主机 |
 | AD 对象、Entra 应用/权限授予 | 目录中存在该对象或具备相应权限 | 活动、混合身份等价关系或应用使用 |
 | 埋点事件 | 明确提供的模型/词元数/成本元数据 | 服务商内部路由；计算成本在与账单核对之前仍为估算 |
 
@@ -48,7 +48,7 @@ docker compose run --rm api python -m shadai.cli create-admin
 
 两种引导方式均保留现有配置和六项基础机密值；使用 `--dry-run` 或 `-DryRun` 预览。Unix 机密文件使用私有 `0700` 父目录。Windows 会在生成机密字节之前检查所有者、完整 ACL、重解析点及祖先目录安全性；新目录仅允许当前用户与 SYSTEM 访问，无需管理员提权。如果现有目录树被拒绝，应提供可信私有路径，不要自动修复权限。
 
-先启动新工作进程，不等待整体就绪：它们会创建实际 Redis 组。如果核对与重建报告初始化尚未完成，等待后重试。在就绪检查通过或启用采集器之前，必须完成保留结构与哈希哨兵的核对和重建。升级时，先停止所有旧版写入程序、工作进程和重放客户端。`--legacy-writers-stopped` 是对这一运维事实的声明，不会替你停止它们。PostgreSQL 迁移在 API 启动前运行。新的 ClickHouse 卷会加载两个结构文件。现有卷需要执行第 9 节中的独立迁移。
+先启动新工作进程，不等待整体就绪：它们会创建实际 Redis 组。如果核对与重建报告初始化尚未完成，等待后重试。在就绪检查通过或启用采集器之前，必须完成保留结构与哈希哨兵的核对和重建。升级时，先停止所有旧版写入程序、工作进程和重放客户端。`--legacy-writers-stopped` 是对这一运维事实的声明，不会替你停止它们。PostgreSQL 迁移在 API 启动前运行。新的 ClickHouse 卷会加载全部三个结构文件。现有卷需要执行第 9 节中的独立迁移。
 
 打开 `http://localhost:3000`，创建用于恢复的本地管理员，并检查处理流水线：
 
@@ -75,7 +75,7 @@ Compose 的专用 `edge` 网络默认使用 `172.30.0.0/24`，前端为 `172.30.
 
 基础配置要求外部 PostgreSQL/Redis/ClickHouse、能够执行 NetworkPolicy 的 CNI、与存储之间的私有加密连接、入口控制器，以及已有的可信 TLS 证书。它不提供数据库 Operator、存储高可用或证书签发。构建 API/工作进程/前端镜像并推送到获准的镜像仓库，在私有覆盖配置中将所有运行时与迁移镜像替换为经过验证的不可变摘要。
 
-使用现有机密信息管理系统创建命名空间及 `open-shadow-ai-runtime` Secret。必需键为 `DATABASE_URL`、`REDIS_URL`、`CLICKHOUSE_HOST`、`CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD`、`JWT_SECRET`、`ENCRYPTION_KEY` 和 `AGENT_API_KEY`。配置组织设置、实际数据库 CIDR/端口、DNS 选择器和入口选择器。TEST-NET 地址段有意不提供任何生产路由。通过存储管理流程依次应用两个 ClickHouse 结构文件，再在应用启动之前完成 PostgreSQL 迁移：
+使用现有机密信息管理系统创建命名空间及 `open-shadow-ai-runtime` Secret。必需键为 `DATABASE_URL`、`REDIS_URL`、`CLICKHOUSE_HOST`、`CLICKHOUSE_USER`、`CLICKHOUSE_PASSWORD`、`JWT_SECRET`、`ENCRYPTION_KEY` 和 `AGENT_API_KEY`。配置组织设置、实际数据库 CIDR/端口、DNS 选择器和入口选择器。TEST-NET 地址段有意不提供任何生产路由。通过存储管理流程依次应用三个 ClickHouse 结构文件（就绪检查会查询第三个文件新增的列），再在应用启动之前完成 PostgreSQL 迁移：
 
 ```bash
 kubectl apply -f deploy/kubernetes/base/namespace.yaml
@@ -145,7 +145,7 @@ docker compose exec -T frontend nginx -s reload
 
 管理员通过**来源与覆盖范围 → 已注册采集器 → 注册采集器**分配不可变 ID 和最小来源范围。将一次性返回的密钥保存到私有位置；响应丢失时操作可能已经提交，重试前先检查注册信息。轮换默认重叠有效期为 3,600 秒（0–86,400），默认凭据有效期为 365 天（1–365）；已撤销的采集器永久禁用。采集器密钥不能管理注册信息，也不能访问指标。只有在每个数据生产端都已配置限定范围的凭据并验证投递后，才关闭 `ALLOW_LEGACY_AGENT_KEY`；旧版流量没有明确归属。向相关服务显式提供环境变量覆盖，不能仅写入 `.env`。
 
-对于 Windows 终端，构建对应平台的离线 wheel 包目录，并审核哈希值。以 SYSTEM 运行的安装器要求新建受保护的安装目录树、Python/离线包目录由可信管理主体所有，以及安全的祖先目录；不适合使用用户级 Python。在一台设备上预览，验证计划任务与 HTTPS 清单采集，再通过现有 GPO/Intune/Configuration Manager 流程分阶段部署。服务器安装不会部署代理或修改 GPO。SYSTEM 可能无法读取所有用户的浏览器配置文件；扩展采集需要 `browser` 范围。升级、卸载与签名仍属于设备群验收工作。
+对于 Windows 终端，构建对应平台的离线 wheel 包目录，并审核哈希值。以 SYSTEM 运行的安装器要求新建受保护的安装目录树、Python/离线包目录由可信管理主体所有，以及安全的祖先目录；不适合使用用户级 Python。在一台设备上预览，验证计划任务与 HTTPS 清单采集，再通过现有 GPO/Intune/Configuration Manager 流程分阶段部署。服务器安装不会部署代理或修改 GPO。以 SYSTEM 运行时，代理会枚举每个本地用户的浏览器配置文件；不在本地磁盘上的漫游或容器化配置文件仍可能遗漏。扩展采集需要 `browser` 范围。代理 0.3.0 为每个安装（用户、浏览器和配置文件）发送一条记录，每个快照最多 5,000 条，因此需要为共享主机相应规划本地队列容量。升级、卸载与签名仍属于设备群验收工作。
 
 对于 syslog，选择与来源完全匹配的 BIND/Windows DNS/Squid/PAN-OS/FortiGate 解析器，并配置正确的来源 IANA 时区和时钟。默认 TCP/1514 绑定本地主机；远程转发需要私有地址绑定、防火墙限制，并按要求使用可信 TLS 中继。syslog 发送方身份验证与 HTTP 旧版密钥设置相互独立。完成来源审核后启用：
 
@@ -202,7 +202,7 @@ docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_pass
 
 生产恢复目标需要经过测试的数据库原生备份。在独立检出目录/项目中恢复，使用空存储、匹配的版本/密钥、未使用的端口和边缘子网。每条命令都保留该项目名；重复导入并不安全。通过存储平台恢复已停止的 Redis 卷，或明确记录被丢弃的在途数据时间区间。比较事件/检测记录，验证就绪和登录，并完成一个新的合成事件的端到端验证。本地队列只能恢复到原始、已验证的绑定。
 
-迁移 `003` 锁定本地用户，并拒绝空名称或大小写折叠后的重名；明确重命名，绝不静默合并账号。迁移 `004` 增加限定范围的凭据。**迁移 `005` 重置无法确定观测年龄的历史身份数组/计数，清除 `primary_evidence`，删除保留的 `sample_values`、`sample_observations` 和 `network_observations` 摘录，并将风险标记为过期。** 检测记录本身仍然保留。其历史身份依据的观测年龄无法证明；迁移不会赋予新的日期。在恢复副本中评审这一不可逆的证据/计数变化。ClickHouse `002_event_metadata.sql` 必须在会启动依赖的 API 命令之前执行，因为新健康探针会查询旧卷中不存在的 `identity_sid`：
+PostgreSQL 迁移 `003` 锁定本地用户，并拒绝空名称或大小写折叠后的重名；明确重命名，绝不静默合并账号。迁移 `004` 增加限定范围的凭据。**迁移 `005` 重置无法确定观测年龄的历史身份数组/计数，清除 `primary_evidence`，删除保留的 `sample_values`、`sample_observations` 和 `network_observations` 摘录，并将风险标记为过期。** 检测记录本身仍然保留。其历史身份依据的观测年龄无法证明；迁移不会赋予新的日期。在恢复副本中评审这一不可逆的证据/计数变化。迁移 `006` 仅创建扩展清单数据表；降级会删除这些表，代理的下一次快照会重新建立数据。ClickHouse `002_event_metadata.sql` 和 `003_extension_inventory.sql` 必须在会启动依赖的 API 命令之前执行，因为健康探针会查询 `browser_profile`，该列由 `003` 添加，旧卷中不存在。分阶段升级时依次升级 ClickHouse、工作进程、API 和代理；新版 API 写入队列的事件会在旧版工作进程中进入死信队列：
 
 ```bash
 set -e
@@ -211,6 +211,7 @@ docker compose build
 docker compose stop api frontend ingest-worker correlation-worker purge-worker
 docker compose up -d postgres clickhouse redis
 docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --multiquery' < migrations/clickhouse/002_event_metadata.sql
+docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --multiquery' < migrations/clickhouse/003_extension_inventory.sql
 # --no-deps avoids starting an API dependency graph before the migrations have completed.
 docker compose run --rm --no-deps api python -m shadai.cli init-db
 docker compose up -d
@@ -218,7 +219,7 @@ docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.re
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 ```
 
-先等待存储可连接，必要时重试，再继续执行；SQL 成功之前，ClickHouse 暂时显示不健康属于预期情况。所有可选/远程旧版写入程序也必须停止。启用 SSO 时使用两个 Compose 文件。没有自动结构回滚。存在外部身份/组/审计/撤销记录之后，`003` 拒绝降级；不要删除记录绕过检查。在隔离环境中，使用匹配的代码/配置恢复迁移前备份。参见[更新与恢复（英文参考）](../deployment.md#updates)。
+先等待存储可连接，必要时重试，再继续执行；SQL 成功之前，ClickHouse 暂时显示不健康属于预期情况。所有可选/远程旧版写入程序也必须停止。启用 SSO 时使用两个 Compose 文件。没有自动结构回滚。存在外部身份/组/审计/撤销记录之后，PostgreSQL `003` 拒绝降级；不要删除记录绕过检查。在隔离环境中，使用匹配的代码/配置恢复迁移前备份。参见[更新与恢复（英文参考）](../deployment.md#updates)。
 
 ## 10. 维护隐私与访问
 
@@ -226,13 +227,21 @@ docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-wor
 
 身份成员关系按每次观测独立计算年龄；默认为 `min(30, events_days)`，必须为正且不能超过事件保留期。计数表示观测到的不同标识，不代表员工人数。检查可空的 `risk_calculated_at` 和 `risk_score_stale`；一般更新时间不能证明重新计算过风险。`PSEUDONYMIZE_IDENTITIES` 使用加密密钥派生的按字段隔离 HMAC，为个人字段生成假名，并清除个人来源 IP/自由格式 IdP 文本。假名仍是可关联的组织数据。此设置影响新处理，不影响历史事件、备份或本地队列。
 
+浏览器扩展清单（**扩展 → 清单**与**版本变更**）按主机、用户、浏览器、配置文件和扩展各保存一行，记录代理最近一次报告的状态，并保存观测到的版本变更。两者都遵循身份保留窗口：超过 `identity_days` 未再报告或在旧加密密钥下写入的行永远不会返回，并由清理工作进程删除。主机与用户标签反映最近一次事件的隐私处理。当前 `PSEUDONYMIZE_IDENTITIES` 设置适用于新处理的事件；现有标签可能保留此前设置下的原始形式或假名，直到收到下一次快照。它不会对所有元数据进行匿名化。扩展的用户是主目录名称，而进程用户名可能带有域名前缀，因此同一个人可能被计为两个标识。逐行数据、按安装的版本历史、变更流和导出需要分析员或管理员角色；查看者可以看到汇总计数，以及在发现项中不包含主机、用户或配置文件的版本变更。导出带有反人事用途警告，并连同筛选条件和行数记录到审计日志。安装表示存在，不表示使用：该清单用于事件审查，不用于员工监控。参见[覆盖范围（英文参考）](../collectors.md#browser-extension-inventory)。
+
+当前配置文件标识为 `bp1_<完整 SHA-256 的 64 个十六进制字符>:<可读目录基本名称>`，最多 255 个字符：Chromium/Firefox 对相对于所属用户主目录的完整规范化根目录/配置文件定位符进行哈希；Safari 对其系统/用户范围内相对于获准应用目录的规范化应用包标识进行哈希（当前每个范围仅一个获准目录）。均在截断之前计算哈希；仅将可读基本名称限制为 186 个字符。浏览器家族名称保持不变。不传输原始绝对主目录/应用路径，但可读后缀未被假名化，仍可能敏感。旧版普通或缺失的配置文件值按原样保存，不重新计算键；新限定标识创建独立行，旧普通标识的历史行按 `identity_days` 过期。解析后的 Chromium/Firefox 根目录必须位于所属用户主目录内，配置文件必须位于其根目录内；内部别名会去重，越界路径会跳过且仅报告计数。限定的系统/用户应用目录内的 Safari 应用副本保持独立。
+
+Chromium `Preferences` 与 `Secure Preferences` 会在本地作为完整 JSON 解析，再选取 `extensions.settings`。无关字段（可能包括账号信息）会被临时解析，但不会被保留或报告。独立的 History、Cookies 和 Storage 文件不会被打开。缺失或格式错误的启用状态（包括缺失的首选项条目）保持未知（`null`）；`false` 需要明确的禁用证据，安装来源 `orphan` 不表示禁用。格式错误的 Gecko 附加组件会被逐个隔离处理。超出可表示范围的扩展安装时间会在整个遥测批次进入队列之前返回经过清理的 `422`；无法表示的历史时间窗口也返回 `422`，而非 `500`。
+
+**最近收到的扩展事件中未观测到** 根据设备最近收到的扩展事件进行启发式判断，并非完整快照确认或移除记录。采集不完整、失败、截断或接入不完整都可能使某个安装未出现；无扩展的轮询可能不会推进扩展的 `last_seen_at`。这并不能证明它已被移除。已关联目录但没有发现项的安装显示为**目录关联**，现有发现项仍提供链接。
+
 进行已评审的历史清理时，先在恢复数据上演练，暂停采集器，排空队列/本地队列，停止写入/重放，并在整个验证过程中维持该状态：
 
 ```bash
 python -m shadai.workers.purge --scrub-personal-history --batch-size 500 --max-batches 100
 ```
 
-检查 `complete`、`clickhouse_complete`、`sql_complete` 和返回游标；受限 SQL 续跑只能使用返回的 `--after-detection-id`。仅在同步工作全部完成且通过验证时退出码才为零；达到处理上限但未完成时退出码非零。账号、备注与审计操作者不在清理范围内。更换加密密钥会改变假名生成基础与加密材料；保留匹配的备份并规划重建。参见[隐私维护（英文参考）](../collector-operations.md#retain-and-pseudonymize-identities)。
+检查 `complete`、`clickhouse_complete`、`sql_complete`、`inventory_rows_scrubbed` 和返回游标；受限 SQL 续跑只能使用返回的 `--after-detection-id`。清理还会清空扩展清单并清除 `browser_profile`，因此必须先应用 ClickHouse `003`。仅在同步工作全部完成且通过验证时退出码才为零；达到处理上限但未完成时退出码非零。账号、备注与审计操作者不在清理范围内。更换加密密钥会改变假名生成基础与加密材料；保留匹配的备份并规划重建。参见[隐私维护（英文参考）](../collector-operations.md#retain-and-pseudonymize-identities)。
 
 ## 11. 审查安全与交付证据
 
@@ -268,6 +277,7 @@ python -m shadai.workers.purge --scrub-personal-history --batch-size 500 --max-b
 | 采集器返回 401/403 | 检查过期/撤销/来源/租户/采集器范围；恢复正确密钥，不要绑定到其他注册身份的队列 |
 | 旧事件或未来事件被拒绝 | 验证来源时区/时钟及服务器年龄窗口；不得改写来源时间戳 |
 | 联系正常但没有检测记录 | 核对解析器、反例/共享签名、未映射的 Entra appId 和观测来源；无活动可能是正常情况 |
+| 扩展清单为空或没有用户 | 核对代理 0.3.0、`browser` 范围、ClickHouse `003`、PostgreSQL `006` 及身份保留窗口；旧版代理只生成主机级记录，不含用户、配置文件或状态 |
 | 本地队列/机密文件 ACL 被拒绝 | 在实际账号下准备可信私有路径；检查祖先目录/重解析点/硬链接，不要扩大权限 |
 | SSO 返回 429/503 或拒绝登录 | 检查共享 Redis 准入、精确代理对端/签发者、活跃 SCIM 映射及提供商状态；使用本地恢复管理员 |
 | 缺少指标或未收到通知 | 验证私有令牌副本/UID、抓取及完整十流清单，再检查接收端路由；仅配置规则不会发送通知 |

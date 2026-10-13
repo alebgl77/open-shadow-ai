@@ -4,25 +4,123 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 
 from shadai.api.collectors import CollectorPrincipal, authenticate_collector, validate_legacy_key
 from shadai.config import get_config
 from shadai.database import get_redis
-from shadai.models.event import CanonicalEvent
+from shadai.models.event import EXTENSION_INSTALL_SOURCES, CanonicalEvent
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+
+# Record contract shared with the standalone agent's conform(): a text field that is not a string
+# of at most MAX_TEXT_LENGTH characters, or a port outside 0-65535, rejects the whole batch.
+TELEMETRY_TEXT_FIELDS = frozenset(
+    {"name", "path", "parent", "username", "image", "process_name", "tool_name", "id", "browser"}
+)
+TELEMETRY_PORT_FIELDS = frozenset({"port", "listening_port"})
+MAX_TEXT_LENGTH = 2048
+# Extension wire v2 travels INSIDE each extension record, never as a new top-level batch key: an
+# old server ignores unknown record keys and still counts one event per record, so a new agent
+# keeps delivering, and every v2 key is optional here, so an old agent keeps delivering too.
+EXTENSION_WIRE_VERSION = 2
+EXTENSION_V2_FIELDS = ("version", "enabled", "install_source", "installed_at", "user", "profile")
+# Released agents 0.1.0 and 0.2.0 already sent `version` (and `permissions`) in every record, so
+# only the keys those releases never sent mark a record as wire v2.
+EXTENSION_V2_MARKERS = tuple(field for field in EXTENSION_V2_FIELDS if field != "version")
+EXTENSION_TEXT_LIMITS = {"version": 100, "browser": 64, "user": 255, "profile": 255}
+
+
+class ExtensionRecord(BaseModel):
+    """One browser extension installation as a v1 or v2 agent reports it.
+
+    Unknown keys are ignored so a future agent field never quarantines a fleet. Types are strict
+    because the agent brings records within this contract before sending; `install_source`
+    values are lenient because a token this server does not know is still an installation.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default="", max_length=MAX_TEXT_LENGTH)
+    name: str = Field(default="", max_length=MAX_TEXT_LENGTH)
+    browser: str = Field(default="", max_length=EXTENSION_TEXT_LIMITS["browser"])
+    version: str = Field(default="", max_length=EXTENSION_TEXT_LIMITS["version"])
+    enabled: StrictBool | None = None
+    install_source: str = "unknown"
+    installed_at: AwareDatetime | None = None
+    user: str = Field(default="", max_length=EXTENSION_TEXT_LIMITS["user"])
+    profile: str = Field(default="", max_length=EXTENSION_TEXT_LIMITS["profile"])
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def textual_version(cls, value):
+        # Released agents copy the manifest value as is; a numeric version is still a version.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        return value
+
+    @field_validator("install_source", mode="before")
+    @classmethod
+    def known_install_source(cls, value):
+        # Lenient on values, strict on type: a non-string still fails the field's own check.
+        if isinstance(value, str) and value not in EXTENSION_INSTALL_SOURCES:
+            return "unknown"
+        return value
+
+    @field_validator("installed_at", mode="before")
+    @classmethod
+    def textual_installed_at(cls, value):
+        # The agent emits ISO 8601 text with an offset; epoch numbers are outside the contract.
+        if value is not None and not isinstance(value, (str, datetime)):
+            raise ValueError("Extension installed_at must be ISO 8601 text with a timezone")
+        if isinstance(value, str):
+            # Digit strings would otherwise be read as Unix epochs by the lax datetime parser.
+            try:
+                datetime.fromisoformat(value)
+            except ValueError:
+                raise ValueError("Extension installed_at must be ISO 8601 text with a timezone") from None
+        return value
+
+    @field_validator("installed_at")
+    @classmethod
+    def utc_installed_at(cls, value):
+        try:
+            return None if value is None else value.astimezone(UTC)
+        except OverflowError:
+            raise ValueError("Extension installed_at is outside the UTC range") from None
+
+
+def extension_record(record: Mapping[str, Any]) -> ExtensionRecord:
+    """Validate one wire record; the rejection names the contract, never the submitted values."""
+    try:
+        return ExtensionRecord.model_validate(record)
+    except ValidationError:
+        raise ValueError("Invalid telemetry extension record") from None
+
+
+def extension_wire_version(record: Mapping[str, Any]) -> int:
+    """2 once a record carries a key only wire v2 agents send, else 1 (released 0.1.0/0.2.0 shapes)."""
+    return EXTENSION_WIRE_VERSION if any(field in record for field in EXTENSION_V2_MARKERS) else 1
 
 
 class TelemetryBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     hostname: str = Field(min_length=1, max_length=255)
-    agent_version: str = "0.1.0"
+    agent_version: str = Field(default="0.1.0", max_length=100)
     timestamp: datetime
     processes: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
     containers: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
@@ -39,19 +137,21 @@ class TelemetryBatch(BaseModel):
 
     @field_validator("processes", "containers", "local_ai_hits", "extensions", "model_files")
     @classmethod
-    def validate_records(cls, records):
-        text_fields = {"name", "path", "parent", "username", "image", "process_name", "tool_name", "id", "browser"}
+    def validate_records(cls, records, info: ValidationInfo):
         for record in records:
-            for field in text_fields & record.keys():
-                if not isinstance(record[field], str) or len(record[field]) > 2048:
+            for field in TELEMETRY_TEXT_FIELDS & record.keys():
+                if not isinstance(record[field], str) or len(record[field]) > MAX_TEXT_LENGTH:
                     raise ValueError("Invalid telemetry text field")
-            for field in {"port", "listening_port"} & record.keys():
+            for field in TELEMETRY_PORT_FIELDS & record.keys():
                 if (
                     not isinstance(record[field], int)
                     or isinstance(record[field], bool)
                     or not 0 <= record[field] <= 65535
                 ):
                     raise ValueError("Invalid telemetry port")
+            if info.field_name == "extensions":
+                # Records stay plain dicts: minimal shapes pass and `received` counts one per record.
+                extension_record(record)
         return records
 
 
@@ -113,15 +213,26 @@ async def receive_telemetry(
         )
         events.append(event)
 
-    # Parse browser extensions
+    # Parse browser extensions: one event per wire record, whatever its wire version.
     for ext in batch.extensions:
+        record = extension_record(ext)
         event = CanonicalEvent(
             source_type="browser",
             hostname=batch.hostname,
             device_id=batch.hostname,
-            extension_id=ext.get("id", ""),
-            extension_name=ext.get("name", ""),
-            browser_name=ext.get("browser", ""),
+            # The owning account is an identity: aliased, stamped and expired like process usernames.
+            username=record.user,
+            browser_name=record.browser,
+            browser_profile=record.profile,
+            extension_id=record.id,
+            extension_name=record.name,
+            extension_version=record.version,
+            extension_enabled=record.enabled,
+            # "" keeps "not reported" (wire v1) apart from "unknown" (a v2 agent could not read it).
+            extension_install_source=(
+                record.install_source if extension_wire_version(ext) == EXTENSION_WIRE_VERSION else ""
+            ),
+            extension_installed_at=record.installed_at,
         )
         events.append(event)
 
@@ -171,6 +282,8 @@ async def get_agent_config(principal: CollectorPrincipal = Depends(authenticate_
         "collect_containers": True,
         "collect_extensions": True,
         "collect_local_ai": True,
+        # Advertised for operators and future gating; current agents ignore unknown keys.
+        "extension_wire": EXTENSION_WIRE_VERSION,
     }
 
 

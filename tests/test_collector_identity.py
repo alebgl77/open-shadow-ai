@@ -322,6 +322,60 @@ async def test_browser_only_telemetry_enforces_its_actual_canonical_source(colle
     console.pipe.xadd.assert_not_called()
 
 
+async def test_browser_wire_v2_aliases_the_user_keeps_state_and_stable_ids(collector_console):
+    console = collector_console
+    browser = await enroll(console, "browser-v2", ["browser"])
+    headers = {"X-API-Key": browser["api_key"]}
+    assert (await config_response(console, browser["api_key"])).json()["extension_wire"] == 2
+    snapshot = {
+        "hostname": "ws-001",
+        "agent_version": "0.3.0",
+        "timestamp": datetime.now(UTC).isoformat(),
+        "extensions": [
+            {
+                "id": "a" * 32,
+                "name": "AI helper",
+                "browser": "chrome",
+                "version": "1.2.3",
+                "enabled": False,
+                "install_source": "policy",
+                "installed_at": "2026-01-01T02:00:00+02:00",
+                "user": "alice",
+                "profile": "Profile 1",
+            },
+            {"id": "b" * 32, "name": "Legacy helper", "browser": "firefox"},
+            {"id": "c" * 32, "browser": "edge", "version": "2.0", "install_source": "magic"},
+        ],
+    }
+    identifiers = []
+    for mode in (True, False, True):
+        get_config().security.pseudonymize_identities = mode
+        console.pipe.xadd.reset_mock()
+        response = await console.client.post("/api/v1/agent/telemetry", json=snapshot, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["received"] == len(snapshot["extensions"])
+        assert [call.args[0] for call in console.pipe.xadd.call_args_list] == ["events:browser"] * 3
+        rows = [json.loads(call.args[1]["data"]) for call in console.pipe.xadd.call_args_list]
+        identifiers.append([row["event_id"] for row in rows])
+        current, legacy, lenient = rows
+        if mode:
+            assert "alice" not in json.dumps(rows)
+            assert current["username"].startswith("p1_")
+        else:
+            assert current["username"] == "alice"
+        assert current["evidence_type"] == "inventory" and current["collector_id"] == "browser-v2"
+        assert current["extension_version"] == "1.2.3" and current["browser_profile"] == "Profile 1"
+        assert current["extension_enabled"] is False and current["extension_install_source"] == "policy"
+        assert datetime.fromisoformat(current["extension_installed_at"]) == datetime(2026, 1, 1, tzinfo=UTC)
+        # A v1 record stays "not reported", distinct from a v2 agent that could not read a value.
+        assert legacy["username"] == "" and legacy["browser_profile"] == "" and legacy["extension_version"] == ""
+        assert legacy["extension_install_source"] == "" and legacy["extension_enabled"] is None
+        assert legacy["extension_installed_at"] is None
+        assert lenient["extension_install_source"] == "unknown" and lenient["extension_version"] == "2.0"
+    # Observation identity is derived before privacy aliases: retries and mode changes never duplicate.
+    assert identifiers[0] == identifiers[1] == identifiers[2] and len(set(identifiers[0])) == 3
+
+
 async def test_scoped_client_uuids_are_isolated_and_stable_through_rotation(collector_console):
     console = collector_console
     first, second = await enroll(console), await enroll(console, "sensor-2")

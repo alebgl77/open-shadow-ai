@@ -112,6 +112,28 @@ async def test_readiness_fails_without_dependencies(monkeypatch):
     assert result.status_code == 503
 
 
+async def test_readiness_probes_the_newest_clickhouse_migration(monkeypatch):
+    from shadai.main import CLICKHOUSE_SCHEMA_PROBE, readiness
+
+    queries = []
+
+    async def sessions():
+        yield SimpleNamespace(execute=AsyncMock())
+
+    monkeypatch.setattr("shadai.database.get_postgres_session", sessions)
+    monkeypatch.setattr(
+        "shadai.database.get_redis", AsyncMock(return_value=SimpleNamespace(ping=AsyncMock(return_value=True)))
+    )
+    monkeypatch.setattr("shadai.database.get_clickhouse", lambda: SimpleNamespace(execute=queries.append))
+    result = await readiness()
+    assert result.status_code == 200
+    # A deployment that skipped migrations/clickhouse/003_extension_inventory.sql must report unavailable
+    # rather than let the ingest worker retry inserts into missing columns forever.
+    assert queries == [CLICKHOUSE_SCHEMA_PROBE] and "browser_profile" in CLICKHOUSE_SCHEMA_PROBE
+    assert "browser_profile" in Path("migrations/clickhouse/003_extension_inventory.sql").read_text()
+    assert "SELECT browser_profile FROM shadai.events LIMIT 0" in Path("docker-compose.yml").read_text()
+
+
 def test_shared_signatures_resolve_independently_of_catalog_order():
     api = CatalogItemRead(
         catalog_item_id="b-api",
@@ -200,6 +222,24 @@ async def test_user_count_sort_is_accepted_and_stable():
     if frontend.exists():
         declared = frontend.read_text().split("DETECTION_SORT_COLUMNS = [", 1)[1].split("]", 1)[0]
         assert tuple(column.strip().strip("'") for column in declared.split(",")) == SORT_COLUMNS
+
+
+def test_inventory_sort_columns_and_install_sources_match_the_console():
+    """The console mirrors the API's sort columns and install sources; neither may drift alone."""
+    from shadai.api.extensions import INVENTORY_SORT_COLUMNS
+    from shadai.models.event import EXTENSION_INSTALL_SOURCES
+    from shadai.models.extension_inventory import ExtensionInventoryORM
+
+    assert set(INVENTORY_SORT_COLUMNS) <= set(ExtensionInventoryORM.__table__.columns.keys())
+    frontend = Path("frontend/src/api/inventory.ts")
+    if frontend.exists():
+        source = frontend.read_text()
+        for name, expected in (
+            ("INVENTORY_SORT_COLUMNS", INVENTORY_SORT_COLUMNS),
+            ("INSTALL_SOURCES", EXTENSION_INSTALL_SOURCES),
+        ):
+            declared = source.split(f"{name} = [", 1)[1].split("]", 1)[0]
+            assert tuple(column.strip().strip("'") for column in declared.split(",")) == expected, name
 
 
 async def test_export_applies_every_discovery_filter():

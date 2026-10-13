@@ -1,4 +1,4 @@
-"""Export API routes — CSV/JSON detection exports with anti-HR abuse warnings."""
+"""Export API routes — CSV/JSON detection and extension inventory exports with anti-HR abuse warnings."""
 
 from __future__ import annotations
 
@@ -13,6 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from shadai.api.detections import filter_detections, order_detections
+from shadai.api.extensions import (
+    identity_mode,
+    identity_window,
+    inventory_filters,
+    load_installations,
+    visible_installations,
+)
 from shadai.database import get_postgres_session
 from shadai.models.detection import DetectionORM
 from shadai.models.user import UserORM
@@ -145,3 +152,119 @@ async def export_detections(
                 "Cache-Control": "no-store",
             },
         )
+
+
+INVENTORY_EXPORT_COLUMNS = (
+    "host_label",
+    "user_label",
+    "browser",
+    "profile",
+    "extension_id",
+    "extension_name",
+    "version",
+    "enabled",
+    "install_source",
+    "installed_at",
+    "first_seen_at",
+    "last_seen_at",
+    "present_in_latest_snapshot",
+    "catalog_item_id",
+    "detection_id",
+    "collector_id",
+    "wire_version",
+    "inventory_key",
+)
+
+
+# Extension names, host and user labels and profile names are endpoint-reported text; a cell that
+# starts with one of these characters would run as a formula when the export opens in a spreadsheet.
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str) and value.startswith(CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+@router.post("/extension-inventory")
+async def export_extension_inventory(
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    host: str | None = None,
+    browser: str | None = None,
+    enabled: str | None = None,
+    install_source: str | None = None,
+    catalog_match: str | None = None,
+    extension_id: str | None = None,
+    search: str | None = None,
+    sort_by: str = "last_seen_at",
+    sort_order: str = "desc",
+    request: Request = None,
+    current_user: UserORM = Depends(require_role("analyst")),
+    session: AsyncSession = Depends(get_postgres_session, scope="function"),
+):
+    """Every visible installation matching the inventory filters; identity-bearing, audited, never cached."""
+    now = datetime.now(UTC)
+    filters = {
+        "host": host,
+        "browser": browser,
+        "enabled": enabled,
+        "install_source": install_source,
+        "catalog_match": catalog_match,
+        "extension_id": extension_id,
+        "search": search,
+    }
+    conditions = visible_installations(now) + inventory_filters(**filters)
+    installations, _ = await load_installations(session, conditions, sort_by=sort_by, sort_order=sort_order)
+    # The enabled state is exported with the filter vocabulary: an unreported state is "unknown", not blank.
+    rows = [
+        {
+            **installation.model_dump(),
+            "enabled": "unknown" if installation.enabled is None else installation.enabled,
+        }
+        for installation in installations
+    ]
+
+    await log_audit(
+        session,
+        current_user.user_id,
+        current_user.username,
+        "export_extension_inventory",
+        details={
+            "format": format,
+            "count": len(installations),
+            "filters": {key: value for key, value in filters.items() if value},
+        },
+        ip_address=request.client.host if request and request.client else None,
+    )
+
+    headers = {
+        "Content-Disposition": f"attachment; filename=open-shadow-ai-extension-inventory.{format}",
+        "Cache-Control": "no-store",
+    }
+    if format == "csv":
+        output = io.StringIO()
+        output.write(ANTI_HR_WARNING)
+        writer = csv.writer(output)
+        writer.writerow(INVENTORY_EXPORT_COLUMNS)
+        for row in rows:
+            writer.writerow([_csv_value(row[column]) for column in INVENTORY_EXPORT_COLUMNS])
+        output.seek(0)
+        return StreamingResponse(output, media_type="text/csv", headers=headers)
+    data = {
+        "warning": ANTI_HR_WARNING.strip().lstrip("# "),
+        "exported_at": now.isoformat(),
+        "identity_window": identity_window(now).model_dump(mode="json"),
+        "identity_mode": identity_mode(),
+        "count": len(installations),
+        "installations": [installation.model_dump(mode="json") for installation in installations],
+    }
+    return StreamingResponse(
+        io.StringIO(json.dumps(data, indent=2, default=str)), media_type="application/json", headers=headers
+    )
