@@ -46,7 +46,7 @@ def evidence(tmp_path, monkeypatch):
     def layout():
         metadata = json.loads((harness.output / f"{state.component}.metadata.json").read_bytes())
         fixture = MODELS.capture(state.component) if state.component in {
-            "postgres", "node-exporter", "redis", "clickhouse"} else None
+            "postgres", "node-exporter", "redis", "clickhouse", "prometheus"} else None
         if fixture:
             sbom = fixture["sbom"]
         else:
@@ -111,6 +111,23 @@ def test_current_captured_subject_and_every_original_component_revalidate(eviden
             assert claim["original_package"]["versionInfo"] == "UNKNOWN"
             assert claim["binary_version_claim"] is None
             assert claim["source_proof"]["authenticated_provenance"] is False
+
+
+def test_synthetic_prometheus_model_revalidates_both_main_module_observations(evidence):
+    """Synthetic model only: no native Prometheus capture exists until CI builds the recipe."""
+    evidence.component = "prometheus"
+    evidence.harness.run("prometheus")
+    bound = evidence.validate()
+    projections = [claim for claim in bound["components"] if claim["observed_unversioned"]]
+    assert len(bound["components"]) == 3 and [c["binary_path"] for c in projections] == ["/bin/prometheus",
+                                                                                           "/bin/promtool"]
+    for claim in projections:
+        assert claim["original_package"]["versionInfo"] == "UNKNOWN" and claim["binary_version_claim"] is None
+        assert claim["source_proof"]["authenticated_provenance"] is False
+        assert claim["source_proof"]["binary_paths"] == ["/bin/prometheus", "/bin/promtool"]
+    output = evidence.run()
+    manifest = json.loads(output.read_bytes())
+    assert manifest["component"] == "prometheus" and len(manifest["binding"]["components"]) == 3
 
 
 @pytest.mark.parametrize("mutation", ["verdict", "findings", "dirty", "archive", "manifest", "config", "platform",

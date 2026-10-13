@@ -82,22 +82,6 @@ def spdx_inventory(sbom: dict, *, frontend: bool = False, service: bool = False)
     return expected
 
 
-def cyclone_inventory(report: dict, *, reference: str) -> tuple[set, str]:
-    if report.get("bomFormat") != "CycloneDX" or not isinstance(report.get("components"), list):
-        raise ValueError("Missing complete infrastructure CycloneDX inventory")
-    component = report.get("metadata", {}).get("component", {})
-    properties = {item.get("name"): item.get("value") for item in component.get("properties", [])}
-    image_id = properties.get("aquasecurity:trivy:ImageID")
-    if component.get("name") != reference or not isinstance(image_id, str) or \
-            not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
-        raise ValueError("Infrastructure SBOM image subject mismatch")
-    inventory = {package_key(item["purl"]) for item in report["components"] if item.get("purl")}
-    # Prometheus/exporter images may have Go packages without an OS package database.
-    if not inventory:
-        raise ValueError("Infrastructure SBOM inventory is empty")
-    return inventory, image_id
-
-
 def immutable_subject(reference: str) -> tuple[str, str]:
     repository, separator, digest = reference.partition("@")
     if not separator or not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
@@ -152,7 +136,8 @@ def gate(report: dict, *, expected: set | None = None, image_id: str | None = No
         for package in packages:
             if complement and isinstance(package, dict) and not package.get("Version"):
                 claim = next((claim for claim in complement["components"] if claim["observed_unversioned"] and
-                              claim["original_package"]["name"] == package.get("Name")), None)
+                              claim["original_package"]["name"] == package.get("Name") and
+                              claim["binary_path"][1:] == result["Target"]), None)
                 if claim is None or claim["spdx_id"] in observed_main:
                     raise ValueError("Unexpected or duplicate Trivy unversioned main module")
                 script("component_scanner").validate_main_observation(package, result, claim)
@@ -199,17 +184,15 @@ def gate(report: dict, *, expected: set | None = None, image_id: str | None = No
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, help="OCI image archive built by this CI run")
+    parser.add_argument("--input", type=Path, required=True, help="OCI image archive built by this CI run")
     pins = script("verify-image-pins")
-    parser.add_argument("--image", choices=(*pins.APP_IMAGES, *pins.SERVICES))
+    # Every deployed runtime is built by this CI; there is no externally pulled runtime to scan by reference.
+    parser.add_argument("--image", required=True, choices=(*pins.APP_IMAGES, *pins.SERVICES))
     parser.add_argument("--platform", required=True, choices=("linux/amd64", "linux/arm64"))
-    parser.add_argument("--infrastructure", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--source-commit")
     parser.add_argument("--repository")
     args = parser.parse_args()
-    if bool(args.input) == args.infrastructure or bool(args.image) != bool(args.input):
-        parser.error("Choose --input with --image, or --infrastructure")
     diagnostic = script("component_scanner").FailureDiagnostic()
     try:
         scan(args, pins, diagnostic)
@@ -226,10 +209,8 @@ def main() -> None:
 
 def scan(args, pins, diagnostic):
     args.output.mkdir(parents=True, exist_ok=True)
-    early_targets = [args.image] if args.image else [name for name, role in pins.ROLES.items() if role == "runtime"]
-    for name in early_targets:
-        for suffix in (".metadata.json", ".evidence-manifest.json"):
-            (args.output / (name + suffix)).unlink(missing_ok=True)
+    for suffix in (".metadata.json", ".evidence-manifest.json"):
+        (args.output / (args.image + suffix)).unlink(missing_ok=True)
     images_path = ROOT / "requirements/images.json"
     images_bytes = images_path.read_bytes()
     images = pins.inventory(ROOT)
@@ -239,9 +220,7 @@ def scan(args, pins, diagnostic):
     source_hashes = source_fingerprints(ROOT, args.image in pins.SERVICES, args.image == "clickhouse")
     cache = ROOT / "tmp/production-delivery/trivy-cache"
     cache.mkdir(parents=True, exist_ok=True)
-    references = {name: image["reference"] for name, image in images.items() if image["role"] == "runtime"} \
-        if args.infrastructure else {}
-    targets = references if args.infrastructure else {args.image: None}
+    targets = {args.image: None}
     invocation = uuid.uuid4().hex
     current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     source_commit = args.source_commit or current
@@ -261,7 +240,7 @@ def scan(args, pins, diagnostic):
         return fingerprint
     for name in targets:
         # A rejected snapshot/preflight must not leave a prior successful scan sidecar.
-        for suffix in (".json", ".metadata.json", ".inventory.json", ".evidence-manifest.json"):
+        for suffix in (".json", ".metadata.json", ".evidence-manifest.json"):
             (args.output / (name + suffix)).unlink(missing_ok=True)
     context = script("oci_scan_layout").prepared_layout(
         args.input, platform=args.platform, scratch_parent=cache.parent,
@@ -269,13 +248,11 @@ def scan(args, pins, diagnostic):
     ) if args.input else nullcontext(None)
     diagnostic.at("layout_prepare")
     with diagnostic.context(context) as layout, diagnostic.context(ExitStack()) as component_contexts:
-        for name, reference in targets.items():
+        for name in targets:
             maintained = name in pins.SERVICES
             python_runtime = name in pins.APP_IMAGES and name != "frontend"
             mounts = ["--mount", f"type=bind,src={args.output.resolve()},dst=/output",
                       "--mount", f"type=bind,src={cache.resolve()},dst=/cache"]
-            source = [reference]
-            artifact = reference
             if args.input:
                 evidence = layout.evidence
                 diagnostic.at("layout_check")
@@ -303,17 +280,6 @@ def scan(args, pins, diagnostic):
             command = ["docker", "run", "--rm", *mounts, images["trivy"]["reference"], "image", "--cache-dir", "/cache",
                        "--image-src", "remote",
                        "--platform", args.platform, "--scanners", "vuln", "--list-all-pkgs"]
-            if reference:
-                diagnostic.at("trivy_inventory")
-                inventory_output = args.output / f"{name}.inventory.json"
-                inventory_output.unlink(missing_ok=True)
-                subprocess.run([*command, "--format", "cyclonedx", "--output",
-                                f"/output/{inventory_output.name}", *source],
-                               check=True)
-                inventory = json.loads(inventory_output.read_text(encoding="utf-8"))
-                expected, image_id = cyclone_inventory(inventory, reference=reference)
-                subject = {"reference": reference, "image_config": image_id,
-                           "inventory_sha256": hashlib.sha256(inventory_output.read_bytes()).hexdigest()}
             output = args.output / f"{name}.json"
             output.unlink(missing_ok=True)
             output.with_suffix(".metadata.json").unlink(missing_ok=True)
@@ -373,11 +339,10 @@ def scan(args, pins, diagnostic):
                 if python_runtime and not \
                         {("pypi", package, version) for package, version in closure.items()} <= expected:
                     raise ValueError("Image SBOM does not include the complete native runtime hash-lock closure")
-            ecosystems = None if reference or maintained else \
-                {"deb", "apk"} if name == "frontend" else {"deb", "apk", "pypi"}
+            ecosystems = None if maintained else {"deb", "apk"} if name == "frontend" else {"deb", "apk", "pypi"}
             diagnostic.at("native_gate")
             target_failures = gate(report, expected=expected, image_id=image_id, artifact=artifact,
-                                   platform=args.platform, reference=reference, ecosystems=ecosystems,
+                                   platform=args.platform, ecosystems=ecosystems,
                                    complement=complement)
             if maintained:
                 runtime_module = script("grype_runtime")

@@ -20,11 +20,26 @@ PG_ENV = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "
           "DOCKER_PG_LLVM_DEPS=llvm21-dev \t\tclang21", "PGDATA=/var/lib/postgresql/data"]
 GZIP_TYPES = {"application/vnd.docker.image.rootfs.diff.tar.gzip", "application/vnd.oci.image.layer.v1.tar+gzip"}
 LAYER_TYPES = GZIP_TYPES | {"application/vnd.oci.image.layer.v1.tar", "application/vnd.oci.image.layer.v1.tar+zstd"}
+BUSYBOX_ENV = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]
+# Component, exact release commit, SHA256 of the pinned source archive (GitHub release archive for
+# gosu/node_exporter, publisher Go module zip for Prometheus) and the runtime binaries it produces.
 SOURCES = {
     "postgres": ("gosu", "6456aaa0f3c854d199d0f037f068eb97515b7513",
-                 "33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b", "/usr/local/bin/gosu"),
+                 "33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b", ("/usr/local/bin/gosu",)),
     "node-exporter": ("node-exporter", "6044da783597cc3b57aef7580ddcdcff58a4ee99",
-                      "cfec7478aa9bfd011f29df084584b7c7b68dfef85a24d28e9d6d5f88224f83c3", "/bin/node_exporter"),
+                      "cfec7478aa9bfd011f29df084584b7c7b68dfef85a24d28e9d6d5f88224f83c3", ("/bin/node_exporter",)),
+    "prometheus": ("prometheus", "5241a27fe3c6983549fccc32f6e65917408c63cd",
+                   "24864cfffc07315d94f9385f35a03046a1c1a345c96e731425a3b5b7ce2ba9b9",
+                   ("/bin/prometheus", "/bin/promtool")),
+}
+# Per component: build-stage outputs copied into the runtime (source, destination), the publisher
+# licence files copied beside them, and the pinned service base's final-stage environment,
+# working directory and user as recorded in its official image configuration.
+RECIPES = {
+    "gosu": ((("/out/gosu", "/usr/local/bin/gosu"),), ("LICENSE",), (PG_ENV, "/", None)),
+    "node-exporter": ((("/out/node_exporter", "/bin/node_exporter"),), ("LICENSE",), (BUSYBOX_ENV, "/", "nobody")),
+    "prometheus": ((("/out/prometheus", "/bin/"), ("/out/promtool", "/bin/")), ("LICENSE", "NOTICE"),
+                   (BUSYBOX_ENV, "/prometheus", "nobody")),
 }
 
 
@@ -41,8 +56,12 @@ def go_environment(compiler):
 
 
 def source_identifier(reference):
-    if reference.startswith(("golang:", "postgres:")):
+    """BuildKit's canonical identifier: Docker Hub references gain docker.io/ and library/ as needed."""
+    registry = reference.split("/", 1)[0]
+    if "/" not in reference:
         reference = "docker.io/library/" + reference
+    elif "." not in registry and ":" not in registry:
+        reference = "docker.io/" + reference
     return "docker-image://" + reference
 
 
@@ -98,19 +117,26 @@ def expected_graph(recipe, dockerignore, platform, component):
          copy(f"/{directory}/go.sum", "/src/", input_port=2)]}}, ["step3:0", "step4:0"])
     add({"file": {"actions": [copy(f"/{directory}/modules.txt", "/locked-modules.txt")]}}, ["step5:0", "step4:0"])
     add(run(runs[1], go_env), ["step6:0"], native=True)
-    binary = "gosu" if component == "gosu" else "node_exporter"
-    destination = "/usr/local/bin/gosu" if component == "gosu" else "/bin/node_exporter"
-    add({"file": {"actions": [copy(f"/out/{binary}", destination)]}}, ["step0:0", "step7:0"])
+
+    def copies(pairs):
+        """One COPY instruction: a single file keeps its path, several files land in one directory."""
+        if len(pairs) == 1:
+            return [copy(*pairs[0])]
+        return [copy(source, destination, input_port=0 if index == 0 else index + 1,
+                     output_port=-1 if index < len(pairs) - 1 else 0)
+                for index, (source, destination) in enumerate(pairs)]
+
+    binaries, licence_files, (final_env, final_cwd, final_user) = RECIPES[component]
+    add({"file": {"actions": copies(binaries)}}, ["step0:0", "step7:0"])
     licenses = f"/usr/local/share/licenses/shadai/{component}/"
-    add({"file": {"actions": [copy("/src/LICENSE", licenses + "LICENSE")]}}, ["step8:0", "step7:0"])
+    add({"file": {"actions": copies([(f"/src/{name}", licenses + name if len(licence_files) == 1 else licenses)
+                                     for name in licence_files])}}, ["step8:0", "step7:0"])
     add({"file": {"actions": [copy("/usr/local/go/LICENSE", licenses + "GO-LICENSE")]}}, ["step9:0", "step7:0"])
     add({"file": {"actions": [copy("/out/GO-MODULES.txt", licenses, output_port=-1),
          copy("/out/THIRD-PARTY-NOTICES.txt", licenses, input_port=2)]}}, ["step10:0", "step7:0"])
     final_command = runs[2]
     final_inputs = ["step11:0"]
-    final_run = run(final_command, PG_ENV if component == "gosu" else
-                    ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"], cwd="/",
-                    user=None if component == "gosu" else "nobody")
+    final_run = run(final_command, final_env, cwd=final_cwd, user=final_user)
     if component == "gosu" and final_command.startswith("--mount="):
         mount, command = final_command.split(None, 1)
         if mount != "--mount=type=bind,from=build,source=/packages,target=/packages,ro":
@@ -139,7 +165,7 @@ def typed_equal(actual, expected):
 
 def bind(predicate, *, service, platform, selected_manifest, root, service_manifest, expected_source):
     """Refuse missing, disconnected, ambiguous or stale BuildKit source evidence."""
-    component, commit, archive_hash, path = SOURCES[service]
+    component, commit, archive_hash, paths = SOURCES[service]
     component_record = service_manifest["components"][component]
     if component_record["commit"] != commit or component_record["source_sha256"] != archive_hash:
         raise ValueError("Source projection release mismatch")
@@ -223,10 +249,13 @@ def bind(predicate, *, service, platform, selected_manifest, root, service_manif
         previous_size = len(candidates[0])
         if step == 8:
             binary_copy_layer = candidates[0][-1]["digest"]
+    # A recipe producing one binary keeps its single path; several binaries copied by one COPY share
+    # the same output layer and are listed together.
+    binary = {"binary_path": paths[0]} if len(paths) == 1 else {"binary_paths": list(paths)}
     return {"claim_kind": "observed_build_source_projection", "authenticated_provenance": False,
             "source_component": component, "source_commit": commit, "source_archive_sha256": archive_hash,
             "recipe": recipe_path, "recipe_sha256": recipe_hash, "module_hashes": lock_hashes,
-            "binary_path": path, "binary_version_claim": None,
+            **binary, "binary_version_claim": None,
             "binary_copy_layer": binary_copy_layer, "dockerignore_sha256": sha((root / ".dockerignore").read_bytes()),
             "checkout_commit": expected_source["commit"], "repository": expected_source["repository"],
             "vcs_evidence_kind": "unauthenticated_observed_buildkit_hints",

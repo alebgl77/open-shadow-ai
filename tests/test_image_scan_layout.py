@@ -68,7 +68,7 @@ def harness(tmp_path, monkeypatch):
         return MODELS.capture(state.component)
 
     def sbom_inventory():
-        if state.component in {'postgres', 'node-exporter', 'redis', 'clickhouse'}:
+        if state.component in {'postgres', 'node-exporter', 'redis', 'clickhouse', 'prometheus'}:
             return component_fixture()['sbom']
         packages = [{'externalRefs': [{'referenceType': 'purl', 'referenceLocator': p}],
                      'SPDXID': f'SPDXRef-native-{i}', 'versionInfo': SCAN.package_key(p)[2]}
@@ -138,7 +138,7 @@ def harness(tmp_path, monkeypatch):
         assert not (output / f'{state.component}.metadata.json').exists()
         if state.error:
             raise state.error
-        if state.component in {'postgres', 'node-exporter', 'redis', 'clickhouse'}:
+        if state.component in {'postgres', 'node-exporter', 'redis', 'clickhouse', 'prometheus'}:
             report = component_fixture()['trivy']
             report['Metadata']['ImageID'] = CONFIG
         else:
@@ -158,7 +158,7 @@ def harness(tmp_path, monkeypatch):
 
     def subject_documents(handle, image_manifest):
         result = MODELS.documents(component_fixture(), {'commit': COMMIT, 'repository': REPOSITORY})
-        if state.component in {'postgres', 'node-exporter', 'clickhouse'}:
+        if state.component in {'postgres', 'node-exporter', 'clickhouse', 'prometheus'}:
             # This layout/runtime is synthetic: use a synthetic CURRENT recipe graph.
             # The preserved historical native capture is never relabelled or rewritten.
             manifest = json.loads((root / 'requirements/service-builds/manifest.json').read_bytes())
@@ -168,7 +168,7 @@ def harness(tmp_path, monkeypatch):
             metadata['source']['infos'][0]['data'] = base64.b64encode(recipe).decode()
             graph = SOURCE.expected_clickhouse_graph(recipe, 'linux/amd64') if state.component == 'clickhouse' else \
                 SOURCE.expected_graph(recipe, (root / '.dockerignore').read_bytes(), 'linux/amd64',
-                                      'gosu' if state.component == 'postgres' else 'node-exporter')
+                                      'gosu' if state.component == 'postgres' else state.component)
             predicate['buildDefinition']['internalParameters']['buildConfig']['llbDefinition'] = graph
             if state.component == 'clickhouse':
                 predicate['buildDefinition']['resolvedDependencies'] = MODELS.resolved_dependencies(root)
@@ -375,6 +375,53 @@ def test_exact_native_capture_complement_queries_and_original_unknown_are_bound(
             assert claim['original_package']['versionInfo'] == 'UNKNOWN'
             assert claim['source_proof']['authenticated_provenance'] is False
     assert metadata['verdict'] == 'passed' and metadata['findings'] == []
+
+
+def test_synthetic_prometheus_model_binds_both_binaries_to_one_source_copy_layer(harness):
+    """Synthetic model only: no native Prometheus capture exists until CI builds the recipe."""
+    harness.run('prometheus')
+    metadata = json.loads((harness.output / 'prometheus.metadata.json').read_bytes())
+    complement = metadata['complement']
+    assert len(complement['sentinels']) == 2 and len(complement['receipts']) == 5
+    assert len(harness.state.grype_calls) == 9 and harness.state.grype_calls[-1] == 'cleanup'
+    projections = [claim for claim in complement['components'] if claim['observed_unversioned']]
+    assert [claim['binary_path'] for claim in projections] == ['/bin/prometheus', '/bin/promtool']
+    for claim in projections:
+        assert claim['original_package']['versionInfo'] == 'UNKNOWN' and claim['binary_version_claim'] is None
+        assert claim['queries'] == ['pkg:golang/github.com/prometheus/prometheus@v0.315.0',
+                                    'cpe:2.3:a:prometheus:prometheus:3.15.0:*:*:*:*:*:*:*']
+        assert claim['source_release_projection'] == '3.15.0' and claim['source_module_projection'] == 'v0.315.0'
+        assert claim['source_proof']['binary_paths'] == ['/bin/prometheus', '/bin/promtool']
+        assert claim['source_proof']['authenticated_provenance'] is False
+        assert claim['source_proof']['binary_copy_layer'] == claim['original_binary_file']['comment'].split(' ')[1]
+    assert projections[0]['source_proof_sha256'] == projections[1]['source_proof_sha256']
+    assert metadata['service_recipe']['runtime_tag'] == 'shadai/prometheus:3.15.0-maintained.2'
+    assert metadata['verdict'] == 'passed' and metadata['findings'] == []
+
+
+@pytest.mark.parametrize('mutation', ['missing-promtool', 'moved-promtool', 'foreign-layer', 'trivy-target'])
+def test_synthetic_prometheus_model_refuses_partial_or_displaced_binaries(harness, mutation):
+    def change_sbom(sbom):
+        promtool = next(p for p in sbom['packages'] if p.get('sourceInfo', '').endswith('/bin/promtool'))
+        if mutation == 'missing-promtool':
+            sbom['packages'].remove(promtool)
+            sbom['relationships'] = [r for r in sbom['relationships']
+                                     if promtool['SPDXID'] not in (r['spdxElementId'], r['relatedSpdxElement'])]
+        elif mutation == 'moved-promtool':
+            promtool['sourceInfo'] = promtool['sourceInfo'].replace('/bin/promtool', '/usr/bin/promtool')
+        elif mutation == 'foreign-layer':
+            next(f for f in sbom['files'] if f['fileName'] == 'bin/promtool')['comment'] = \
+                next(f for f in sbom['files'] if f['fileName'] == 'bin/busybox')['comment']
+
+    def change_report(report):
+        if mutation == 'trivy-target':
+            report['Results'][1]['Target'] = 'bin/prometheus'
+    harness.state.sbom_mutate = change_sbom
+    harness.state.mutate = change_report
+    with pytest.raises(ValueError):
+        harness.run('prometheus')
+    assert harness.state.grype_calls == [] and harness.calls[-1] == 'cleanup'
+    assert not (harness.output / 'prometheus.metadata.json').exists()
 
 
 @pytest.mark.parametrize('mutation', ['echo', 'config', 'db', 'providers', 'ignored', 'sentinel'])

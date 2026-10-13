@@ -11,9 +11,14 @@
     "reference": "nginxinc/nginx-unprivileged:1.30.5-alpine3.24@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86",
     "role": "build-only"
   },
-  "prometheus": {
+  "prometheus-base": {
     "reference": "prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e",
-    "role": "runtime"
+    "role": "build-only"
+  },
+  "prometheus": {
+    "reference": "shadai/prometheus:3.15.0-maintained.2",
+    "role": "derived-runtime",
+    "dockerfile": "deploy/service-builds/Dockerfile.prometheus"
   },
   "trivy": {
     "reference": "aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa",

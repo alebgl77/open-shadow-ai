@@ -24,6 +24,23 @@
       "source_url": "https://codeload.github.com/prometheus/node_exporter/tar.gz/6044da783597cc3b57aef7580ddcdcff58a4ee99",
       "source_sha256": "cfec7478aa9bfd011f29df084584b7c7b68dfef85a24d28e9d6d5f88224f83c3",
       "archive_prefix": "node_exporter-6044da783597cc3b57aef7580ddcdcff58a4ee99"
+    },
+    "prometheus": {
+      "source_kind": "go-module-zip",
+      "repository": "prometheus/prometheus",
+      "tag": "v3.15.0",
+      "commit": "5241a27fe3c6983549fccc32f6e65917408c63cd",
+      "module": "github.com/prometheus/prometheus",
+      "module_version": "v0.315.0",
+      "zip_h1": "h1:sFGZWmC2Hk9N1NBJGCnXYZb5hyLCq8yuAMoEjLAg6ac=",
+      "source_url": "https://proxy.golang.org/github.com/prometheus/prometheus/@v/v0.315.0.zip",
+      "source_sha256": "24864cfffc07315d94f9385f35a03046a1c1a345c96e731425a3b5b7ce2ba9b9",
+      "archive_prefix": "github.com/prometheus/prometheus@v0.315.0",
+      "web_ui": {
+        "url": "https://github.com/prometheus/prometheus/releases/download/v3.15.0/prometheus-web-ui-3.15.0.tar.gz",
+        "sha256": "fa8c918ed05e3f89e232e9b69eccd6ed074602cd9e8a2cab7a92bec9651974ae",
+        "bytes": 3343738
+      }
     }
   },
   "packages": {
@@ -224,6 +241,12 @@
       "runtime_tag": "shadai/node-exporter:1.12.1-maintained.2",
       "base": "node-exporter-base",
       "dockerfile": "deploy/service-builds/Dockerfile.node-exporter"
+    },
+    "prometheus": {
+      "functional_version": "3.15.0",
+      "runtime_tag": "shadai/prometheus:3.15.0-maintained.2",
+      "base": "prometheus-base",
+      "dockerfile": "deploy/service-builds/Dockerfile.prometheus"
     }
   },
   "files": {
@@ -241,12 +264,21 @@
     "requirements/service-builds/node-exporter/modules.txt": "c5c4072a1a2bcf9255898a914f5708d03fc6894f4ba545c6b39fa71591d94690",
     "requirements/service-builds/node-exporter/upstream.go.mod": "0e4614c617f16e308698ed1afdd0f0f055b119d4cdf015b336c095eb35fa34ed",
     "requirements/service-builds/node-exporter/upstream.go.sum": "e9457fad10a31b707ebfb68dc8378ec71f3271d04faf84f7ec8f9d231d81ea57",
+    "requirements/service-builds/prometheus/go.mod": "d85af091d5bf9ba19f98e4d92e24b368d3e5537af086521ef10c7dd669695fd7",
+    "requirements/service-builds/prometheus/go.mod.diff": "b1f6ea9e02800db3e29cb6f705d444a8034c663b571604673395cca31918e5ff",
+    "requirements/service-builds/prometheus/go.sum": "d788de08ccf06166baafa21b52764bd0af13328903a447029ee08b21fbd4ae67",
+    "requirements/service-builds/prometheus/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "requirements/service-builds/prometheus/NOTICE": "ac9e304462a58a4d71b6488423d4447e614c8b31d517fe24345016522c102a78",
+    "requirements/service-builds/prometheus/modules.txt": "48a253a48d28565de9eca04945bf970449c5ab315b955044fda8e53995047cdb",
+    "requirements/service-builds/prometheus/upstream.go.mod": "94e39d68d3abd10168c4b1944a63356a1d9a467ddeceee46aea75fc14e4381d1",
+    "requirements/service-builds/prometheus/upstream.go.sum": "2b0f11cdccdc6605922c8f48d7afc68ae44fdc90df6b5d2f6f677b447b07d99e",
     "deploy/service-builds/Dockerfile.clickhouse": "2371e68aac1699cf157aaba3ca4821b73922c9c328331b39252bf2c899c650bb",
     "deploy/service-builds/Dockerfile.node-exporter": "85ca581700008783cb94bd1c6fa635ab6290d9c676f8e4e7f21f04c9ad4dd969",
     "deploy/service-builds/Dockerfile.postgres": "b14490b86f675e6183dad861aeb3930ae8375ad8aaa4a0d4191d7520be03c942",
+    "deploy/service-builds/Dockerfile.prometheus": "74c096ecc227be73e9aa5b48d3eda2e2f6b95fa1ef8151bc98af8b2a30b4bb83",
     "deploy/service-builds/Dockerfile.redis": "e0d7d5d0d57416fb07cf6a2dd6cfbb6a89773d36befa9e5d5515d97b2d7b57ef",
     "requirements/service-builds/.gitattributes": "2804281a76c3635e66dabadffc7212e07184a22816f277a03591b3297539fc64",
     "deploy/service-builds/.gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    "requirements/service-builds/NOTICE.md": "741ff2e80bcd2228c700d645de7315aeba550139a8d9d715eadb8b30fe93f536"
+    "requirements/service-builds/NOTICE.md": "0cc4f4302bf1f7cc5e45999e7fecbf8b53fa37aa9afe34a2c71934f348cf8b53"
   }
 }

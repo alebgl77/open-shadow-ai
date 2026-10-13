@@ -79,14 +79,40 @@ PROMTOOL_CI_CASES = [
 ]
 
 
+MAINTAINED_PROMETHEUS = 'shadai/prometheus:3.15.0-maintained.2'
+PROMETHEUS_BASE = ('prom/prometheus:v3.15.0@sha256:'
+                   'efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e')
+PROMETHEUS_RECIPE = 'deploy/service-builds/Dockerfile.prometheus'
+
+
 def ci_promtool_command(job, image_variable):
     workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
-    run, = [step['run'] for step in workflow['jobs'][job]['steps']
-            if '--entrypoint /bin/promtool' in step.get('run', '')]
+    steps = workflow['jobs'][job]['steps']
+    promtool_step, = [index for index, step in enumerate(steps) if '--entrypoint /bin/promtool' in step.get('run', '')]
+    run = steps[promtool_step]['run']
     assert f'{image_variable}="$(python scripts/verify-image-pins.py --reference prometheus)"' in run
-    command, = [shlex.split(line) for line in run.splitlines()
-                if line.strip().startswith('docker ') and '--entrypoint /bin/promtool' in line]
-    return command
+    # The maintained local tag only exists once its recipe has been built in that job. The source rebuild
+    # (module download, two Go binaries, UI assets) is a dedicated, separately timed Compose build step
+    # (pull_policy build) that precedes every step running the image, so the bounded verification steps
+    # keep their own budgets and no `up`/`run` in them pays for the compile.
+    build = ('docker --context default compose -f docker-compose.host-monitoring.yml build host-prometheus'
+             if job == 'production-qualification' else
+             'docker compose -f docker-compose.yml -f docker-compose.monitoring.yml build prometheus')
+    built, = [index for index, step in enumerate(steps) if step.get('run', '').strip() == build]
+    assert built < promtool_step and type(steps[built]['timeout-minutes']) is int
+    assert steps[built]['timeout-minutes'] >= 15 and 'if' not in steps[built]
+    assert all('shadai/prometheus' not in step.get('run', '') and ' prometheus' not in step.get('run', '')
+               for step in steps[:built])
+    lines = run.splitlines()
+    promtool, = [index for index, line in enumerate(lines)
+                 if line.strip().startswith('docker ') and '--entrypoint /bin/promtool' in line]
+    if job == 'compose-integration':
+        # Its `up -d ... api prometheus` only recreates the already built image before promtool runs.
+        recreated, = [index for index, line in enumerate(lines) if line.strip().startswith(
+            'docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d')
+            and line.strip().endswith(' api prometheus')]
+        assert recreated < promtool
+    return shlex.split(lines[promtool])
 
 
 def assert_ci_promtool_scratch(command, prefix, directory, fixture, image_variable):
@@ -103,12 +129,27 @@ def assert_ci_promtool_scratch(command, prefix, directory, fixture, image_variab
     assert command[-4:] == [f'${image_variable}', 'test', 'rules', f'/workspace/deploy/{directory}/tests/{fixture}']
 
 
+def test_prometheus_is_the_maintained_recipe_over_the_exact_pinned_official_base():
+    images = yaml.safe_load((ROOT / 'requirements/images.json').read_text())
+    assert images['prometheus-base'] == {'reference': PROMETHEUS_BASE, 'role': 'build-only'}
+    assert images['prometheus'] == {'reference': MAINTAINED_PROMETHEUS, 'role': 'derived-runtime',
+                                    'dockerfile': PROMETHEUS_RECIPE}
+    recipe = (ROOT / PROMETHEUS_RECIPE).read_text()
+    assert re.findall(r'(?m)^FROM (\S+)', recipe)[-1] == PROMETHEUS_BASE
+    for path, service in (('docker-compose.monitoring.yml', 'prometheus'),
+                          ('docker-compose.host-monitoring.yml', 'host-prometheus')):
+        deployed = yaml.safe_load((ROOT / path).read_text())['services'][service]
+        assert deployed['image'] == MAINTAINED_PROMETHEUS and deployed['pull_policy'] == 'build'
+        assert deployed['build'] == {'context': '.', 'dockerfile': PROMETHEUS_RECIPE}
+        assert deployed['user'] == '65534:65534' and deployed['read_only'] is True
+        assert PROMETHEUS_BASE not in (ROOT / path).read_text()
+
+
 @pytest.mark.parametrize('job,prefix,directory,fixture,image_variable', PROMTOOL_CI_CASES)
 def test_ci_promtool_scratch_is_bounded_and_keeps_container_and_rules_private(
         job, prefix, directory, fixture, image_variable):
     reference = yaml.safe_load((ROOT / 'requirements/images.json').read_text())['prometheus']['reference']
-    assert reference == ('prom/prometheus:v3.15.0@sha256:'
-                         'efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e')
+    assert reference == MAINTAINED_PROMETHEUS
     compose = yaml.safe_load((ROOT / 'docker-compose.monitoring.yml').read_text())
     assert compose['services']['prometheus']['image'] == reference
     command = ci_promtool_command(job, image_variable)

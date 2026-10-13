@@ -698,3 +698,156 @@ def test_filesystem_exception_diagnostic_real_context_after_yield_omits_detail_a
     value = json.loads(path.read_bytes())
     assert value["error_type"] == "FileNotFoundError"
     assert "filesystem_exception" not in value and "prepare_phase" not in value
+
+
+# Synthetic Prometheus model: no native capture exists until CI builds the maintained recipe.
+def load_models():
+    spec = importlib.util.spec_from_file_location("component_scan_models", ROOT / "tests/component_scan_models.py")
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
+def prometheus_model():
+    return load_models().capture("prometheus")
+
+
+def test_synthetic_prometheus_model_assigns_two_unversioned_binaries_of_one_source_projection(tmp_path):
+    fixture = prometheus_model()
+    assert fixture["capture"]["service"] == "prometheus" and "synthetic" in fixture["capture"]
+    original = copy.deepcopy(fixture)
+    partition = plan(fixture)
+    assert [claim["binary_path"] for claim in partition["components"]] == ["/bin/busybox", "/bin/prometheus",
+                                                                           "/bin/promtool"]
+    main_module = ["pkg:golang/github.com/prometheus/prometheus@v0.315.0",
+                   "cpe:2.3:a:prometheus:prometheus:3.15.0:*:*:*:*:*:*:*"]
+    assert [claim["queries"] for claim in partition["components"]] == [
+        ["cpe:2.3:a:busybox:busybox:1.38.0:*:*:*:*:*:*:*"], main_module, main_module]
+    for claim in partition["components"][1:]:
+        assert claim["original_package"]["versionInfo"] == "UNKNOWN" and claim["binary_version_claim"] is None
+        # Go advisory ranges for github.com/prometheus/prometheus are keyed by its module version (v0.315.0 is
+        # release 3.15.0); the CPE keeps the release number that NVD CPEs use.
+        assert claim["source_release_projection"] == "3.15.0"
+        assert claim["source_module_projection"] == "v0.315.0"
+    # Shared dependencies are observed once per binary; the native inventory is their union.
+    assert partition["software_package_count"] == 91 and len(partition["native"]) == 47
+    assert scan.gate(fixture["trivy"], expected=partition["native"], complement=partition,
+                     image_id=fixture["capture"]["image_config"], artifact="/input/layout",
+                     platform="linux/amd64") == []
+    source_inputs(fixture, tmp_path)
+    proof = bind(fixture, tmp_path)
+    assert proof["binary_paths"] == ["/bin/prometheus", "/bin/promtool"] and "binary_path" not in proof
+    assert proof["source_commit"] == "5241a27fe3c6983549fccc32f6e65917408c63cd"
+    assert proof["source_archive_sha256"] == "24864cfffc07315d94f9385f35a03046a1c1a345c96e731425a3b5b7ce2ba9b9"
+    assert proof["recipe"] == "deploy/service-builds/Dockerfile.prometheus"
+    assert proof["recipe_sha256"] == fixture["service_manifest"]["files"][proof["recipe"]]
+    documents = {"manifest": fixture["manifest"], "provenance": fixture["provenance"][0]}
+    components.bind_components(partition, documents=documents, service="prometheus", platform="linux/amd64",
+                               root=tmp_path, service_manifest=fixture["service_manifest"], binder=source.bind,
+                               expected_source={"commit": fixture["capture"]["merge"],
+                                                "repository": "alebgl77/open-shadow-ai"})
+    layer = partition["components"][1]["source_proof"]["binary_copy_layer"]
+    for claim in partition["components"][1:]:
+        assert claim["source_proof"]["binary_copy_layer"] == layer
+        assert claim["original_binary_file"]["comment"] == "layerID: " + layer
+        assert claim["source_proof_sha256"] == components.digest(claim["source_proof"])
+    assert fixture == original
+
+
+@pytest.mark.parametrize("mutation", ["missing-promtool", "duplicate-prometheus", "moved-promtool",
+                                     "renamed-main", "duplicate-dependency", "promtool-layer"])
+def test_synthetic_prometheus_model_refuses_incomplete_or_ambiguous_binaries(mutation, tmp_path):
+    fixture = prometheus_model()
+    sbom = fixture["sbom"]
+    promtool = next(p for p in sbom["packages"] if p.get("sourceInfo", "").endswith("/bin/promtool"))
+    prometheus = next(p for p in sbom["packages"] if p.get("sourceInfo", "").endswith("/bin/prometheus")
+                      and p["name"] == "github.com/prometheus/prometheus")
+    if mutation == "missing-promtool":
+        sbom["packages"].remove(promtool)
+        sbom["relationships"] = [r for r in sbom["relationships"]
+                                 if promtool["SPDXID"] not in (r["spdxElementId"], r["relatedSpdxElement"])]
+    elif mutation == "duplicate-prometheus":
+        promtool["sourceInfo"] = prometheus["sourceInfo"]
+    elif mutation == "moved-promtool":
+        promtool["sourceInfo"] = promtool["sourceInfo"].replace("/bin/promtool", "/usr/local/bin/promtool")
+    elif mutation == "renamed-main":
+        promtool["name"] = "github.com/prometheus/promtool"
+        promtool["externalRefs"][1]["referenceLocator"] = "pkg:golang/github.com/prometheus/promtool"
+    elif mutation == "duplicate-dependency":
+        dependency = next(p for p in sbom["packages"] if p["name"] == "golang.org/x/net"
+                          and p["sourceInfo"].endswith("/bin/promtool"))
+        clone = copy.deepcopy(dependency)
+        clone["SPDXID"] += "-again"
+        sbom["packages"].append(clone)
+        sbom["relationships"].append({"spdxElementId": components.DOCUMENT_ROOT, "relatedSpdxElement": clone["SPDXID"],
+                                      "relationshipType": "CONTAINS"})
+    if mutation == "promtool-layer":
+        partition = plan(fixture)
+        next(f for f in sbom["files"] if f["fileName"] == "bin/promtool")["comment"] = \
+            next(f for f in sbom["files"] if f["fileName"] == "bin/busybox")["comment"]
+        partition = plan(fixture)
+        source_inputs(fixture, tmp_path)
+        with pytest.raises(ValueError, match="does not correspond to locked source copy output"):
+            components.bind_components(partition, documents={"manifest": fixture["manifest"],
+                "provenance": fixture["provenance"][0]}, service="prometheus", platform="linux/amd64",
+                root=tmp_path, service_manifest=fixture["service_manifest"], binder=source.bind,
+                expected_source={"commit": fixture["capture"]["merge"], "repository": "alebgl77/open-shadow-ai"})
+        return
+    with pytest.raises(ValueError):
+        plan(fixture)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "swapped-target", "promtool-main-renamed"])
+def test_trivy_must_observe_each_prometheus_binary_as_its_own_unversioned_main_module(mutation):
+    fixture = prometheus_model()
+    partition = plan(fixture)
+    results = fixture["trivy"]["Results"]
+    if mutation == "missing":
+        results.pop()
+    elif mutation == "swapped-target":
+        results[1]["Target"] = "bin/prometheus"
+    else:
+        results[1]["Packages"][0]["Name"] = results[1]["Packages"][0]["ID"] = "github.com/prometheus/promtool"
+    with pytest.raises(ValueError):
+        scan.gate(fixture["trivy"], expected=partition["native"], complement=partition)
+
+
+def test_prometheus_recipe_graph_copies_both_binaries_in_one_layer_and_smokes_as_nobody():
+    recipe = (ROOT / "deploy/service-builds/Dockerfile.prometheus").read_bytes()
+    graph = source.expected_graph(recipe, (ROOT / ".dockerignore").read_bytes(), "linux/arm64", "prometheus")
+    assert len(graph) == 14 and graph[0]["op"]["Op"]["source"]["identifier"].startswith(
+        "docker-image://docker.io/prom/prometheus:v3.15.0@sha256:")
+    assert graph[0]["op"]["platform"] == {"Architecture": "arm64", "OS": "linux"}
+    actions = graph[8]["op"]["Op"]["file"]["actions"]
+    assert [(a["input"], a["output"], a["Action"]["copy"]["src"], a["Action"]["copy"]["dest"]) for a in actions] == [
+        (0, -1, "/out/prometheus", "/bin/"), (2, 0, "/out/promtool", "/bin/")]
+    assert graph[8]["inputs"] == ["step0:0", "step7:0"]
+    licences = graph[9]["op"]["Op"]["file"]["actions"]
+    assert [a["Action"]["copy"]["src"] for a in licences] == ["/src/LICENSE", "/src/NOTICE"]
+    assert all(a["Action"]["copy"]["dest"] == "/usr/local/share/licenses/shadai/prometheus/" for a in licences)
+    final = graph[12]["op"]["Op"]["exec"]["meta"]
+    assert final["cwd"] == "/prometheus" and final["user"] == "nobody" and final["env"] == source.BUSYBOX_ENV
+    assert final["args"] == ["/bin/sh", "-c", "/bin/prometheus --version && /bin/promtool --version"]
+    assert graph[3]["op"]["Op"]["exec"]["meta"]["env"] == source.go_environment(
+        next(line.split()[1] for line in recipe.decode().splitlines() if line.startswith("FROM golang:")))
+    assert graph[13] == {"id": "step13", "inputs": ["step12:0"], "op": {"Op": {}}}
+
+
+def test_single_binary_graphs_keep_their_exact_shape_and_hub_identifiers_are_canonical():
+    for component, recipe_name, binary, destination in (
+            ("node-exporter", "node-exporter", "/out/node_exporter", "/bin/node_exporter"),
+            ("gosu", "postgres", "/out/gosu", "/usr/local/bin/gosu")):
+        recipe = (ROOT / f"deploy/service-builds/Dockerfile.{recipe_name}").read_bytes()
+        graph = source.expected_graph(recipe, (ROOT / ".dockerignore").read_bytes(), "linux/amd64", component)
+        actions = graph[8]["op"]["Op"]["file"]["actions"]
+        assert len(actions) == 1 and (actions[0]["input"], actions[0]["output"]) == (0, 0)
+        assert (actions[0]["Action"]["copy"]["src"], actions[0]["Action"]["copy"]["dest"]) == (binary, destination)
+        licence, = graph[9]["op"]["Op"]["file"]["actions"]
+        assert licence["Action"]["copy"]["dest"] == f"/usr/local/share/licenses/shadai/{component}/LICENSE"
+    for reference, identifier in (("golang:1.26.9-alpine3.24@sha256:" + "a" * 64, "docker.io/library/golang:"),
+                                  ("postgres:16.15-alpine3.24@sha256:" + "a" * 64, "docker.io/library/postgres:"),
+                                  ("prom/prometheus:v3.15.0@sha256:" + "a" * 64, "docker.io/prom/prometheus:"),
+                                  ("quay.io/prometheus/node-exporter:v1.12.1@sha256:" + "a" * 64,
+                                   "quay.io/prometheus/node-exporter:"),
+                                  ("localhost:5000/library/x:1@sha256:" + "a" * 64, "localhost:5000/library/x:")):
+        assert source.source_identifier(reference).startswith("docker-image://" + identifier)

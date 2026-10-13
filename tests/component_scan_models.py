@@ -1,5 +1,6 @@
 """Public captured component observations and explicitly synthetic tool-boundary models."""
 
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -18,6 +19,8 @@ def load(name):
 
 
 def capture(service):
+    if service == "prometheus":
+        return synthetic_prometheus_capture()
     suffix = "current-amd64" if service in {"postgres", "node-exporter", "clickhouse"} else "amd64"
     return json.loads((ROOT / f"tests/fixtures/component-scanner/{service}-{suffix}.json").read_bytes())
 
@@ -119,3 +122,86 @@ def query_report(query, receipt, *, advisory=None, severity="Medium", fixed=Fals
             "matches": [{"artifact": artifact, "vulnerability": {"id": advisory, "severity": severity,
                          "fix": {"versions": ["9.9.9"] if fixed else [],
                                  "state": "fixed" if fixed else "not-fixed"}}}] if advisory else []}
+
+
+def synthetic_prometheus_capture(root=ROOT):
+    """SYNTHETIC Prometheus model projected onto the preserved node_exporter native capture.
+
+    No native Prometheus capture exists until CI builds the maintained recipe. This model keeps the
+    historical node_exporter subject (manifest, config, ordered layers, busybox and dependency
+    observations) and projects onto it the CURRENT Prometheus recipe graph, locks and manifest,
+    rewriting the one main-module observation into the two unversioned Prometheus binaries that a
+    single COPY places in one layer. It exercises the scanner contracts only; it is never evidence
+    about a scanned Prometheus image and must not be mistaken for a native capture.
+    """
+    components = load("component_scanner")
+    source = load("component_source")
+    fixture = capture("node-exporter")
+    service_manifest = json.loads((root / "requirements/service-builds/manifest.json").read_bytes())
+    recipe_path = service_manifest["services"]["prometheus"]["dockerfile"]
+    recipe = (root / recipe_path).read_bytes()
+    sbom = fixture["sbom"]
+    old_main = next(p for p in sbom["packages"] if p["name"] == "github.com/prometheus/node_exporter")
+    old_file = next(f for f in sbom["files"] if f["fileName"] == "bin/node_exporter")
+    dependencies = [p for p in sbom["packages"]
+                    if p["SPDXID"] not in {old_main["SPDXID"], components.DOCUMENT_ROOT} and p["name"] != "busybox"]
+    packages = [p for p in sbom["packages"] if p["SPDXID"] == components.DOCUMENT_ROOT or p["name"] == "busybox"]
+    files = [f for f in sbom["files"] if f["fileName"] != "bin/node_exporter"]
+    relationships = [r for r in sbom["relationships"]
+                     if r["relationshipType"] == "OTHER" and r["spdxElementId"] != old_main["SPDXID"]]
+    trivy_packages = {p["Name"]: p for p in fixture["trivy"]["Results"][0]["Packages"] if p.get("Version")}
+    results = []
+    # promtool links a subset of the dependencies; the union is the runtime's native inventory.
+    for path, tag, selected in (("/bin/prometheus", "prometheus", dependencies),
+                                ("/bin/promtool", "promtool", dependencies[:-6])):
+        suffix = hashlib.sha256(path.encode()).hexdigest()[:16]
+        main_id = f"SPDXRef-Package-go-module-github.com-prometheus-prometheus-{suffix}"
+        file_id = f"SPDXRef-File-bin-{tag}-{suffix}"
+        packages.append({**copy.deepcopy(old_main), "name": "github.com/prometheus/prometheus", "SPDXID": main_id,
+                         "sourceInfo": "acquired package info from go module information: " + path,
+                         "externalRefs": [
+                             {"referenceCategory": "SECURITY", "referenceType": "cpe23Type",
+                              "referenceLocator": "cpe:2.3:a:prometheus:prometheus:*:*:*:*:*:*:*:*"},
+                             {"referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl",
+                              "referenceLocator": "pkg:golang/github.com/prometheus/prometheus"}]})
+        files.append({**copy.deepcopy(old_file), "fileName": path[1:], "SPDXID": file_id, "checksums": [
+            {"algorithm": "SHA256", "checksumValue": hashlib.sha256(path.encode()).hexdigest()}]})
+        relationships.append({"spdxElementId": main_id, "relatedSpdxElement": file_id, "relationshipType": "OTHER",
+                              "comment": components.EVIDENT_BY})
+        for dependency in selected:
+            projected = copy.deepcopy(dependency)
+            projected["SPDXID"] = f"{dependency['SPDXID']}-{tag}"
+            projected["sourceInfo"] = "acquired package info from go module information: " + path
+            packages.append(projected)
+            relationships.append({"spdxElementId": projected["SPDXID"], "relatedSpdxElement": main_id,
+                                  "relationshipType": "DEPENDENCY_OF"})
+        main = copy.deepcopy(fixture["trivy"]["Results"][0]["Packages"][0])
+        main.update({"ID": "github.com/prometheus/prometheus", "Name": "github.com/prometheus/prometheus",
+                     "Identifier": {"PURL": "pkg:golang/github.com/prometheus/prometheus", "UID": suffix}})
+        results.append({"Target": path[1:], "Class": "lang-pkgs", "Type": "gobinary",
+                        "Packages": [main, *(copy.deepcopy(trivy_packages[d["name"]]) for d in selected)],
+                        "Vulnerabilities": copy.deepcopy(fixture["trivy"]["Results"][0].get("Vulnerabilities", []))})
+    relationships = [{"spdxElementId": components.DOCUMENT_ROOT, "relatedSpdxElement": p["SPDXID"],
+                      "relationshipType": "CONTAINS"} for p in packages
+                     if p["SPDXID"] != components.DOCUMENT_ROOT] + relationships
+    fixture["sbom"] = {**sbom, "packages": packages, "files": files, "relationships": relationships}
+    fixture["trivy"]["Results"] = results
+    provenance = fixture["provenance"][0]
+    predicate = provenance["statement"]["predicate"]
+    definition = predicate["buildDefinition"]
+    definition["externalParameters"]["configSource"]["path"] = Path(recipe_path).name
+    definition["externalParameters"]["request"]["root"]["configSource"]["path"] = Path(recipe_path).name
+    metadata = predicate["runDetails"]["metadata"]["buildkit_metadata"]
+    metadata["source"]["infos"][0].update({"filename": Path(recipe_path).name,
+                                           "data": base64.b64encode(recipe).decode()})
+    graph = source.expected_graph(recipe, (root / ".dockerignore").read_bytes(), "linux/amd64", "prometheus")
+    definition["internalParameters"]["buildConfig"] = {
+        "llbDefinition": graph,
+        "digestMapping": {"sha256:" + hashlib.sha256(node["id"].encode()).hexdigest(): node["id"] for node in graph}}
+    fixture["service_manifest"] = service_manifest
+    fixture["source_inputs"] = {name: (root / name).read_text(encoding="utf-8") for name in (
+        recipe_path, ".dockerignore", "requirements/service-builds/prometheus/go.mod",
+        "requirements/service-builds/prometheus/go.sum", "requirements/service-builds/prometheus/modules.txt")}
+    fixture["capture"].update({"service": "prometheus", "synthetic": "projected onto node-exporter-current-amd64; "
+                               "not a native Prometheus capture"})
+    return fixture
