@@ -383,6 +383,17 @@ async def test_export_carries_the_warning_every_filter_and_an_audit_entry_and_is
     }
 
 
+def test_csv_cells_that_a_spreadsheet_would_run_as_formulas_are_neutralised():
+    from shadai.api.exports import _csv_value
+
+    # Extension names come from manifests anyone can publish; labels and profiles are endpoint text.
+    for hostile in ("=HYPERLINK(\"https://example.invalid\")", "+1+1", "-2+3", "@SUM(A1)", "\tx", "\rx"):
+        assert _csv_value(hostile) == "'" + hostile
+    assert [_csv_value(value) for value in ("Sider", "1.2.3", "", None, True, False)] == [
+        "Sider", "1.2.3", "", "", "true", "false"
+    ]
+
+
 async def test_every_response_states_when_labels_are_pseudonyms(fleet):
     get_config().security.pseudonymize_identities = True
     for path in (

@@ -192,6 +192,10 @@ async def scrub_personal_history(
                         continue
                     if "sample_values" in section or "sample_observations" in section:
                         section["sample_values"], section["sample_observations"] = [], []
+                    # Version history and per-version host counts derive from the inventory rows
+                    # this scrub deletes; the next browser event rebuilds them from fresh evidence.
+                    if "version_changes" in section or "versions" in section:
+                        section["version_changes"], section["versions"] = [], {}
                     for observation in section.get("network_observations", []):
                         observation["src_ip"] = ""
                 bundle["_risk_score_stale"] = True

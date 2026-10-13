@@ -176,6 +176,11 @@ INVENTORY_EXPORT_COLUMNS = (
 )
 
 
+# Extension names, host and user labels and profile names are endpoint-reported text; a cell that
+# starts with one of these characters would run as a formula when the export opens in a spreadsheet.
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
 def _csv_value(value):
     if value is None:
         return ""
@@ -183,6 +188,8 @@ def _csv_value(value):
         return "true" if value else "false"
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, str) and value.startswith(CSV_FORMULA_PREFIXES):
+        return "'" + value
     return value
 
 

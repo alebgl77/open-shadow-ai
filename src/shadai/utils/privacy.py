@@ -183,7 +183,8 @@ def retain_version_changes(values, *, now: datetime, cutoff: datetime) -> list[d
     for value in values if isinstance(values, list) else []:
         try:
             change = ExtensionVersionEvidence.model_validate(value)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
+            # An offset that pushes a stored date past year 9999 in UTC is malformed, not fatal.
             continue
         if cutoff <= change.observed_at <= now + timedelta(minutes=5):
             retained.append(change)

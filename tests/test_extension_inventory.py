@@ -299,17 +299,19 @@ async def test_only_browser_inventory_evidence_naming_an_extension_is_inventory(
     ingest = Ingest(evidence_sessions)
     observed = inventory_event(evidence_type="observation")
     nameless = inventory_event(extension_id="")
+    # The generic ingest path can omit both device names; such an event cannot be keyed to a device.
+    hostless = inventory_event(hostname="", device_id="")
     endpoint = prepare_event(
         CanonicalEvent(
             source_type="endpoint", tenant_id="test-org", hostname="host-a", process_name="sider", timestamp=NOW
         ),
         trusted_collector=True,
     )
-    assert not any(describes_installation(event) for event in (observed, nameless, endpoint))
+    assert not any(describes_installation(event) for event in (observed, nameless, hostless, endpoint))
     assert describes_installation(inventory_event())
-    await ingest.deliver(observed, nameless, endpoint)
+    await ingest.deliver(observed, nameless, hostless, endpoint)
     rows, changes, receipts = await stored(evidence_sessions)
-    assert rows == [] and changes == [] and len(receipts) == 3 and len(ingest.persisted) == 3
+    assert rows == [] and changes == [] and len(receipts) == 4 and len(ingest.persisted) == 4
 
 
 async def test_labels_from_other_collectors_are_bounded_to_the_columns(evidence_sessions):

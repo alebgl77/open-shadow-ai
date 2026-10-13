@@ -40,6 +40,9 @@ MAX_TEXT_LENGTH = 2048
 # keeps delivering, and every v2 key is optional here, so an old agent keeps delivering too.
 EXTENSION_WIRE_VERSION = 2
 EXTENSION_V2_FIELDS = ("version", "enabled", "install_source", "installed_at", "user", "profile")
+# Released agents 0.1.0 and 0.2.0 already sent `version` (and `permissions`) in every record, so
+# only the keys those releases never sent mark a record as wire v2.
+EXTENSION_V2_MARKERS = tuple(field for field in EXTENSION_V2_FIELDS if field != "version")
 EXTENSION_TEXT_LIMITS = {"version": 100, "browser": 64, "user": 255, "profile": 255}
 
 
@@ -62,6 +65,14 @@ class ExtensionRecord(BaseModel):
     user: str = Field(default="", max_length=EXTENSION_TEXT_LIMITS["user"])
     profile: str = Field(default="", max_length=EXTENSION_TEXT_LIMITS["profile"])
 
+    @field_validator("version", mode="before")
+    @classmethod
+    def textual_version(cls, value):
+        # Released agents copy the manifest value as is; a numeric version is still a version.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return str(value)
+        return value
+
     @field_validator("install_source", mode="before")
     @classmethod
     def known_install_source(cls, value):
@@ -76,6 +87,12 @@ class ExtensionRecord(BaseModel):
         # The agent emits ISO 8601 text with an offset; epoch numbers are outside the contract.
         if value is not None and not isinstance(value, (str, datetime)):
             raise ValueError("Extension installed_at must be ISO 8601 text with a timezone")
+        if isinstance(value, str):
+            # Digit strings would otherwise be read as Unix epochs by the lax datetime parser.
+            try:
+                datetime.fromisoformat(value)
+            except ValueError:
+                raise ValueError("Extension installed_at must be ISO 8601 text with a timezone") from None
         return value
 
     @field_validator("installed_at")
@@ -93,8 +110,8 @@ def extension_record(record: Mapping[str, Any]) -> ExtensionRecord:
 
 
 def extension_wire_version(record: Mapping[str, Any]) -> int:
-    """2 once a record carries any per-installation key, 1 for the original id/name/browser shape."""
-    return EXTENSION_WIRE_VERSION if any(field in record for field in EXTENSION_V2_FIELDS) else 1
+    """2 once a record carries a key only wire v2 agents send, else 1 (released 0.1.0/0.2.0 shapes)."""
+    return EXTENSION_WIRE_VERSION if any(field in record for field in EXTENSION_V2_MARKERS) else 1
 
 
 class TelemetryBatch(BaseModel):

@@ -42,8 +42,17 @@ def _label(value: str, column: str) -> str:
 
 
 def describes_installation(event: CanonicalEvent) -> bool:
-    """Only browser inventory evidence that names an extension describes an installation."""
-    return event.source_type == "browser" and event.evidence_type == "inventory" and bool(event.extension_id)
+    """Only browser inventory evidence that names an extension on an identified device describes an installation.
+
+    The agent API always names the host; an event from the generic ingest path without a device or
+    host name cannot be keyed to a device, so it stays raw evidence and never becomes inventory.
+    """
+    return (
+        event.source_type == "browser"
+        and event.evidence_type == "inventory"
+        and bool(event.extension_id)
+        and bool(event.device_id or event.hostname)
+    )
 
 
 def inventory_digests(event: CanonicalEvent) -> tuple[str, str | None]:

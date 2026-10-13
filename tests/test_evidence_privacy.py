@@ -321,6 +321,8 @@ def test_browser_version_evidence_survives_only_well_formed_aged_and_identity_fr
             change(now.isoformat(), user_label="alice", profile="Profile 1"),
             change(now.isoformat(), from_version="x" * 101),
             change(now.isoformat(), from_version=1),
+            # An offset that pushes the instant past year 9999 in UTC is malformed, never fatal.
+            change("9999-12-31T23:59:59-14:00", to_version="overflow"),
             {"from_version": "1.0", "observed_at": now.isoformat()},
             "WS-ALICE-01",
             change(now.isoformat(), from_version=None, to_version=None),
@@ -638,6 +640,22 @@ async def test_historical_cleanup_is_bounded_resumable_idempotent_and_preserves_
                 now,
                 None,
             )
+            if index == 0:
+                # Version history and per-version host counts derive from the inventory the scrub empties.
+                detection.evidence_bundle = {
+                    **detection.evidence_bundle,
+                    "browser": {
+                        "first_seen": now.isoformat(),
+                        "last_seen": now.isoformat(),
+                        "event_count": 1,
+                        "confidence_base": 0.9,
+                        "matched_field": "extension_id",
+                        "version_changes": [
+                            {"from_version": "1.0", "to_version": "1.1", "observed_at": now.isoformat()}
+                        ],
+                        "versions": {"1.1": 1},
+                    },
+                }
             session.add(detection)
             await session.flush()
             ids.append(detection.detection_id)
@@ -681,6 +699,8 @@ async def test_historical_cleanup_is_bounded_resumable_idempotent_and_preserves_
         for identifier in ids:
             detection = await session.get(DetectionORM, identifier)
             assert "Alice" not in json.dumps(detection.evidence_bundle) and detection.primary_evidence is None
+        browser = (await session.get(DetectionORM, ids[0])).evidence_bundle["browser"]
+        assert (browser["version_changes"], browser["versions"]) == ([], {})
 
 
 def test_personal_event_columns_cover_identity_fields_and_the_browser_profile():

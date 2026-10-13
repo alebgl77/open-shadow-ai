@@ -151,10 +151,12 @@ FULL_EXTENSION_RECORD = {
         {"extensions": [{"installed_at": "2026-01-01T00:00:00"}]},
         {"extensions": [{"installed_at": 1767225600}]},
         {"extensions": [{"installed_at": ""}]},
+        {"extensions": [{"installed_at": "1767225600"}]},
         {"extensions": [{"user": "x" * 256}]},
         {"extensions": [{"profile": "x" * 256}]},
         {"extensions": [{"browser": "b" * 65}]},
-        {"extensions": [{"version": 1}]},
+        {"extensions": [{"version": True}]},
+        {"extensions": [{"version": [1, 2]}]},
         {"extensions": [{"version": "1" * 101}]},
         {"extensions": [{"install_source": 7}]},
         {"extensions": [{"id": "a", "name": None}]},
@@ -174,13 +176,18 @@ def test_extension_wire_v2_accepts_minimal_lenient_and_full_records():
         {"id": "a", "install_source": "magic"},
         FULL_EXTENSION_RECORD,
         {"id": "a", "future_key": {"nested": True}},
+        # The shape released agents 0.1.0 and 0.2.0 send: version and permissions, no v2 marker.
+        {"id": "a", "name": "AI helper", "version": "1.2.3", "browser": "chrome", "permissions": ["tabs"]},
+        {"id": "a", "version": 2},
     ]
     batch = TelemetryBatch(
         hostname="a", timestamp="2026-01-01T00:00:00Z", agent_version="x" * 100, extensions=records
     )
     # Records stay the submitted dicts, so `received` counts one event per record.
     assert batch.extensions == records
-    assert [extension_wire_version(record) for record in records] == [1, 1, 2, 2, 1]
+    assert [extension_wire_version(record) for record in records] == [1, 1, 2, 2, 1, 1, 1]
+    # A released agent copies the manifest version as is; a numeric one is still that version.
+    assert extension_record(records[5]).version == "1.2.3" and extension_record(records[6]).version == "2"
     # Lenient on values: a token this server does not know never quarantines a snapshot.
     assert extension_record(records[2]).install_source == "unknown"
     minimal = extension_record(records[0])
