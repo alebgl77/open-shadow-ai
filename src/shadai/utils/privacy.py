@@ -8,10 +8,11 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
-from sqlalchemy import delete, func, inspect, select
+from sqlalchemy import delete, func, inspect, or_, select
 
 from shadai.config import get_config
 from shadai.models.evidence_identity import EvidenceIdentityORM
+from shadai.models.extension_inventory import ExtensionInventoryORM, ExtensionVersionChangeORM
 
 IDENTITY_FIELDS = ("user_id", "username", "device_id", "hostname", "identity_object_id", "identity_sid")
 IDENTITY_PROVIDERS = frozenset({"", "active_directory", "entra", "entra_id", "ldap", "scim", "unknown"})
@@ -356,3 +357,27 @@ async def expire_identity_members(session, *, now: datetime, config=None) -> Non
     await session.execute(
         delete(EvidenceIdentityORM).where(EvidenceIdentityORM.last_seen_at < identity_cutoff(now, config=config))
     )
+
+
+async def expire_extension_inventory(session, *, now: datetime, config=None) -> None:
+    """Installations and their version history never outlive the identity window or a changed key.
+
+    A row written under another membership basis (a rotated encryption key) is never found under
+    its key again, so it is forgotten here. Version history is deleted explicitly rather than
+    through the foreign-key cascade, and history older than the window expires on its own even
+    while the installation it belongs to is still being reported.
+    """
+    cutoff = identity_cutoff(now, config=config)
+    expired = or_(
+        ExtensionInventoryORM.last_seen_at < cutoff,
+        ExtensionInventoryORM.identity_basis != membership_basis(config),
+    )
+    await session.execute(
+        delete(ExtensionVersionChangeORM).where(
+            or_(
+                ExtensionVersionChangeORM.observed_at < cutoff,
+                ExtensionVersionChangeORM.inventory_key.in_(select(ExtensionInventoryORM.inventory_key).where(expired)),
+            )
+        )
+    )
+    await session.execute(delete(ExtensionInventoryORM).where(expired))

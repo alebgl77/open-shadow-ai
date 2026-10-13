@@ -8,8 +8,11 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import select
 from starlette.requests import Request
 from starlette.responses import Response
+from test_evidence_privacy import evidence_sessions as evidence_sessions
+from test_evidence_privacy import installation, version_change
 
 from shadai.api.ingestion import prepare_event
 from shadai.config import DatabaseSettings, RetentionSettings
@@ -73,6 +76,74 @@ async def test_disabled_purge_touches_nothing():
     sessions = SimpleNamespace(begin=lambda: pytest.fail("unexpected database mutation"))
     ch = SimpleNamespace(execute=lambda *a: pytest.fail("unexpected ClickHouse mutation"))
     await purge_once(config, sessions, ch)
+
+
+async def test_purge_expires_installations_outside_the_identity_window_or_under_a_stale_basis(
+    evidence_sessions, monkeypatch
+):
+    """Inventory rows and version history age with the identity window; a rotated key forgets them."""
+    from shadai.config import get_config
+    from shadai.models.extension_inventory import ExtensionInventoryORM, ExtensionVersionChangeORM
+    from shadai.utils.privacy import membership_basis
+    from shadai.workers.purge import purge_once
+
+    config = get_config().model_copy(deep=True)
+    config.retention.identity_days = 7
+    now = datetime(2026, 10, 6, 12, tzinfo=UTC)
+    cutoff = now - timedelta(days=7)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr("shadai.workers.purge.datetime", Clock)
+    basis = membership_basis(config)
+    current = installation(key="c" * 64, now=now, identity_basis=basis)
+    edge = installation(
+        key="e" * 64, now=now, identity_basis=basis, first_seen_at=cutoff - timedelta(days=2), last_seen_at=cutoff
+    )
+    expired = installation(
+        key="x" * 64,
+        now=now,
+        identity_basis=basis,
+        first_seen_at=cutoff - timedelta(days=2),
+        last_seen_at=cutoff - timedelta(microseconds=1),
+    )
+    rotated = installation(key="r" * 64, now=now, identity_basis="0" * 64)
+    async with evidence_sessions.begin() as session:
+        session.add_all([current, edge, expired, rotated])
+        await session.flush()
+        session.add_all(
+            [
+                # History older than the window expires while its installation is still reported.
+                version_change(
+                    current,
+                    observed_at=cutoff - timedelta(microseconds=1),
+                    previous_observed_at=cutoff - timedelta(days=1),
+                ),
+                version_change(current, observed_at=cutoff, previous_observed_at=cutoff - timedelta(days=1)),
+                version_change(edge),
+                version_change(expired),
+                # A change observed today still goes with a row whose digests were keyed under another key.
+                version_change(rotated),
+            ]
+        )
+    statements = []
+    await purge_once(config, evidence_sessions, SimpleNamespace(execute=lambda query, *args: statements.append(query)))
+    assert len(statements) == 2 and all(statement.startswith("ALTER TABLE events") for statement in statements)
+    async with evidence_sessions() as session:
+        keys = await session.scalars(
+            select(ExtensionInventoryORM.inventory_key).order_by(ExtensionInventoryORM.inventory_key)
+        )
+        assert keys.all() == ["c" * 64, "e" * 64]
+        changes = await session.scalars(
+            select(ExtensionVersionChangeORM).order_by(ExtensionVersionChangeORM.inventory_key)
+        )
+        assert [(change.inventory_key, change.observed_at.replace(tzinfo=UTC)) for change in changes] == [
+            ("c" * 64, cutoff),
+            ("e" * 64, cutoff),
+        ]
 
 
 async def test_logout_revokes_exact_token_until_expiry(monkeypatch):

@@ -3,8 +3,10 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,8 +44,8 @@ from shadai.models.extension_inventory import (
 from shadai.models.governance import GovernanceORM
 from shadai.models.receipts import CorrelationReceiptORM, IngestReceiptORM
 from shadai.models.user import UserORM
-from shadai.utils.privacy import keyed_identity, refresh_identity_counts, sanitize_evidence
-from shadai.workers.purge import maintain_personal_evidence, scrub_personal_history
+from shadai.utils.privacy import IDENTITY_FIELDS, keyed_identity, refresh_identity_counts, sanitize_evidence
+from shadai.workers.purge import PERSONAL_EVENT_COLUMNS, maintain_personal_evidence, scrub_personal_history
 
 
 def observation(**kwargs):
@@ -521,6 +523,8 @@ async def test_retained_member_sorting_pages_cutoff_and_uuid_ties(evidence_sessi
 
 
 class HistoricalClickHouse:
+    """Answers the scrub's statements and pins that each one names exactly the personal columns."""
+
     def __init__(self, count=1, *, complete=True, failure=False):
         self.ids = [str(uuid4()) for _ in range(count)]
         self.complete, self.failure, self.calls = complete, failure, []
@@ -531,9 +535,14 @@ class HistoricalClickHouse:
             if self.failure:
                 raise RuntimeError("mutation failure")
             assert kwargs["settings"] == {"mutations_sync": 2}
+            assignments = query.split(" UPDATE ", 1)[1].split(" WHERE ", 1)[0].split(", ")
+            assert assignments == [f"{name} = ''" for name in PERSONAL_EVENT_COLUMNS]
             if self.complete:
                 self.ids = [identifier for identifier in self.ids if identifier not in params["ids"]]
             return []
+        # Selection and verification use one predicate over the same columns the mutation blanks.
+        predicate = re.search(r"AND \((.*?)\)", query).group(1).split(" OR ")
+        assert predicate == [f"{name} != ''" for name in PERSONAL_EVENT_COLUMNS]
         if query.startswith("SELECT DISTINCT"):
             return [(identifier,) for identifier in self.ids[: params["limit"]]]
         selected = [identifier for identifier in self.ids if "ids" not in params or identifier in params["ids"]]
@@ -570,23 +579,77 @@ async def test_historical_cleanup_is_bounded_resumable_idempotent_and_preserves_
         session.add_all(
             [IngestReceiptORM(event_id=uuid4()), CorrelationReceiptORM(event_id=uuid4(), catalog_item_id="old")]
         )
+        # Installation rows name the host, the user (or none for a wire v1 row) and the profile.
+        alice = installation(key="a" * 64, user_label="Alice")
+        host = installation(key="h" * 64, user_label=None, user_digest=None, wire_version=1, install_source="")
+        session.add_all([alice, host])
+        await session.flush()
+        session.add(version_change(alice))
     ch = HistoricalClickHouse(2)
     first = await scrub_personal_history(get_config(), sessions, ch, batch_size=1, max_batches=1)
     assert first["complete"] is False and first["clickhouse_complete"] is False and first["next_detection_id"]
+    assert first["inventory_rows_scrubbed"] == 2
     second = await scrub_personal_history(
         get_config(), sessions, ch, batch_size=1, max_batches=1, after_detection_id=UUID(first["next_detection_id"])
     )
-    assert second["complete"] is True
+    assert second["complete"] is True and second["inventory_rows_scrubbed"] == 0
     repeated = await scrub_personal_history(get_config(), sessions, ch, batch_size=2, max_batches=2)
     assert repeated["complete"] is True
+    # The ClickHouse scrub blanks the profile directory name along with the identifiers.
+    assert "browser_profile != ''" in ch.calls[0][0]
+    assert "browser_profile = ''" in next(query for query, _, _ in ch.calls if query.startswith("ALTER"))
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(EvidenceIdentityORM)) == 0
+        for table in (ExtensionInventoryORM, ExtensionVersionChangeORM):
+            assert await session.scalar(select(func.count()).select_from(table)) == 0
         assert await session.scalar(select(func.count()).select_from(IngestReceiptORM)) == 1
         assert await session.scalar(select(func.count()).select_from(CorrelationReceiptORM)) == 1
         assert (await session.get(UserORM, user.user_id)).username == "Console Alice"
         for identifier in ids:
             detection = await session.get(DetectionORM, identifier)
             assert "Alice" not in json.dumps(detection.evidence_bundle) and detection.primary_evidence is None
+
+
+def test_personal_event_columns_cover_identity_fields_and_the_browser_profile():
+    assert set(PERSONAL_EVENT_COLUMNS) == {*IDENTITY_FIELDS, "src_ip", "browser_profile"}
+    event = CanonicalEvent(
+        tenant_id="test-org", source_type="browser", username="Alice", browser_profile="Profile 1", src_ip="192.0.2.10"
+    )
+    columns = event.to_clickhouse_dict()
+    # Every scrubbed column is a text column of the events table, so blanking it to '' is valid.
+    assert all(isinstance(columns[name], str) for name in PERSONAL_EVENT_COLUMNS)
+    assert "browser_profile" in Path("migrations/clickhouse/003_extension_inventory.sql").read_text()
+
+
+class ResumedInventoryWriter:
+    """A writer that was not quiesced: it stores an installation once the scrub has emptied the tables."""
+
+    def __init__(self, sessions):
+        self.sessions, self.written = sessions, False
+
+    def __call__(self):
+        return self.sessions()
+
+    @asynccontextmanager
+    async def begin(self):
+        async with self.sessions.begin() as session:
+            yield session
+        if not self.written:
+            self.written = True
+            async with self.sessions.begin() as session:
+                session.add(installation())
+
+
+async def test_an_installation_stored_after_the_inventory_scrub_denies_completion(evidence_sessions):
+    result = await scrub_personal_history(
+        get_config(), ResumedInventoryWriter(evidence_sessions), HistoricalClickHouse(0)
+    )
+    assert result["clickhouse_complete"] is True and result["inventory_rows_scrubbed"] == 0
+    assert result["sql_complete"] is False and result["complete"] is False and result["next_detection_id"] is None
+    async with evidence_sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(ExtensionInventoryORM)) == 1
+    again = await scrub_personal_history(get_config(), evidence_sessions, HistoricalClickHouse(0))
+    assert again["complete"] is True and again["inventory_rows_scrubbed"] == 1
 
 
 @pytest.mark.parametrize("failure", [False, True])
