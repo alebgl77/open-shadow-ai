@@ -22,9 +22,9 @@ const queues: PipelineHealth = { scope: 'deployment', as_of: '2026-10-06T12:00:0
 const clients: QueryClient[] = []
 const forbidden = () => new AxiosError('Forbidden', '403', undefined, undefined, { status: 403, statusText: 'Forbidden', data: {}, headers: {}, config: { headers: new AxiosHeaders() } })
 let item: CollectorHealth
-function serve() {
+function serve(sources: unknown[] = []) {
   return vi.spyOn(client, 'get').mockImplementation(async url => {
-    if (url === '/dashboard/source-health') return { data: [] }
+    if (url === '/dashboard/source-health') return { data: sources }
     if (url?.startsWith('/operations/collectors')) return { data: { items: [item], total: 1, offset: 0, limit: 50, as_of: '2026-10-06T12:00:00Z' } }
     if (url?.startsWith('/collectors?')) return { data: { items: [{ ...item, is_active: item.status !== 'revoked', revoked_at: item.status === 'revoked' ? '2026-10-06T12:00:00Z' : null }], total: 1, offset: 0, limit: 50 } }
     if (url === '/operations/pipeline') return { data: queues }
@@ -323,5 +323,21 @@ describe('collector operations', () => {
     expect(screen.getByText(/Last risk calculation:/).textContent).toContain(new Date('2026-10-01T10:00:00Z').toLocaleString('en-US'))
     expect(screen.getByText(/Count projection and note updates do not recalculate risk/)).toBeTruthy()
     expect(screen.getByText(/Retained membership may have changed/)).toBeTruthy()
+  })
+})
+
+describe('source cards', () => {
+  it('links the browser source to the extension inventory view and the network source to its observations', async () => {
+    serve([
+      { source_type: 'browser', status: 'warning', last_event: '2026-10-06T04:00:00Z', events_per_minute: 0 },
+      { source_type: 'network', status: 'active', last_event: '2026-10-06T12:00:00Z', events_per_minute: .1 },
+      { source_type: 'proxy', status: 'active', last_event: '2026-10-06T12:00:00Z', events_per_minute: 3.2 },
+    ])
+    mount()
+    const browser = (await screen.findByRole('link', { name: 'Inspect extension inventory' }))
+    expect(browser.getAttribute('href')).toBe('/extensions?view=inventory')
+    expect(browser.closest('section')?.textContent).toContain('Installation does not establish active use.')
+    expect(screen.getByRole('link', { name: 'Inspect network observations' }).getAttribute('href')).toBe('/network')
+    expect(screen.getAllByRole('link', { name: /^Inspect / })).toHaveLength(2)
   })
 })
