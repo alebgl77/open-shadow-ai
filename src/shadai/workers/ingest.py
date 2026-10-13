@@ -8,7 +8,7 @@ import asyncio
 import os
 import time
 from contextlib import suppress
-from datetime import datetime
+from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
 import structlog
@@ -19,6 +19,7 @@ from shadai.api.ingestion import SOURCE_TYPES
 from shadai.config import load_config, validate_security
 from shadai.database import init_clickhouse
 from shadai.engine.catalog_loader import load_database_catalog
+from shadai.engine.extension_inventory import record_inventory
 from shadai.engine.matcher import AMBIGUOUS_MATCH_FIELD, CatalogMatcher
 from shadai.models.receipts import IngestReceiptORM
 from shadai.utils.queue_admission import admit_records
@@ -73,6 +74,8 @@ class EventProcessor:
                 values = event.to_clickhouse_dict()
                 columns = ", ".join(values)
                 await asyncio.to_thread(self.clickhouse.execute, f"INSERT INTO events ({columns}) VALUES", [values])
+                # Inventory state commits with the receipt: a ClickHouse or queue failure rolls both back.
+                await record_inventory(session, event, match, now=datetime.now(UTC))
                 if match:
                     await admit_records(self.redis, [{"stream": "matches", "fields": {
                             **queue_fields(event.model_dump_json(), payload_field="event",
