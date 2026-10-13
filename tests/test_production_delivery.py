@@ -529,7 +529,9 @@ def test_go_module_paths_compare_case_insensitively_between_sbom_and_trivy():
     native = "pkg:deb/debian/synthetic@1.0?arch=amd64&distro=debian-13"
     sbom = {"packages": [{"externalRefs": [{"referenceType": "purl", "referenceLocator": purl}]}
                          for purl in (native, mixed)]}
-    assert SCAN.spdx_inventory(sbom) == {("deb", "synthetic", "1.0"), key}
+    # Maintained runtimes carry Go modules; app images keep only their OS and Python inventory.
+    assert SCAN.spdx_inventory(sbom, service=True) == {("deb", "synthetic", "1.0"), key}
+    assert SCAN.spdx_inventory(sbom) == {("deb", "synthetic", "1.0")}
     report = trivy_report()
     report["Results"].append({"Target": "bin/prometheus", "Class": "lang-pkgs", "Type": "gobinary",
                               "Packages": [{"Name": "github.com/azure/azure-sdk-for-go/sdk/azcore",
