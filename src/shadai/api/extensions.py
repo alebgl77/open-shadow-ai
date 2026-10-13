@@ -18,6 +18,7 @@ from sqlalchemy.orm import aliased
 
 from shadai.config import get_config
 from shadai.database import get_postgres_session
+from shadai.engine.extension_inventory import visible_installations
 from shadai.models.detection import DetectionORM
 from shadai.models.event import EXTENSION_INSTALL_SOURCES
 from shadai.models.extension_inventory import (
@@ -36,7 +37,7 @@ from shadai.models.extension_inventory import (
 from shadai.models.user import UserORM
 from shadai.security.auth import get_current_user
 from shadai.security.rbac import require_role
-from shadai.utils.privacy import identity_cutoff, membership_basis
+from shadai.utils.privacy import identity_cutoff
 
 router = APIRouter(prefix="/api/v1/extensions", tags=["extensions"])
 
@@ -75,11 +76,6 @@ def identity_window(now: datetime) -> IdentityWindow:
 def identity_mode() -> IdentityMode:
     """Whether host and user labels in the responses are pseudonyms (a configuration fact)."""
     return "pseudonymized" if get_config().security.pseudonymize_identities else "raw"
-
-
-def visible_installations(now: datetime, model=ExtensionInventoryORM) -> list:
-    """Rows inside the identity window and written under the current encryption key."""
-    return [model.last_seen_at >= identity_cutoff(now), model.identity_basis == membership_basis()]
 
 
 def inventory_filters(

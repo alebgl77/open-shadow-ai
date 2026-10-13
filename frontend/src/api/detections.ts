@@ -69,8 +69,19 @@ export const getDetection = (id: string) =>
 export const updateDetection = (id: string, body: { classification?: string; analyst_status?: string; analyst_notes?: string }) =>
   client.patch<Detection>(`/detections/${id}`, body).then(r => r.data)
 
+/** One timeline entry. An extension_version_change names the browser and the versions, never a host or user. */
+export interface TimelineEntry {
+  type: string
+  timestamp: string
+  description: string
+  source_type?: string
+  browser?: string
+  from_version?: string | null
+  to_version?: string | null
+}
+
 export const getDetectionTimeline = (id: string) =>
-  client.get<Array<{ type: string; timestamp: string; description: string }>>(`/detections/${id}/timeline`).then(r => r.data)
+  client.get<TimelineEntry[]>(`/detections/${id}/timeline`).then(r => r.data)
 
 export const ANTI_HR_NOTICE = 'Open Shadow AI is an IT governance tool. This data must not be used for individual employee surveillance, disciplinary action, performance evaluation or behavioural profiling.'
 const EXPORT_FILTERS = ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status', 'search', 'sort_by', 'sort_order'] as const

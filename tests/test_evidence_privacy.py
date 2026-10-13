@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -294,6 +294,79 @@ def test_legacy_shapes_and_sample_variants_fail_closed_at_exact_utc_edge():
     assert clean["endpoint"]["sample_values"] == ["Edge"]
     assert clean["network"]["network_observations"] == []
     assert "browser" not in clean and "users" not in clean and "_users" not in clean
+
+
+def test_browser_version_evidence_survives_only_well_formed_aged_and_identity_free():
+    config = get_config()
+    config.retention.identity_days = 1
+    now = datetime(2026, 10, 6, 12, tzinfo=UTC)
+    edge = now - timedelta(days=1)
+
+    def change(observed_at, **state):
+        return {"from_version": "1.0", "to_version": "1.1", "observed_at": observed_at, **state}
+
+    recent = [change((now - timedelta(minutes=index)).isoformat(), to_version=f"2.{index}") for index in range(12)]
+    browser = {
+        "first_seen": edge.isoformat(),
+        "last_seen": now.isoformat(),
+        "event_count": 150,
+        "confidence_base": 0.95,
+        "matched_field": "extension_id",
+        "version_changes": [
+            change(edge.astimezone(timezone(timedelta(hours=2))).isoformat(), to_version="edge"),
+            change((edge - timedelta(microseconds=1)).isoformat(), to_version="expired"),
+            change(edge.replace(tzinfo=None).isoformat(), to_version="unaged"),
+            change((now + timedelta(minutes=5, microseconds=1)).isoformat(), to_version="future"),
+            change(now.isoformat(), host_label="WS-ALICE-01"),
+            change(now.isoformat(), user_label="alice", profile="Profile 1"),
+            change(now.isoformat(), from_version="x" * 101),
+            change(now.isoformat(), from_version=1),
+            {"from_version": "1.0", "observed_at": now.isoformat()},
+            "WS-ALICE-01",
+            change(now.isoformat(), from_version=None, to_version=None),
+        ],
+        "versions": {
+            "1.1": 3,
+            "": 1,
+            "boolean": True,
+            "negative": -1,
+            "zero": 0,
+            "fraction": 1.5,
+            "x" * 101: 1,
+            "nested": {"host_label": "WS-ALICE-01"},
+        },
+    }
+    clean = sanitize_evidence({"browser": browser}, now=now)
+    section = clean["browser"]
+    assert "WS-ALICE-01" not in json.dumps(clean) and "alice" not in json.dumps(clean)
+    assert section["version_changes"] == [
+        {"from_version": "1.0", "to_version": "edge", "observed_at": edge.isoformat().replace("+00:00", "Z")},
+        {"from_version": None, "to_version": None, "observed_at": now.isoformat().replace("+00:00", "Z")},
+    ]
+    assert section["versions"] == {"1.1": 3, "": 1}
+    # Polls are not independent evidence on the read path either.
+    assert "high_volume" not in {factor["factor"] for factor in clean["confidence_factors"]}
+    assert sanitize_evidence(clean, now=now) == clean
+
+    # The newest ten changes and the ten most reported versions are kept, in a stable order.
+    many = {f"1.{index}": index + 1 for index in range(12)}
+    bounded = {**browser, "version_changes": recent, "versions": many}
+    bounded = sanitize_evidence({"browser": bounded}, now=now)["browser"]
+    assert [value["to_version"] for value in bounded["version_changes"]] == [f"2.{index}" for index in range(9, -1, -1)]
+    assert bounded["versions"] == {f"1.{index}": index + 1 for index in range(11, 1, -1)}
+
+    # A distribution is as old as its section: unknown, expired or malformed ages keep nothing.
+    unaged = {key: value for key, value in browser.items() if key != "last_seen"}
+    for last_seen in ((edge - timedelta(microseconds=1)).isoformat(), edge.replace(tzinfo=None).isoformat(), 1):
+        assert sanitize_evidence({"browser": {**browser, "last_seen": last_seen}}, now=now)["browser"]["versions"] == {}
+    assert sanitize_evidence({"browser": unaged}, now=now)["browser"]["versions"] == {}
+    malformed = {**browser, "version_changes": {"a": 1}, "versions": [["1.1", 3]]}
+    malformed = sanitize_evidence({"browser": malformed}, now=now)["browser"]
+    assert (malformed["version_changes"], malformed["versions"]) == ([], {})
+
+    # Only the browser section may carry inventory evidence.
+    endpoint = sanitize_evidence({"endpoint": {**browser, "matched_field": "process_name"}}, now=now)["endpoint"]
+    assert "version_changes" not in endpoint and "versions" not in endpoint
 
 
 async def test_reads_project_current_counts_and_risk_without_orm_writes(evidence_sessions):

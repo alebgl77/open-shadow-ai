@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from shadai.config import get_config
 from shadai.database import get_clickhouse, get_postgres_session
+from shadai.engine.extension_inventory import recent_version_changes
 from shadai.engine.governance import rescore_classification
 from shadai.models.detection import DetectionListResponse, DetectionORM, DetectionRead, DetectionUpdate
 from shadai.models.evidence_identity import EvidenceIdentityORM
@@ -379,7 +380,8 @@ async def get_detection_timeline(
     _user: UserORM = Depends(get_current_user),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
-    """Build timeline from evidence bundle and audit logs."""
+    """Build timeline from evidence bundle, audit logs and observed extension version changes."""
+    now = datetime.now(UTC)
     result = await session.execute(select(DetectionORM).where(DetectionORM.detection_id == detection_id))
     detection = result.scalar_one_or_none()
     if not detection:
@@ -418,6 +420,21 @@ async def get_detection_timeline(
             "description": "Last activity",
         }
     )
+
+    # Version changes of the matched extension, bounded like the inventory: never a host or user value.
+    if detection.catalog_item_id:
+        for change in await recent_version_changes(session, detection.catalog_item_id, now=now):
+            timeline.append(
+                {
+                    "type": "extension_version_change",
+                    "timestamp": change.observed_at.astimezone(UTC).isoformat(),
+                    "description": f"{change.browser} extension updated "
+                    f"{change.from_version or 'not reported'} -> {change.to_version or 'not reported'}",
+                    "browser": change.browser,
+                    "from_version": change.from_version,
+                    "to_version": change.to_version,
+                }
+            )
 
     # Sort by timestamp
     timeline.sort(key=lambda x: x["timestamp"])

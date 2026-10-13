@@ -1,5 +1,5 @@
 import { AxiosError, AxiosHeaders, type AxiosAdapter } from 'axios'
-import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, type Detection } from './detections'
+import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, type Detection, type TimelineEntry } from './detections'
 import type { Governance, CatalogItem } from '@/types'
 import { csvCell } from '@/lib/export'
 import { NETWORK_PROTOCOLS, type NetworkEvent, type NetworkProtocol } from './network'
@@ -87,6 +87,33 @@ const extensionVersionChanges: ExtensionVersionChange[] = extensionInventory.fla
   from_version: index % 6 === 0 ? null : `${1 + index % 3}.${Math.max(0, index % 5 - 1)}.0`, to_version: item.version,
   previous_observed_at: ago(index * 9 + 12), observed_at: ago(index * 9 + .5), catalog_item_id: item.catalog_item_id,
 }])
+// What the correlator keeps for a catalog-matched extension: the newest ten changes and hosts per version, no host or user.
+function demoVersionEvidence(catalogItemId: string | null) {
+  const changes = extensionVersionChanges.filter(change => catalogItemId !== null && change.catalog_item_id === catalogItemId)
+    .sort((a, b) => b.observed_at.localeCompare(a.observed_at)).slice(0, 10)
+  const hosts = new Map<string, Set<string>>()
+  for (const item of extensionInventory.filter(row => catalogItemId !== null && row.catalog_item_id === catalogItemId)) {
+    hosts.set(item.version ?? '', (hosts.get(item.version ?? '') ?? new Set()).add(item.host_label))
+  }
+  return { changes, versions: Object.fromEntries([...hosts].map(([version, names]) => [version, names.size])) }
+}
+function withVersionEvidence(detection: Detection): Detection {
+  const browser = detection.evidence_bundle.browser
+  if (!browser || typeof browser !== 'object' || Array.isArray(browser)) return detection
+  const { changes, versions } = demoVersionEvidence(detection.catalog_item_id)
+  const version_changes = [...changes].reverse().map(({ from_version, to_version, observed_at }) => ({ from_version, to_version, observed_at }))
+  return { ...detection, evidence_bundle: { ...detection.evidence_bundle, browser: { ...browser, version_changes, versions } } }
+}
+function demoTimeline(detection: Detection): TimelineEntry[] {
+  const changes = demoVersionEvidence(detection.catalog_item_id).changes.map(change => ({
+    type: 'extension_version_change', timestamp: change.observed_at, browser: change.browser, from_version: change.from_version, to_version: change.to_version,
+    description: `${change.browser} extension updated ${change.from_version ?? 'not reported'} -> ${change.to_version ?? 'not reported'}`,
+  }))
+  return [
+    { type: 'first_seen', timestamp: detection.first_seen_at, description: 'Synthetic source signal first observed' },
+    { type: 'last_seen', timestamp: detection.last_seen_at, description: 'Most recent synthetic evidence' }, ...changes,
+  ].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+}
 const identityWindow = () => ({ days: IDENTITY_DAYS_DEFAULT, as_of: new Date().toISOString() })
 const IDENTITY_MODE = 'pseudonymized' as const
 
@@ -231,12 +258,12 @@ export function demoRequest(method: string, input: string, body: Record<string, 
   if (path.startsWith('/detections/')) {
     const id = path.split('/')[2]; const found = detections.find(d => d.detection_id === id)
     if (!found) throw new Error('Demo detection not found')
-    if (path.endsWith('/timeline')) return [{ type: 'first_seen', timestamp: found.first_seen_at, description: 'Synthetic source signal first observed' }, { type: 'last_seen', timestamp: found.last_seen_at, description: 'Most recent synthetic evidence' }]
+    if (path.endsWith('/timeline')) return demoTimeline(found)
     if (method === 'patch') {
       Object.assign(found, body, { updated_at: new Date().toISOString(), reviewed_at: new Date().toISOString() })
       audit.unshift({ audit_id: String(audit.length + 1), timestamp: new Date().toISOString(), username: 'Demo reviewer', action: 'detection.update', resource_type: 'detection', resource_id: id, ip_address: null })
     }
-    return { ...found }
+    return withVersionEvidence({ ...found })
   }
   if (path === '/catalog') return catalog.filter(item => !params.get('search') || item.canonical_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
   if (path === '/governance') {

@@ -676,7 +676,12 @@ export const en = {
   "Version history is unavailable.": "Version history is unavailable.",
   "Your current permissions do not allow access to per-host and per-user installation records.": "Your current permissions do not allow access to per-host and per-user installation records.",
   "{count} installations · page {page} of {pages}": "{count} installations · page {page} of {pages}",
-  "{count} version changes · page {page} of {pages}": "{count} version changes · page {page} of {pages}"
+  "{count} version changes · page {page} of {pages}": "{count} version changes · page {page} of {pages}",
+  "Extension versions": "Extension versions",
+  "Hosts by last reported version within the identity window. A version update adds no detection confidence.": "Hosts by last reported version within the identity window. A version update adds no detection confidence.",
+  "Inspect version changes": "Inspect version changes",
+  "No reported version is retained.": "No reported version is retained.",
+  "{browser} extension updated: {from} → {to}": "{browser} extension updated: {from} → {to}"
 } as const
 export type MessageKey = keyof typeof en
 export const fr: Record<MessageKey, string> = {
@@ -1356,7 +1361,12 @@ export const fr: Record<MessageKey, string> = {
   "Version history is unavailable.": "L’historique des versions est indisponible.",
   "Your current permissions do not allow access to per-host and per-user installation records.": "Vos autorisations actuelles ne permettent pas d’accéder aux enregistrements d’installation par hôte et par utilisateur.",
   "{count} installations · page {page} of {pages}": "{count} installations · page {page} sur {pages}",
-  "{count} version changes · page {page} of {pages}": "{count} changements de version · page {page} sur {pages}"
+  "{count} version changes · page {page} of {pages}": "{count} changements de version · page {page} sur {pages}",
+  "Extension versions": "Versions de l’extension",
+  "Hosts by last reported version within the identity window. A version update adds no detection confidence.": "Hôtes par dernière version signalée dans la fenêtre de rétention des identités. Une mise à jour de version n’ajoute aucune confiance à la détection.",
+  "Inspect version changes": "Inspecter les changements de version",
+  "No reported version is retained.": "Aucune version signalée n’est conservée.",
+  "{browser} extension updated: {from} → {to}": "Extension {browser} mise à jour : {from} → {to}"
 }
 export const zhCN: Record<MessageKey, string> = {
   ". Count projection and note updates do not recalculate risk.": "。计数投影和备注更新不会重新计算风险。",
@@ -2035,6 +2045,11 @@ export const zhCN: Record<MessageKey, string> = {
   "Version history is unavailable.": "版本历史不可用。",
   "Your current permissions do not allow access to per-host and per-user installation records.": "您当前的权限不允许访问按主机和按用户的安装记录。",
   "{count} installations · page {page} of {pages}": "{count} 个安装 · 第 {page} 页，共 {pages} 页",
-  "{count} version changes · page {page} of {pages}": "{count} 个版本变更 · 第 {page} 页，共 {pages} 页"
+  "{count} version changes · page {page} of {pages}": "{count} 个版本变更 · 第 {page} 页，共 {pages} 页",
+  "Extension versions": "扩展版本",
+  "Hosts by last reported version within the identity window. A version update adds no detection confidence.": "按身份保留窗口内最后报告的版本统计的主机。版本更新不会增加检测置信度。",
+  "Inspect version changes": "查看版本变更",
+  "No reported version is retained.": "未保留任何已报告的版本。",
+  "{browser} extension updated: {from} → {to}": "{browser} 扩展已更新：{from} → {to}"
 }
 export const dictionaries = { en, fr, 'zh-CN': zhCN }

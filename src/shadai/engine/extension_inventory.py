@@ -16,13 +16,20 @@ import json
 import uuid
 from datetime import UTC, datetime
 from hashlib import sha256
+from typing import NamedTuple
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete, distinct, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from shadai.models.event import CanonicalEvent
 from shadai.models.extension_inventory import ExtensionInventoryORM, ExtensionVersionChangeORM
-from shadai.utils.privacy import identity_cutoff, keyed_identity, membership_basis, verified_privacy_stamp
+from shadai.utils.privacy import (
+    VERSION_EVIDENCE_LIMIT,
+    identity_cutoff,
+    keyed_identity,
+    membership_basis,
+    verified_privacy_stamp,
+)
 
 # Column widths of the inventory tables. The agent already bounds its records to these, so only
 # a record from another collector is ever cut; a value the columns cannot hold must not block
@@ -165,3 +172,62 @@ async def record_inventory(session, event: CanonicalEvent, match, *, now: dateti
         )
     for name, value in state.items():
         setattr(row, name, value)
+
+
+def visible_installations(now: datetime, model=ExtensionInventoryORM) -> list:
+    """Rows inside the identity window and written under the current encryption key.
+
+    The purge worker runs daily, so the tables can hold rows past either bound between cycles;
+    every read applies both conditions itself.
+    """
+    return [model.last_seen_at >= identity_cutoff(now), model.identity_basis == membership_basis()]
+
+
+class CatalogVersionChange(NamedTuple):
+    """A version change as a detection may show it: the browser and the versions, never a host or user."""
+
+    browser: str
+    from_version: str | None
+    to_version: str | None
+    observed_at: datetime
+
+
+async def recent_version_changes(
+    session, catalog_item_id: str, *, now: datetime, limit: int = VERSION_EVIDENCE_LIMIT
+) -> list[CatalogVersionChange]:
+    """The newest version changes recorded for one catalog item, newest first.
+
+    Only changes observed inside the identity window, of installations that are still visible, are
+    returned; the identity-bearing columns of the change rows are never selected.
+    """
+    change = ExtensionVersionChangeORM
+    rows = await session.execute(
+        select(change.browser, change.from_version, change.to_version, change.observed_at)
+        .join(ExtensionInventoryORM, ExtensionInventoryORM.inventory_key == change.inventory_key)
+        .where(
+            *visible_installations(now),
+            change.catalog_item_id == catalog_item_id,
+            change.observed_at >= identity_cutoff(now),
+        )
+        .order_by(change.observed_at.desc(), change.change_id)
+        .limit(limit)
+    )
+    # SQLite hands timezone-aware columns back naive; every stored instant is UTC.
+    return [
+        CatalogVersionChange(browser, from_version, to_version, observed.replace(tzinfo=observed.tzinfo or UTC))
+        for browser, from_version, to_version, observed in rows
+    ]
+
+
+async def version_distribution(session, catalog_item_id: str, *, now: datetime) -> dict[str, int]:
+    """Distinct hosts per last reported version of one catalog item's visible installations.
+
+    "" counts installations whose agent reported no version. A host with the extension in two profiles
+    at different versions counts once under each version.
+    """
+    rows = await session.execute(
+        select(ExtensionInventoryORM.version, func.count(distinct(ExtensionInventoryORM.device_digest)))
+        .where(*visible_installations(now), ExtensionInventoryORM.catalog_item_id == catalog_item_id)
+        .group_by(ExtensionInventoryORM.version)
+    )
+    return {version or "": hosts for version, hosts in rows}

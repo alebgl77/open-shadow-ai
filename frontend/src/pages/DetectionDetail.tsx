@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Users, Monitor, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react'
-import { getDetection, updateDetection, getDetectionTimeline } from '@/api/detections'
+import { getDetection, updateDetection, getDetectionTimeline, type TimelineEntry } from '@/api/detections'
 import RiskBadge from '@/components/badges/RiskBadge'
 import ApprovalBadge from '@/components/badges/ApprovalBadge'
 import ConfidenceBadge from '@/components/badges/ConfidenceBadge'
@@ -55,6 +55,45 @@ function NetworkEvidence({ data }: { data: Record<string, unknown> }) {
   </section>
 }
 
+interface VersionChangeEvidence { from_version: string | null; to_version: string | null; observed_at: string }
+const versionValue = (value: unknown) => value === null || typeof value === 'string'
+function isVersionChange(value: unknown): value is VersionChangeEvidence {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const change = value as Record<string, unknown>
+  return versionValue(change.from_version) && versionValue(change.to_version) && typeof change.observed_at === 'string'
+}
+
+/** Identity-free inventory context of a catalog-matched extension: hosts per version and recent version changes. */
+function BrowserVersionEvidence({ data }: { data: Record<string, unknown> }) {
+  const { tr, formatDate, formatNumber } = useI18n()
+
+  const canInspect = useAuthStore(s => s.user?.role === 'analyst' || s.user?.role === 'admin')
+  const versions = data.versions && typeof data.versions === 'object' && !Array.isArray(data.versions)
+    ? Object.entries(data.versions as Record<string, unknown>)
+      .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isInteger(entry[1]) && entry[1] > 0)
+      .sort(([left, a], [right, b]) => b - a || left.localeCompare(right)).slice(0, 10) : []
+  // The bundle keeps changes oldest first; the newest is listed first.
+  const changes = Array.isArray(data.version_changes) ? data.version_changes.filter(isVersionChange).slice(-10).reverse() : []
+  const samples = Array.isArray(data.sample_observations) ? data.sample_observations as unknown[] : []
+  const ids = [...new Set(samples.flatMap(sample => {
+    const value = sample && typeof sample === 'object' ? sample as Record<string, unknown> : {}
+    return value.field === 'extension_id' && typeof value.value === 'string' ? [value.value] : []
+  }))]
+  const changesView = `/extensions?${new URLSearchParams({ view: 'changes', ...(ids.length === 1 ? { extension_id: ids[0] } : {}) })}`
+  return <section aria-label={tr("Extension versions")} className="space-y-3 border-t border-surface-600/30 pt-3 mt-3">
+    <p className="font-sans text-slate-400 leading-relaxed">{tr("Hosts by last reported version within the identity window. A version update adds no detection confidence.")}</p>
+    {versions.length ? <table className="text-left"><thead><tr><th className="pr-6 font-normal text-slate-500">{tr("Version")}</th><th className="font-normal text-slate-500">{tr("Hosts")}</th></tr></thead>
+      <tbody>{versions.map(([version, hosts]) => <tr key={version}><td className="pr-6 break-all">{version || tr("Not reported")}</td><td>{formatNumber(hosts)}</td></tr>)}</tbody></table>
+      : <p className="text-slate-500">{tr("No reported version is retained.")}</p>}
+    <p className="text-slate-500">{tr("Version changes")}</p>
+    {changes.length ? <ol className="space-y-1">{changes.map((change, index) => <li key={index} className="break-words">
+      <span className="text-slate-200">{change.from_version ?? tr("First reported version")} → {change.to_version ?? tr("Not reported")}</span>
+      <span className="block text-slate-500">{formatDate(change.observed_at)}</span></li>)}</ol>
+      : <p className="text-slate-500">{tr("No version change observed within the identity window.")}</p>}
+    {canInspect && <Link to={changesView} className="inline-flex text-accent font-sans">{tr("Inspect version changes")}</Link>}
+  </section>
+}
+
 function EvidenceSection({ source, data }: { source: string; data: Record<string, unknown> }) {
   const { tr, enumLabel, formatDate, formatNumber } = useI18n()
 
@@ -89,6 +128,7 @@ function EvidenceSection({ source, data }: { source: string; data: Record<string
             </div>
           )}
           {source === 'network' && <NetworkEvidence data={data} />}
+          {source === 'browser' && ('versions' in data || 'version_changes' in data) && <BrowserVersionEvidence data={data} />}
         </div>
       )}
     </div>
@@ -116,6 +156,10 @@ export default function DetectionDetail() {
     queryFn: () => getDetectionTimeline(id!),
     enabled: !!id,
   })
+
+  const timelineText = (entry: TimelineEntry) => entry.type === 'extension_version_change' && typeof entry.browser === 'string'
+    ? tr('{browser} extension updated: {from} → {to}', { browser: entry.browser, from: entry.from_version ?? tr('First reported version'), to: entry.to_version ?? tr('Not reported') })
+    : entry.description
 
   const mutation = useMutation({
     mutationFn: (body: Parameters<typeof updateDetection>[1]) => updateDetection(id!, body),
@@ -233,10 +277,11 @@ export default function DetectionDetail() {
                     <div className={clsx(
                       'absolute left-[-15px] w-[7px] h-[7px] rounded-full mt-1.5 ring-2 ring-surface-800',
                       entry.type === 'first_seen' ? 'bg-emerald-500' :
-                      entry.type === 'last_seen' ? 'bg-blue-500' : 'bg-accent'
+                      entry.type === 'last_seen' ? 'bg-blue-500' :
+                      entry.type === 'extension_version_change' ? 'bg-amber-400' : 'bg-accent'
                     )} />
                     <div>
-                      <p className="text-sm text-slate-200">{entry.description}</p>
+                      <p className="text-sm text-slate-200">{timelineText(entry)}</p>
                       <p className="text-[11px] text-slate-500 font-mono">{formatDate(entry.timestamp, { dateStyle: 'medium', timeStyle: 'short' })}</p>
                     </div>
                   </div>
