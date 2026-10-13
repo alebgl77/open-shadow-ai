@@ -224,6 +224,24 @@ async def test_user_count_sort_is_accepted_and_stable():
         assert tuple(column.strip().strip("'") for column in declared.split(",")) == SORT_COLUMNS
 
 
+def test_inventory_sort_columns_and_install_sources_match_the_console():
+    """The console mirrors the API's sort columns and install sources; neither may drift alone."""
+    from shadai.api.extensions import INVENTORY_SORT_COLUMNS
+    from shadai.models.event import EXTENSION_INSTALL_SOURCES
+    from shadai.models.extension_inventory import ExtensionInventoryORM
+
+    assert set(INVENTORY_SORT_COLUMNS) <= set(ExtensionInventoryORM.__table__.columns.keys())
+    frontend = Path("frontend/src/api/inventory.ts")
+    if frontend.exists():
+        source = frontend.read_text()
+        for name, expected in (
+            ("INVENTORY_SORT_COLUMNS", INVENTORY_SORT_COLUMNS),
+            ("INSTALL_SOURCES", EXTENSION_INSTALL_SOURCES),
+        ):
+            declared = source.split(f"{name} = [", 1)[1].split("]", 1)[0]
+            assert tuple(column.strip().strip("'") for column in declared.split(",")) == expected, name
+
+
 async def test_export_applies_every_discovery_filter():
     from shadai.api.exports import export_detections
 

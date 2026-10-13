@@ -10,10 +10,10 @@ are pseudonymised); the digests are keyed identities, never raw identifiers.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -118,6 +118,13 @@ class ExtensionVersionChangeORM(Base):
 
 
 # ── Pydantic Schemas ─────────────────────────────────────────────
+def _utc(value: datetime | None) -> datetime | None:
+    # Every stored instant is UTC; a database without time zone support hands it back naive.
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
 class IdentityWindow(BaseModel):
     """The retention window every inventory response is bounded by."""
 
@@ -149,6 +156,8 @@ class ExtensionInventoryRead(BaseModel):
     # False once the same device reported a newer snapshot without this installation.
     present_in_latest_snapshot: bool = True
 
+    _utc = field_validator("installed_at", "first_seen_at", "last_seen_at")(_utc)
+
 
 class ExtensionVersionChangeRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -168,6 +177,8 @@ class ExtensionVersionChangeRead(BaseModel):
     observed_at: datetime
     catalog_item_id: str | None = None
 
+    _utc = field_validator("previous_observed_at", "observed_at")(_utc)
+
 
 class ExtensionInventoryListResponse(BaseModel):
     items: list[ExtensionInventoryRead]
@@ -178,10 +189,40 @@ class ExtensionInventoryListResponse(BaseModel):
     identity_mode: IdentityMode
 
 
+class ExtensionInventorySummary(BaseModel):
+    """Aggregate counts over the visible inventory; never a host, user or profile value."""
+
+    installations: int
+    hosts: int
+    extensions: int
+    catalog_matched: int
+    # Keys are the `enabled` filter values of the list API.
+    by_enabled: dict[Literal["true", "false", "unknown"], int]
+    by_browser: dict[str, int]
+    # Every stored install source, "" being the value of a record a wire v1 agent sent.
+    by_install_source: dict[ExtensionInstallSource, int]
+    version_changes_7d: int
+    identity_window: IdentityWindow
+    identity_mode: IdentityMode
+    limitations: list[str]
+
+
+class ExtensionInstallationHistory(BaseModel):
+    """One installation and its version changes inside the identity window, newest first."""
+
+    installation: ExtensionInventoryRead
+    changes: list[ExtensionVersionChangeRead]
+    identity_window: IdentityWindow
+    identity_mode: IdentityMode
+
+
 class ExtensionVersionChangeListResponse(BaseModel):
     items: list[ExtensionVersionChangeRead]
     total: int
     page: int
     page_size: int
+    # The effective window after clamping the request to the identity window.
+    since: datetime | None = None
+    until: datetime | None = None
     identity_window: IdentityWindow
     identity_mode: IdentityMode

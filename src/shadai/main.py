@@ -21,6 +21,7 @@ from shadai.api.collectors import router as collectors_router
 from shadai.api.dashboard import router as dashboard_router
 from shadai.api.detections import router as detections_router
 from shadai.api.exports import router as exports_router
+from shadai.api.extensions import router as extensions_router
 from shadai.api.governance import router as governance_router
 from shadai.api.ingestion import router as ingestion_router
 from shadai.api.network import router as network_router
@@ -95,6 +96,7 @@ app.include_router(agent_router)
 app.include_router(collectors_router)
 app.include_router(ingestion_router)
 app.include_router(network_router)
+app.include_router(extensions_router)
 app.include_router(operations_router)
 app.include_router(scim_router)
 app.include_router(sso_router)
