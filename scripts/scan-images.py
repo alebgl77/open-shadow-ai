@@ -59,8 +59,8 @@ def package_key(purl: str) -> tuple[str, str, str]:
     elif ecosystem == "pypi":
         name = re.sub(r"[-_.]+", "-", name).lower()
     elif ecosystem == "golang":
-        # A Go module path is a case-insensitive identity: Syft records the declared spelling
-        # (github.com/Azure/...) while Trivy reports it lower-cased, so both compare lower-cased.
+        # Go module paths are case-sensitive. Trivy lower-cases Syft's declared spelling
+        # (github.com/Azure/...), so use an alias only after rejecting ambiguous original paths.
         name = name.lower()
         if name == "stdlib":
             version = re.sub(r"^(?:go|v)?(?=\d+\.\d+\.\d+$)", "v", version)
@@ -68,6 +68,8 @@ def package_key(purl: str) -> tuple[str, str, str]:
 
 
 def spdx_inventory(sbom: dict, *, frontend: bool = False, service: bool = False) -> set[tuple[str, str, str]]:
+    if service:
+        script("component_scanner").validate_go_module_paths(sbom)
     expected = set()
     for package in sbom.get("packages", []):
         for reference in package.get("externalRefs", []):

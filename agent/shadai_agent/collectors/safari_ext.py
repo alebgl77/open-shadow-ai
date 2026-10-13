@@ -16,6 +16,7 @@ from pathlib import Path
 from xml.parsers.expat import ExpatError
 
 from shadai_agent.collectors.browser_ext import _localized, _read_manifest
+from shadai_agent.collectors.profile_identity import safari_profile
 
 PLIST_MAX_BYTES = 4 * 1024 * 1024
 # Application folders scanned for host apps, system-wide then relative to a home.
@@ -80,7 +81,7 @@ def _extension_record(app: Path, appex: Path) -> dict | None:
         return None
     extension = info.get("NSExtension")
     point = extension.get("NSExtensionPointIdentifier") if isinstance(extension, dict) else None
-    if point not in SAFARI_EXTENSION_POINTS:
+    if not isinstance(point, str) or point not in SAFARI_EXTENSION_POINTS:
         return None
     bundle_id = info.get("CFBundleIdentifier")
     if not isinstance(bundle_id, str) or not bundle_id:
@@ -122,34 +123,46 @@ def collect_safari_extensions(homes: list[Path]) -> tuple[list[dict], int]:
     Returns the records and the number of unreadable paths. Never raises.
     """
 
-    shared: list[dict] = []
+    shared: dict[Path, dict] = {}
     errors = 0
     for folder in APPLICATION_DIRS:
         for app in _app_bundles(Path(folder)):
             for appex in _extension_bundles(app):
                 try:
+                    canonical, profile = safari_profile(Path(folder), appex, "safari-system")
+                    if canonical in shared:
+                        continue
                     record = _extension_record(app, appex)
-                except OSError:
+                except (OSError, RuntimeError, ValueError, TypeError):
                     errors += 1
                     continue
                 if record is not None:
-                    shared.append(record)
+                    shared[canonical] = {**record, "profile": profile}
     extensions: list[dict] = []
     for home in homes:
         home = Path(home)
-        personal: list[dict] = []
+        personal: dict[Path, dict] = {}
         for relative in USER_APPLICATION_DIRS:
-            for app in _app_bundles(home / relative):
+            folder = home / relative
+            try:
+                folder.resolve(strict=True).relative_to(home.resolve(strict=True))
+            except (OSError, RuntimeError, ValueError):
+                errors += 1
+                continue
+            for app in _app_bundles(folder):
                 for appex in _extension_bundles(app):
                     try:
+                        canonical, profile = safari_profile(folder, appex, "safari-user")
+                        if canonical in shared or canonical in personal:
+                            continue
                         record = _extension_record(app, appex)
-                    except OSError:
+                    except (OSError, RuntimeError, ValueError, TypeError):
                         errors += 1
                         continue
                     if record is not None:
-                        personal.append(record)
+                        personal[canonical] = {**record, "profile": profile}
         state = _user_state(home)
-        for record in shared + personal:
+        for record in [*shared.values(), *personal.values()]:
             enabled = state.get(record["id"]) if state is not None else None
             extensions.append({**record, "user": home.name, "enabled": enabled})
     return extensions, errors

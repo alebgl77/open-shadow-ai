@@ -54,7 +54,7 @@ def test_collects_a_well_formed_extension(home):
     assert record["id"] == "a" * 32
     assert record["name"] == "Tidy"
     assert record["browser"] == "chrome"
-    assert record["profile"] == "Default"
+    assert record["profile"].endswith(":Default")
     assert record["user"] == "alice"
 
 
@@ -113,7 +113,7 @@ def test_same_id_in_two_profiles_is_reported_per_profile(home):
     ext = "7" * 32
     _install(home, CHROME, "Default", ext, "1.0.0", {"name": "dup", "version": "1.0.0"})
     _install(home, CHROME, "Profile 1", ext, "1.0.0", {"name": "dup", "version": "1.0.0"})
-    profiles = {r["profile"] for r in collect(home)}
+    profiles = {r["profile"].split(":", 1)[1] for r in collect(home)}
     assert profiles == {"Default", "Profile 1"}
 
 
@@ -259,7 +259,7 @@ def test_single_profile_layout_is_read_as_default_profile(tmp_path, monkeypatch)
     version_dir.mkdir(parents=True)
     (version_dir / "manifest.json").write_text(json.dumps({"name": "OperaExt", "version": "2.0.0"}))
     [record] = collect(home)
-    assert (record["browser"], record["profile"], record["name"]) == ("opera", "Default", "OperaExt")
+    assert (record["browser"], record["profile"].split(":", 1)[1], record["name"]) == ("opera", "default", "OperaExt")
 
 
 def test_unlisted_chromium_browser_is_discovered_from_its_local_state(home):
@@ -425,7 +425,7 @@ def test_extension_left_on_disk_but_not_in_the_profile_is_an_orphan(home):
     _install(home, CHROME, "Default", "e" * 32, "1.0.0", {"name": "Residue", "version": "1.0.0"})
     _prefs(home, CHROME, "Default", {"f" * 32: {"state": 1, "location": 1}})
     [record] = collect(home)
-    assert (record["enabled"], record["install_source"]) == (False, "orphan")
+    assert (record["enabled"], record["install_source"]) == (None, "orphan")
 
 
 def test_unreadable_preferences_leave_the_state_unknown(home):
@@ -451,6 +451,7 @@ def test_preferences_with_no_extension_table_mark_everything_orphan(home):
     (home / CHROME / "Default" / "Preferences").write_text(json.dumps({"profile": {"name": "Default"}}))
     [record] = collect(home)
     assert record["install_source"] == "orphan"
+    assert record["enabled"] is None
 
 
 # --- EXT-02: Firefox-family add-ons ---------------------------------------------
@@ -484,7 +485,7 @@ def test_firefox_addons_are_inventoried_per_profile(home):
     records = {r["id"]: r for r in collect(home)}
     assert set(records) == {"uBlock0@raymondhill.net", "{11111111-2222-3333-4444-555555555555}"}
     ublock = records["uBlock0@raymondhill.net"]
-    assert (ublock["name"], ublock["browser"], ublock["profile"], ublock["user"]) == (
+    assert (ublock["name"], ublock["browser"], ublock["profile"].split(":", 1)[1], ublock["user"]) == (
         "uBlock Origin", "firefox", "abc.default-release", "alice")
     assert ublock["enabled"] is True and ublock["install_source"] == "store"
     assert ublock["permissions"] == ["tabs", "<all_urls>"]

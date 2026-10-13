@@ -98,7 +98,10 @@ class ExtensionRecord(BaseModel):
     @field_validator("installed_at")
     @classmethod
     def utc_installed_at(cls, value):
-        return None if value is None else value.astimezone(UTC)
+        try:
+            return None if value is None else value.astimezone(UTC)
+        except OverflowError:
+            raise ValueError("Extension installed_at is outside the UTC range") from None
 
 
 def extension_record(record: Mapping[str, Any]) -> ExtensionRecord:

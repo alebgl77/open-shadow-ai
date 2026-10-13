@@ -20,10 +20,15 @@ import ErrorAlert from '@/components/ui/ErrorAlert'
 import { CardsSkeleton, TableSkeleton } from '@/components/ui/LoadingSkeleton'
 import { downloadBlob, downloadCsv } from '@/lib/export'
 import { useAuthStore } from '@/stores/auth'
+import type { MessageKey } from '@/i18n/messages'
 
 const VIEWS = ['matches', 'inventory', 'changes'] as const
 type View = typeof VIEWS[number]
 const PAGE_SIZE = 25
+const INSTALL_SOURCE_LABELS: Record<string, MessageKey> = {
+  store: 'Store', user: 'User-installed', unpacked: 'Unpacked', external: 'External installer', policy: 'Policy',
+  component: 'Browser component', orphan: 'Orphan', unknown: 'Unknown source',
+}
 const forbidden = (error: unknown) => isAxiosError(error) && error.response?.status === 403
 const oneOf = <T extends string>(values: readonly T[], value: string | null): T | undefined => (values as readonly string[]).includes(value ?? '') ? value as T : undefined
 const positivePage = (value: string | null) => { const page = Number(value); return Number.isSafeInteger(page) && page > 0 ? page : 1 }
@@ -143,7 +148,8 @@ function InventoryNotice({ window, identityMode }: { window?: IdentityWindow; id
   const mode = useAuthStore(state => state.mode)
   return <>
     {mode === 'demo' && <p role="status" className="text-xs text-amber-200">{tr("Synthetic extension inventory · fictional hosts, pseudonymous users and illustrative versions.")}</p>}
-    <div className="flex gap-3 rounded-xl border border-accent/20 bg-accent/5 p-4 text-xs text-slate-300 leading-relaxed"><Info size={16} className="text-accent shrink-0" /><p>{textLabel(INVENTORY_NOTICE)}{' '}{identityMode === 'pseudonymized' ? tr("Identities are pseudonymised.") : identityMode === 'raw' ? tr("Identities are shown as reported by the agent.") : null}{' '}{window && tr('Installations reported within the last {days} days are shown, as of {time}.', { days: formatNumber(window.days), time: formatDate(window.as_of) })}</p></div>
+    <div className="flex gap-3 rounded-xl border border-accent/20 bg-accent/5 p-4 text-xs text-slate-300 leading-relaxed"><Info size={16} className="text-accent shrink-0" /><p>{textLabel(INVENTORY_NOTICE)}{' '}{identityMode === 'pseudonymized' ? tr("The current privacy setting pseudonymises identities in newly processed events.") : identityMode === 'raw' ? tr("The current privacy setting keeps identities as reported in newly processed events.") : null}{' '}{identityMode && tr("Existing labels may retain their previous form until the next snapshot after a privacy setting change.")}{' '}{window && tr('Installations reported within the last {days} days are shown, as of {time}.', { days: formatNumber(window.days), time: formatDate(window.as_of) })}</p></div>
+    <p className="text-xs text-slate-400 leading-relaxed">{tr("Not observed is inferred from the device's most recent received extension events. Partial collection, failures, truncation or partial ingestion can hide an installation; this does not prove removal.")}</p>
   </>
 }
 
@@ -191,6 +197,7 @@ function VersionHistory({ item }: { item: ExtensionInventoryItem }) {
 
 function InventoryView() {
   const { tr, textLabel, formatDate, formatNumber } = useI18n()
+  const installSourceLabel = (source: string) => Object.hasOwn(INSTALL_SOURCE_LABELS, source) ? tr(INSTALL_SOURCE_LABELS[source]) : source
 
   const { params, setParams, changeFilter } = useFilterParams()
   const { mode, session, canRead } = useInventoryAccess()
@@ -247,7 +254,7 @@ function InventoryView() {
           ...ENABLED_STATES.map(state => [<EnabledBadge key={state} enabled={state} />, counts.by_enabled[state] || 0] as const),
           ...Object.entries(counts.by_install_source).map(([source, count]) => [<InstallSourceBadge key={source || 'not-reported'} source={source} />, count] as const),
         ].map(([badge, count], index) => <div key={index} className="flex items-center gap-3 rounded-lg border border-surface-600/30 px-3 py-2 text-xs"><dt>{badge}</dt><dd className="tabular-nums">{formatNumber(count)}</dd></div>)}</dl>
-        {!!counts.limitations.length && <details className="text-xs text-slate-400"><summary className="cursor-pointer">{tr("Collection limitations")}</summary><ul className="list-disc pl-5 mt-3 space-y-2">{counts.limitations.map((limitation, index) => <li key={index}>{limitation}</li>)}</ul></details>}
+        {!!counts.limitations.length && <details className="text-xs text-slate-400"><summary className="cursor-pointer">{tr("Collection limitations")}</summary><ul className="list-disc pl-5 mt-3 space-y-2">{counts.limitations.map((limitation, index) => <li key={index}>{textLabel(limitation)}</li>)}</ul></details>}
       </>}
     </section>
 
@@ -256,7 +263,7 @@ function InventoryView() {
       <TextFilter label={tr("Host")} value={filters.host || ''} onApply={value => { if (value !== (filters.host || '')) changeFilter('host', value) }} />
       <BrowserFilter value={filters.browser} options={Object.keys(counts?.by_browser || {})} onChange={value => changeFilter('browser', value)} />
       <label className="text-xs text-slate-400">{tr("Enabled state")}<select aria-label={tr("Enabled state")} className="field block mt-1" value={filters.enabled || ''} onChange={event => changeFilter('enabled', event.target.value)}><option value="">{tr("Any state")}</option><option value="true">{tr("Enabled")}</option><option value="false">{tr("Disabled")}</option><option value="unknown">{tr("State not reported")}</option></select></label>
-      <label className="text-xs text-slate-400">{tr("Install source")}<select aria-label={tr("Install source")} className="field block mt-1" value={filters.install_source || ''} onChange={event => changeFilter('install_source', event.target.value)}><option value="">{tr("Any source")}</option>{INSTALL_SOURCES.map(source => <option key={source} value={source}>{source}</option>)}{filters.install_source?.includes(',') && <option value={filters.install_source}>{filters.install_source.split(',').join(', ')}</option>}</select></label>
+      <label className="text-xs text-slate-400">{tr("Install source")}<select aria-label={tr("Install source")} className="field block mt-1" value={filters.install_source || ''} onChange={event => changeFilter('install_source', event.target.value)}><option value="">{tr("Any source")}</option>{INSTALL_SOURCES.map(source => <option key={source} value={source}>{installSourceLabel(source)}</option>)}{filters.install_source?.includes(',') && <option value={filters.install_source}>{filters.install_source.split(',').map(installSourceLabel).join(', ')}</option>}</select></label>
       <label className="text-xs text-slate-400">{tr("Catalog match")}<select aria-label={tr("Catalog match")} className="field block mt-1" value={filters.catalog_match || ''} onChange={event => changeFilter('catalog_match', event.target.value)}><option value="">{tr("Matched and unmatched")}</option><option value="matched">{tr("Catalog association")}</option><option value="unmatched">{tr("No catalog match")}</option></select></label>
       <button disabled={actionsDisabled || !rows?.items.length} onClick={exportPage} className="secondary-button"><Download className="w-4 h-4" />{tr("Export page")}</button>
       <button disabled={actionsDisabled || !rows?.total} onClick={() => { exportAll.reset(); setConfirmExport(true) }} aria-expanded={confirmExport} aria-controls="export-inventory" className="secondary-button"><Download className="w-4 h-4" />{tr("Export all")}</button>
@@ -288,8 +295,8 @@ function InventoryView() {
           <td className="px-4 py-4"><EnabledBadge enabled={item.enabled} /></td>
           <td className="px-4 py-4"><InstallSourceBadge source={item.install_source} /></td>
           <td className="px-4 py-4 text-xs text-slate-400 whitespace-nowrap">{item.installed_at ? formatDate(item.installed_at) : tr("Not reported")}</td>
-          <td className="px-4 py-4 text-xs whitespace-nowrap">{item.detection_id ? <Link to={`/discoveries/${item.detection_id}`} className="text-accent">{tr("Open discovery")}</Link> : <span className="text-slate-500">{tr("No catalog match")}</span>}</td>
-          <td className="px-4 py-4 text-xs text-slate-400 whitespace-nowrap">{formatDate(item.last_seen_at)}{!item.present_in_latest_snapshot && <p className="text-amber-300 mt-1">{tr("Absent from the latest snapshot")}</p>}</td>
+          <td className="px-4 py-4 text-xs whitespace-nowrap">{item.detection_id ? <Link to={`/discoveries/${item.detection_id}`} className="text-accent">{tr("Open discovery")}</Link> : <span className="text-slate-500">{tr(item.catalog_item_id != null ? "Catalog association" : "No catalog match")}</span>}</td>
+          <td className="px-4 py-4 text-xs text-slate-400 whitespace-nowrap">{formatDate(item.last_seen_at)}{!item.present_in_latest_snapshot && <p className="text-amber-300 mt-1">{tr("Not observed in the latest received extension events")}</p>}</td>
           <td className="px-4 py-4 text-xs"><VersionHistory item={item} /></td>
         </tr>)}</tbody></table></div>}
         <div className="flex flex-wrap justify-between items-center gap-3 text-xs text-slate-400"><p>{tr('{count} installations · page {page} of {pages}', { count: formatNumber(rows.total), page: formatNumber(page), pages: formatNumber(pages) })}</p><Pager page={page} pages={pages} busy={inventory.isFetching} onPage={next => changeFilter('page', String(next))} /></div>

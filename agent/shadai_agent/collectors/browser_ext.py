@@ -26,6 +26,8 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from shadai_agent.collectors.profile_identity import browser_profile
+
 logger = logging.getLogger(__name__)
 
 # A manifest larger than this is treated as hostile and skipped rather than read.
@@ -48,6 +50,7 @@ _CHROMIUM_INSTALL_SOURCES = {
     10: "component",  # EXTERNAL_COMPONENT
 }
 _CHROMIUM_STATE_ENABLED = 1
+_CHROMIUM_STATES_DISABLED = {0, 2, 3, 4, 5}
 # Chromium stores times as microseconds since 1601-01-01 (Windows epoch).
 _WINDOWS_EPOCH_OFFSET_SECONDS = 11_644_473_600
 # Transient install scratch directories that are not real extension versions.
@@ -201,7 +204,7 @@ def _read_manifest(path: Path, max_bytes: int = MANIFEST_MAX_BYTES) -> dict | No
             return None
         with open(path, encoding="utf-8-sig") as handle:
             manifest = json.load(handle)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return manifest if isinstance(manifest, dict) else None
 
@@ -305,7 +308,7 @@ def _windows_profile_homes() -> list[Path]:
     try:
         return [child for child in users_dir.iterdir()
                 if child.is_dir() and child.name.lower() not in _WINDOWS_NON_USER_PROFILES]
-    except OSError:
+    except (OSError, RuntimeError):
         return []
 
 
@@ -354,7 +357,7 @@ def iter_user_homes() -> list[Path]:
             key = os.path.normcase(str(home.resolve()))
             if key in seen or not home.is_dir():
                 continue
-        except OSError:
+        except (OSError, RuntimeError):
             continue
         seen.add(key)
         homes.append(home)
@@ -448,37 +451,44 @@ def _chromium_time(value: object) -> str | None:
 def _chromium_state(entry: dict | None, settings: dict | None) -> dict:
     """Real state of one extension from its profile settings entry.
 
-    ``enabled`` is None when the profile's preferences could not be read, and
-    False with ``install_source`` "orphan" when the extension directory is on
-    disk but the profile no longer lists it (an uninstall that left files).
+    ``enabled`` is None when preferences or a recognized state are unavailable.
+    ``install_source`` is "orphan" when files remain outside the profile registry;
+    their presence does not establish an explicit disabled state.
     """
 
     if settings is None:
         return {"enabled": None, "install_source": "unknown", "installed_at": None}
     if entry is None:
-        return {"enabled": False, "install_source": "orphan", "installed_at": None}
+        return {"enabled": None, "install_source": "orphan", "installed_at": None}
     location = entry.get("location")
     source = _CHROMIUM_INSTALL_SOURCES.get(location, "unknown") if isinstance(location, int) else "unknown"
     if source == "user" and entry.get("from_webstore") is True:
         source = "store"
     return {
-        "enabled": entry.get("state") == _CHROMIUM_STATE_ENABLED,
+        "enabled": (entry["state"] == _CHROMIUM_STATE_ENABLED
+                    if type(entry.get("state")) is int
+                    and entry["state"] in {_CHROMIUM_STATE_ENABLED, *_CHROMIUM_STATES_DISABLED} else None),
         "install_source": source,
         "installed_at": _chromium_time(entry.get("install_time")),
     }
 
 
-def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -> int:
+def _collect_root(base: Path, browser: str, home: Path, system: str, extensions: list[dict]) -> int:
     """Append every readable extension under one user-data root. Returns errors."""
 
     errors = 0
+    seen: set[str] = set()
     for profile_dir in _profile_dirs(base):
         try:
+            profile = browser_profile(home, base, profile_dir, "chromium", system)
+            if profile in seen:
+                continue
+            seen.add(profile)
             ext_dir = profile_dir / "Extensions"
             if not ext_dir.is_dir():
                 continue
             ext_id_dirs = list(ext_dir.iterdir())
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
             errors += 1
             continue
         settings = _extension_settings(profile_dir)
@@ -497,12 +507,12 @@ def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -
                         "version": str(manifest.get("version", "")),
                         "browser": browser,
                         "permissions": manifest.get("permissions", []),
-                        "profile": "Default" if profile_dir == base else profile_dir.name,
-                        "user": user,
+                        "profile": profile,
+                        "user": home.name,
                         **_chromium_state(settings.get(ext_id_dir.name) if settings else None, settings),
                     }
                 )
-            except OSError:
+            except (OSError, RuntimeError, ValueError, TypeError):
                 errors += 1
     return errors
 
@@ -510,7 +520,9 @@ def _collect_root(base: Path, browser: str, user: str, extensions: list[dict]) -
 def _gecko_addon(addon: dict) -> dict | None:
     """One add-on record from a Firefox ``extensions.json`` entry, or None if not an extension."""
 
-    if addon.get("type") != "extension" or addon.get("location") in _GECKO_BUILTIN_LOCATIONS:
+    location = addon.get("location")
+    location = location if isinstance(location, str) else ""
+    if addon.get("type") != "extension" or location in _GECKO_BUILTIN_LOCATIONS:
         return None
     addon_id = addon.get("id")
     if not isinstance(addon_id, str) or not addon_id:
@@ -519,9 +531,10 @@ def _gecko_addon(addon: dict) -> dict | None:
     name = locale.get("name") if isinstance(locale, dict) else None
     grants = addon.get("userPermissions")
     grants = grants if isinstance(grants, dict) else {}
-    permissions = [p for key in ("permissions", "origins") for p in grants.get(key, []) if isinstance(p, str)]
+    permissions = [p for key in ("permissions", "origins")
+                   for p in (grants[key] if isinstance(grants.get(key), list) else []) if isinstance(p, str)]
     source = str(addon.get("sourceURI") or "")
-    install_source = _GECKO_INSTALL_SOURCES.get(str(addon.get("location")), "unknown")
+    install_source = _GECKO_INSTALL_SOURCES.get(location, "unknown")
     if install_source == "user" and "addons.mozilla.org" in source:
         install_source = "store"
     return {
@@ -529,25 +542,31 @@ def _gecko_addon(addon: dict) -> dict | None:
         "name": str(name) if name else "Unknown",
         "version": str(addon.get("version", "")),
         "permissions": permissions,
-        "enabled": bool(addon.get("active")) and not addon.get("userDisabled") and not addon.get("appDisabled"),
+        "enabled": (addon["active"] and addon.get("userDisabled") is not True and addon.get("appDisabled") is not True
+                    if isinstance(addon.get("active"), bool) else None),
         "install_source": install_source,
     }
 
 
-def _collect_gecko_root(base: Path, browser: str, user: str, extensions: list[dict]) -> int:
+def _collect_gecko_root(base: Path, browser: str, home: Path, system: str, extensions: list[dict]) -> int:
     """Append every add-on listed by the profiles under one Firefox-family root. Returns errors."""
 
     errors = 0
     try:
         profiles = [child for child in base.iterdir() if child.is_dir()]
-    except OSError:
+    except (OSError, RuntimeError):
         return 1
+    seen: set[str] = set()
     for profile_dir in profiles:
         listing = profile_dir / "extensions.json"
         try:
+            profile = browser_profile(home, base, profile_dir, "gecko", system)
+            if profile in seen:
+                continue
+            seen.add(profile)
             if not listing.is_file():
                 continue
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
             errors += 1
             continue
         data = _read_manifest(listing, ADDONS_JSON_MAX_BYTES)
@@ -556,20 +575,28 @@ def _collect_gecko_root(base: Path, browser: str, user: str, extensions: list[di
             continue
         addons = data.get("addons")
         for addon in addons if isinstance(addons, list) else []:
-            record = _gecko_addon(addon) if isinstance(addon, dict) else None
+            try:
+                record = _gecko_addon(addon) if isinstance(addon, dict) else None
+            except (OSError, RuntimeError, ValueError, TypeError):
+                errors += 1
+                continue
             if record is not None:
-                extensions.append({**record, "browser": browser, "profile": profile_dir.name, "user": user})
+                extensions.append({**record, "browser": browser, "profile": profile, "user": home.name})
     return errors
 
 
 def _gecko_roots(home: Path, system: str) -> list[tuple[Path, str]]:
     roots = []
+    seen: set[Path] = set()
     for relative, browser in GECKO_ROOTS.get(system, []):
         base = home / relative
         try:
-            if base.is_dir():
+            canonical = base.resolve(strict=True)
+            canonical.relative_to(home.resolve(strict=True))
+            if canonical not in seen and base.is_dir():
                 roots.append((base, browser))
-        except OSError:
+                seen.add(canonical)
+        except (OSError, RuntimeError, ValueError):
             continue
     return roots
 
@@ -584,8 +611,10 @@ def _chromium_roots(home: Path, system: str) -> list[tuple[Path, str]]:
         try:
             if not base.is_dir():
                 continue
-            key = os.path.normcase(str(base.resolve()))
-        except OSError:
+            canonical = base.resolve(strict=True)
+            canonical.relative_to(home.resolve(strict=True))
+            key = os.path.normcase(str(canonical))
+        except (OSError, RuntimeError, ValueError):
             continue
         if key not in seen:
             seen.add(key)
@@ -600,7 +629,7 @@ def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
     and skipped. One record per installation: the extension id, name and
     browser plus its version, enabled state, install source, install time
     (Chromium only today), owning user (the home directory name) and profile
-    (the profile directory name, never a display name or signed-in account).
+    (a digest of canonical home-relative root/profile plus a bounded directory-name suffix).
     All of those go on the wire; ``permissions`` and the Safari ``host_app``
     are for local use only and never leave the host.
     """
@@ -608,21 +637,22 @@ def collect_extensions(homes: Iterable[Path] | None = None) -> list[dict]:
     system = platform.system()
     extensions: list[dict] = []
     errors = 0
-    for home in iter_user_homes() if homes is None else homes:
+    user_homes = list(iter_user_homes() if homes is None else homes)
+    for home in user_homes:
         home = Path(home)
         try:
             chromium, gecko = _chromium_roots(home, system), _gecko_roots(home, system)
-        except OSError:
+        except (OSError, RuntimeError, ValueError):
             errors += 1
             continue
         for base, browser in chromium:
-            errors += _collect_root(base, browser, home.name, extensions)
+            errors += _collect_root(base, browser, home, system, extensions)
         for base, browser in gecko:
-            errors += _collect_gecko_root(base, browser, home.name, extensions)
+            errors += _collect_gecko_root(base, browser, home, system, extensions)
     if system == "Darwin":
         from shadai_agent.collectors.safari_ext import collect_safari_extensions  # noqa: PLC0415 - macOS only
 
-        found, safari_errors = collect_safari_extensions(list(iter_user_homes() if homes is None else homes))
+        found, safari_errors = collect_safari_extensions(user_homes)
         extensions.extend(found)
         errors += safari_errors
     if errors:

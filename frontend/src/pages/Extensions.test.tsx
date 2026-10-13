@@ -42,6 +42,15 @@ const history: InstallationHistory = { installation: sider, changes: [upgrade, f
 const changes: VersionChangePage = { items: [upgrade, first], total: 2, page: 1, page_size: 25, since: '2026-10-03T12:00:00Z', until: '2026-10-06T12:00:00Z', identity_window, identity_mode: 'pseudonymized' }
 const detections = { items: [], total: 0, page: 1, page_size: 100 }
 const locales: Locale[] = ['en', 'fr', 'zh-CN']
+const inventoryLimitations = [
+  'Installation is presence evidence, not usage; the inventory supports incident review, not employee monitoring.',
+  "Rows describe the state an agent last reported; an installation missing from a host's latest snapshot is marked absent, not removed.",
+  'A catalog match associates an extension identifier with a service; it does not prove AI usage.',
+  'Only hosts running the endpoint agent with browser collection are covered; other browsers and hosts are unknown.',
+  'Install time and install source are reported by the browser profile as found; the inventory stores them as given.',
+  'Installations and version history are kept for the identity retention window only.',
+] as const
+const absenceCaveat = "Not observed is inferred from the device's most recent received extension events. Partial collection, failures, truncation or partial ingestion can hide an installation; this does not prove removal."
 const clients: QueryClient[] = []
 
 function LocationProbe() { const location = useLocation(); return <output aria-label="Current location">{location.pathname}{location.search}</output> }
@@ -128,9 +137,9 @@ describe('extension inventory view', () => {
     expect(within(rows).getByText('Source not reported')).toBeTruthy()
     expect(within(rows).getByRole('link', { name: 'Open discovery' }).getAttribute('href')).toBe('/discoveries/detection-7')
     expect(within(rows).getByText('No catalog match')).toBeTruthy()
-    expect(within(rows).getByText('Absent from the latest snapshot')).toBeTruthy()
+    expect(within(rows).getByText('Not observed in the latest received extension events')).toBeTruthy()
     expect(within(rows).getByText(new Date(sider.installed_at!).toLocaleString('en-US'))).toBeTruthy()
-    expect(screen.getByText(/An installation is presence evidence, not usage/).textContent).toContain('Identities are pseudonymised.')
+    expect(screen.getByText(/An installation is presence evidence, not usage/).textContent).toContain('The current privacy setting pseudonymises identities in newly processed events.')
     expect(screen.getByText(/Installations reported within the last 30 days/)).toBeTruthy()
     const overview = screen.getByRole('region', { name: 'Inventory overview' })
     expect(within(overview).getByText('Installations').parentElement?.textContent).toBe('Installations41')
@@ -231,7 +240,7 @@ describe('extension inventory view', () => {
     expect(get).toHaveBeenCalledWith('/extensions/inventory?install_source=store%2Cuser&page=1&page_size=25&sort_by=last_seen_at&sort_order=desc', expect.any(Object))
     const select = screen.getByRole('combobox', { name: 'Install source' }) as HTMLSelectElement
     expect(select.value).toBe('store,user')
-    expect(select.selectedOptions[0].textContent).toBe('store, user')
+    expect(select.selectedOptions[0].textContent).toBe('Store, User-installed')
   })
 
   it('renders empty results without claiming the absence of extensions', async () => {
@@ -313,7 +322,7 @@ describe('extension inventory view', () => {
     expect(await screen.findByText('24 installations · page 1 of 1')).toBeTruthy()
     expect(screen.getByText(/Synthetic extension inventory/).getAttribute('role')).toBe('status')
     expect(within(table()).getAllByRole('link', { name: 'Open discovery' })).toHaveLength(4)
-    expect(within(table()).getAllByText('Absent from the latest snapshot')).toHaveLength(2)
+    expect(within(table()).getAllByText('Not observed in the latest received extension events')).toHaveLength(2)
     expect(within(table()).getAllByText('Host-level record')).toHaveLength(2)
     fireEvent.change(screen.getByRole('combobox', { name: 'Browser' }), { target: { value: 'chrome' } })
     expect(await screen.findByText('6 installations · page 1 of 1')).toBeTruthy()
@@ -400,9 +409,79 @@ describe.each(locales)('%s inventory labels', locale => {
     expect(within(rows).getAllByText(tr('Not reported'))).toHaveLength(2)
     expect(within(rows).getByText(tr('State not reported'))).toBeTruthy()
     expect(within(rows).getByText(tr('Source not reported'))).toBeTruthy()
-    expect(within(rows).getByText(tr('Absent from the latest snapshot'))).toBeTruthy()
+    expect(within(rows).getByText(tr('Not observed in the latest received extension events'))).toBeTruthy()
+    expect(screen.getByText(tr(absenceCaveat))).toBeTruthy()
     expect(within(rows).getByText('p1_alice · Default')).toBeTruthy()
     expect(screen.getByText(/p1_alice/)).toBeTruthy()
     expect(screen.getByText(tr('{count} installations · page {page} of {pages}', { count: formatNumber(41), page: formatNumber(1), pages: formatNumber(2) }))).toBeTruthy()
+  })
+
+  it('translates all known expanded limitations and preserves unknown prose and prototype keys', async () => {
+    const unknown = ['Vendor limitation: keep-original', '__proto__', 'constructor', 'toString']
+    serve({ summary: { ...summary, limitations: [...inventoryLimitations, ...unknown] } })
+    mount('/extensions?view=inventory', locale)
+    await screen.findByText('Sider assistant')
+    const toggle = screen.getByText(tr('Collection limitations'))
+    const details = toggle.closest('details')!
+    fireEvent.click(toggle)
+    if (!details.open) { details.open = true; fireEvent(details, new Event('toggle')) }
+    expect(details.open).toBe(true)
+    expect(within(details).getAllByRole('listitem').map(item => item.textContent)).toEqual([
+      ...inventoryLimitations.map(key => tr(key)), ...unknown,
+    ])
+    if (locale !== 'en') for (const key of inventoryLimitations) {
+      expect(tr(key)).not.toBe(key)
+      expect(within(details).queryByText(key)).toBeNull()
+    }
+  })
+
+  it('keeps catalog association without a discovery distinct from unmatched rows and actual discovery links', async () => {
+    const associated = { ...sider, inventory_key: 'c'.repeat(64), extension_name: 'Associated helper', detection_id: null }
+    serve({ inventory: { ...inventory, items: [sider, associated, legacy] } })
+    mount('/extensions?view=inventory', locale)
+    await screen.findByText('Associated helper')
+    const row = within(table()).getByText('Associated helper').closest('tr')!
+    expect(within(row).getByText(tr('Catalog association'))).toBeTruthy()
+    expect(within(row).queryByText(tr('No catalog match'))).toBeNull()
+    expect(within(row).queryByRole('link')).toBeNull()
+    expect(within(table()).getByRole('link', { name: tr('Open discovery') }).getAttribute('href')).toBe('/discoveries/detection-7')
+    expect(within(table()).getByText(tr('No catalog match'))).toBeTruthy()
+  })
+
+  it.each(['pseudonymized', 'raw'] as const)('describes the current %s setting while retaining labels from the previous setting', async identityMode => {
+    const userLabel = identityMode === 'pseudonymized' ? 'previous-raw-user' : 'p1_previous-user'
+    const hostLabel = identityMode === 'pseudonymized' ? 'previous-raw-host' : 'p1_previous-host'
+    const item = Object.freeze({ ...sider, user_label: userLabel, host_label: hostLabel })
+    const data = Object.freeze({ ...inventory, identity_mode: identityMode, items: [item] })
+    const auth = useAuthStore.getState()
+    serve({ inventory: data, summary: { ...summary, identity_mode: identityMode } })
+    mount('/extensions?view=inventory', locale)
+    expect(await screen.findByText(`${userLabel} · Default`)).toBeTruthy()
+    expect(within(table()).getByText(hostLabel)).toBeTruthy()
+    const key = identityMode === 'pseudonymized'
+      ? 'The current privacy setting pseudonymises identities in newly processed events.'
+      : 'The current privacy setting keeps identities as reported in newly processed events.'
+    expect(screen.getByText((_, element) => element?.tagName === 'P' && !!element.textContent?.includes(tr(key))).textContent).toContain(tr('Existing labels may retain their previous form until the next snapshot after a privacy setting change.'))
+    expect(screen.queryByText((_, element) => element?.tagName === 'P' && !!element.textContent?.includes(tr('Identities are pseudonymised.')))).toBeNull()
+    expect(screen.queryByText((_, element) => element?.tagName === 'P' && !!element.textContent?.includes(tr('Identities are shown as reported by the agent.')))).toBeNull()
+    expect(data.items[0]).toEqual({ ...sider, user_label: userLabel, host_label: hostLabel })
+    expect(useAuthStore.getState()).toBe(auth)
+  })
+
+  it('translates source filter options and multi-value selections while preserving API enum values', async () => {
+    const get = serve()
+    mount('/extensions?view=inventory&install_source=store,user,__proto__', locale)
+    await screen.findByText('Sider assistant')
+    const select = screen.getByRole('combobox', { name: tr('Install source') }) as HTMLSelectElement
+    const labels = ['Store', 'User-installed', 'Unpacked', 'External installer', 'Policy', 'Browser component', 'Orphan', 'Unknown source'] as const
+    const values = ['store', 'user', 'unpacked', 'external', 'policy', 'component', 'orphan', 'unknown']
+    values.forEach((value, index) => expect(Array.from(select.options).find(option => option.value === value)?.textContent).toBe(tr(labels[index])))
+    expect(select.value).toBe('store,user')
+    expect(select.selectedOptions[0].textContent).toBe(`${tr('Store')}, ${tr('User-installed')}`)
+    expect(get).toHaveBeenCalledWith('/extensions/inventory?install_source=store%2Cuser&page=1&page_size=25&sort_by=last_seen_at&sort_order=desc', expect.any(Object))
+    fireEvent.change(select, { target: { value: 'unknown' } })
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/extensions/inventory?install_source=unknown&page=1&page_size=25&sort_by=last_seen_at&sort_order=desc', expect.any(Object)))
+    expect(select.selectedOptions[0].textContent).toBe(tr('Unknown source'))
+    expect(location()).toBe('/extensions?view=inventory&install_source=unknown&page=1')
   })
 })

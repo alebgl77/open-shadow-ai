@@ -712,6 +712,104 @@ def prometheus_model():
     return load_models().capture("prometheus")
 
 
+def replace_go_dependency(fixture, path, name, version, *, omit_report=False):
+    package = next(p for p in fixture["sbom"]["packages"] if p["name"] == "golang.org/x/net"
+                   and p["sourceInfo"].endswith(path))
+    package.update({"name": name, "versionInfo": version})
+    next(r for r in package["externalRefs"] if r["referenceType"] == "purl")["referenceLocator"] = \
+        f"pkg:golang/{name}@{version}"
+    result = next(r for r in fixture["trivy"]["Results"] if r["Target"] == path[1:])
+    observed = next(p for p in result["Packages"] if p["Name"] == "golang.org/x/net")
+    if omit_report:
+        result["Packages"].remove(observed)
+    else:
+        observed.update({"Name": name.lower(), "ID": f"{name.lower()}@{version}", "Version": version})
+        observed["Identifier"]["PURL"] = f"pkg:golang/{name.lower()}@{version}"
+    return package
+
+
+@pytest.mark.parametrize("version", ["v0.57.0", "v0.58.0"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("inventory", ["partition", "spdx"])
+def test_original_case_distinct_go_paths_refuse_before_missing_report_can_pass(version, reverse, inventory):
+    fixture = prometheus_model()
+    first = replace_go_dependency(fixture, "/bin/prometheus", "example.com/M", "v0.57.0")
+    second = replace_go_dependency(fixture, "/bin/promtool", "example.com/m", version,
+                                   omit_report=version == "v0.57.0")
+    if reverse:
+        fixture["sbom"]["packages"].reverse()
+    original = copy.deepcopy(fixture)
+    with pytest.raises(ValueError, match="Ambiguous original Go module paths"):
+        if inventory == "partition":
+            partition = plan(fixture)
+            scan.gate(fixture["trivy"], expected=partition["native"], complement=partition)
+        else:
+            scan.spdx_inventory({"packages": [second, first] if reverse else [first, second]}, service=True)
+    assert fixture == original
+
+
+@pytest.mark.parametrize("repeated", [False, True])
+def test_original_azure_spelling_accepts_lowercase_report_and_identical_cross_binary_paths(repeated):
+    fixture = prometheus_model() if repeated else capture("node-exporter", "current-amd64")
+    paths = ["/bin/prometheus", "/bin/promtool"] if repeated else ["/bin/node_exporter"]
+    packages = [replace_go_dependency(fixture, path, "github.com/Azure/azure-sdk-for-go", "v0.57.0")
+                for path in paths]
+    original = copy.deepcopy(fixture)
+    partition = plan(fixture)
+    expected = {("golang", "github.com/azure/azure-sdk-for-go", "v0.57.0")}
+    assert expected <= partition["native"]
+    assert scan.spdx_inventory({"packages": packages}, service=True) == expected
+    assert scan.gate(fixture["trivy"], expected=partition["native"], complement=partition) == []
+    assert fixture == original
+
+
+@pytest.mark.parametrize("inventory", ["partition", "spdx"])
+@pytest.mark.parametrize("mutation", ["case-mismatch", "missing", "empty", "null", "number"])
+def test_original_go_name_is_required_and_must_exactly_match_original_purl(inventory, mutation):
+    fixture = prometheus_model()
+    first = replace_go_dependency(fixture, "/bin/prometheus", "example.com/m", "v0.57.0")
+    second = replace_go_dependency(fixture, "/bin/promtool", "example.com/m", "v0.57.0", omit_report=True)
+    if mutation == "missing":
+        first.pop("name")
+    else:
+        first["name"] = {"case-mismatch": "example.com/M", "empty": "", "null": None, "number": 1}[mutation]
+    original = copy.deepcopy(fixture)
+    with pytest.raises(ValueError, match="Original Go module name differs from its PURL path or is missing"):
+        if inventory == "partition":
+            partition = plan(fixture)
+            scan.gate(fixture["trivy"], expected=partition["native"], complement=partition)
+        else:
+            scan.spdx_inventory({"packages": [first, second]}, service=True)
+    assert fixture == original
+
+
+def test_original_go_main_module_keeps_case_sensitive_name_and_unversioned_purl():
+    fixture = prometheus_model()
+    main = next(p for p in fixture["sbom"]["packages"] if p["name"] == "github.com/prometheus/prometheus")
+    main["name"] = "github.com/Prometheus/prometheus"
+    original = copy.deepcopy(fixture)
+    with pytest.raises(ValueError, match="Original Go module name differs from its PURL path or is missing"):
+        plan(fixture)
+    assert fixture == original
+
+
+@pytest.mark.parametrize("mutation", ["missing", "changed-version"])
+def test_lowercase_go_alias_does_not_excuse_missing_or_changed_package_version(mutation):
+    fixture = prometheus_model()
+    replace_go_dependency(fixture, "/bin/prometheus", "github.com/Azure/azure-sdk-for-go", "v0.57.0",
+                          omit_report=mutation == "missing")
+    replace_go_dependency(fixture, "/bin/promtool", "github.com/Azure/azure-sdk-for-go", "v0.57.0",
+                          omit_report=mutation == "missing")
+    partition = plan(fixture)
+    if mutation == "changed-version":
+        for result in fixture["trivy"]["Results"]:
+            observed = next(p for p in result["Packages"] if p["Name"] == "github.com/azure/azure-sdk-for-go")
+            observed["Version"] = "v0.58.0"
+            observed["Identifier"]["PURL"] = "pkg:golang/github.com/azure/azure-sdk-for-go@v0.58.0"
+    with pytest.raises(ValueError, match="does not cover exact package inventory"):
+        scan.gate(fixture["trivy"], expected=partition["native"], complement=partition)
+
+
 def test_synthetic_prometheus_model_assigns_two_unversioned_binaries_of_one_source_projection(tmp_path):
     fixture = prometheus_model()
     assert fixture["capture"]["service"] == "prometheus" and "synthetic" in fixture["capture"]

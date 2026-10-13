@@ -65,7 +65,7 @@ def test_web_extension_in_a_host_app_is_inventoried(mac):
     assert record["permissions"] == ["activeTab", "<all_urls>"]
     assert record["install_source"] == "store"
     assert record["host_app"] == "Grammarly.app"
-    assert (record["user"], record["profile"], record["enabled"]) == ("alice", "Default", None)
+    assert (record["user"], record["profile"].split(":", 1)[1], record["enabled"]) == ("alice", "Default", None)
 
 
 def test_enabled_state_comes_from_the_users_safari_state(mac):

@@ -66,7 +66,10 @@ LIMITATIONS = [
 
 
 def _aware(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    try:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    except OverflowError:
+        raise HTTPException(status_code=422, detail="Timestamp is outside the UTC range") from None
 
 
 def identity_window(now: datetime) -> IdentityWindow:

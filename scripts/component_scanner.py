@@ -16,6 +16,7 @@ import stat
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import unquote
 from uuid import uuid4
 
 FAILURE_STAGES = frozenset({
@@ -280,10 +281,34 @@ def unique(items, field):
     return result
 
 
+def validate_go_module_paths(sbom):
+    """Require one original case-sensitive Go path per scanner comparison alias."""
+    paths = {}
+    for package in sbom.get("packages", []):
+        references = package.get("externalRefs", [])
+        if not isinstance(references, list):
+            raise ValueError("Software package has no identity")
+        for reference in references:
+            purl = reference.get("referenceLocator")
+            if reference.get("referenceType") != "purl" or not isinstance(purl, str) or \
+                    not purl.startswith("pkg:golang/"):
+                continue
+            identity = purl[len("pkg:golang/"):].split("#", 1)[0].split("?", 1)[0]
+            raw_path = unquote(identity.rpartition("@")[0] if "@" in identity else identity)
+            name = package.get("name")
+            if not isinstance(name, str) or not name or name != raw_path:
+                raise ValueError("Original Go module name differs from its PURL path or is missing")
+            alias = raw_path.lower()
+            if alias in paths and paths[alias] != raw_path:
+                raise ValueError("Ambiguous original Go module paths for scanner comparison")
+            paths[alias] = raw_path
+
+
 def partition(sbom, *, service, package_key):
     """Assign every software package exactly once; retain all original observations."""
     before = digest(sbom)
     packages = unique(sbom.get("packages"), "SPDXID")
+    validate_go_module_paths(sbom)
     files = unique(sbom.get("files"), "SPDXID")
     relationships = sbom.get("relationships")
     if not isinstance(relationships, list) or any(not isinstance(r, dict) for r in relationships) or \

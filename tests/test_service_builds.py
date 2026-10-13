@@ -510,6 +510,8 @@ def test_service_sbom_retains_entire_go_and_os_inventory():
     purls = ["pkg:apk/alpine/libcrypto3@3.5.9-r0", "pkg:golang/stdlib@go1.26.9",
              "pkg:golang/golang.org/x/crypto@v0.55.0"]
     sbom = {"packages": [{"externalRefs": [{"referenceType": "purl", "referenceLocator": p}]} for p in purls]}
+    sbom["packages"][1]["name"] = "stdlib"
+    sbom["packages"][2]["name"] = "golang.org/x/crypto"
     assert SCAN.spdx_inventory(sbom, service=True) == {SCAN.package_key(p) for p in purls}
     sbom["packages"].append({"externalRefs": [{"referenceType": "purl",
                                               "referenceLocator": "pkg:npm/unexpected@1.0.0"}]})

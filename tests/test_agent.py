@@ -2,14 +2,37 @@ import json
 import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from shadai_agent import main as agent
 
 from shadai.api import agent as server
 from shadai.api.agent import ExtensionRecord, TelemetryBatch, extension_record, extension_wire_version
+from shadai.config import get_config
 
 HEADER = {"hostname": "ws-042", "agent_version": "0.1.0", "timestamp": datetime.now(UTC).isoformat()}
+
+
+@pytest.mark.parametrize("timestamp", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_installed_timestamp_utc_overflow_is_validation_rejection_not_500(monkeypatch, timestamp):
+    from shadai.main import app
+
+    with pytest.raises(ValidationError):
+        ExtensionRecord.model_validate({"installed_at": timestamp})
+    with pytest.raises(ValueError, match="Invalid telemetry extension record"):
+        extension_record({"installed_at": timestamp})
+    queue = AsyncMock()
+    monkeypatch.setattr(server, "get_redis", queue)
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post("/api/v1/agent/telemetry", headers={"X-API-Key": get_config().security.agent_api_key},
+                           json={**HEADER, "extensions": [installation(), installation(1, installed_at=timestamp)]})
+    assert response.status_code == 422
+    assert "outside the UTC range" not in response.text and timestamp not in response.text
+    assert "Invalid telemetry extension record" in response.text
+    queue.assert_not_called()
 
 
 def installation(index: int = 0, **state) -> dict:

@@ -44,6 +44,82 @@ KEYS = {name: format(index, "064x") for index, name in enumerate(NAMES)}
 PRIVATE_VALUES = ("WS-ALICE-01", "laptop-b", "alice", "bob", "Profile 1", "Default")
 
 
+@pytest.mark.parametrize("field", ["since", "until"])
+@pytest.mark.parametrize("timestamp", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+async def test_history_utc_overflow_has_sanitized_422(inventory_console, field, timestamp):
+    response = await inventory_console.client.get("/api/v1/extensions/version-changes", params={field: timestamp})
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Timestamp is outside the UTC range"}
+    assert timestamp not in response.text
+
+
+async def test_real_three_channel_wire_ingestion_has_independent_history_and_unknown_export(
+    inventory_console, tmp_path, monkeypatch,
+):
+    from unittest.mock import AsyncMock
+
+    from queue_fakes import admission_fake
+    from shadai_agent import main as agent
+    from shadai_agent.collectors import browser_ext
+    from test_browser_ext import _install, _prefs
+    from test_extension_inventory import Ingest, stored
+
+    from shadai.api import agent as server
+
+    monkeypatch.setattr(browser_ext.platform, "system", lambda: "Linux")
+    home = tmp_path / "alice"
+    roots = [".config/google-chrome", ".config/google-chrome-beta", ".config/google-chrome-unstable"]
+    for root in roots:
+        _install(home, root, "Default", SIDER, "1.0", {"name": "Same", "version": "1.0"})
+        _prefs(home, root, "Default", {SIDER: {"location": 1}})
+    redis = admission_fake(AsyncMock())
+    monkeypatch.setattr(server, "get_redis", AsyncMock(return_value=redis))
+    ingest = Ingest(inventory_console.sessions)
+    original = {}
+    for step in range(2):
+        if step:
+            for index, root in enumerate(roots):
+                _install(home, root, "Default", SIDER, f"{index + 2}.0",
+                         {"name": "Same", "version": f"{index + 2}.0"})
+        batches = agent.split_batches(
+            {"hostname": "host-a", "agent_version": "0.3.0", "timestamp": (NOW + timedelta(seconds=step)).isoformat()},
+            {"extensions": browser_ext.collect_extensions([home])},
+        )
+        assert len(batches) == 1 and len(batches[0]["extensions"]) == 3
+        response = await inventory_console.client.post(
+            "/api/v1/agent/telemetry", headers={"X-API-Key": get_config().security.agent_api_key}, json=batches[0],
+        )
+        assert response.status_code == 200 and response.json()["received"] == 3
+        queued = [CanonicalEvent.model_validate_json(call.args[1]["data"]) for call in redis.xadd.call_args_list]
+        assert len(queued) == 3 and all(event.extension_enabled is None for event in queued)
+        await ingest.deliver(*queued)
+        redis.xadd.reset_mock()
+        rows, changes, _ = await stored(inventory_console.sessions)
+        assert len(rows) == 3 and len({row.inventory_key for row in rows}) == 3
+        if not step:
+            original = {row.profile: row.inventory_key for row in rows}
+            assert changes == []
+        else:
+            assert {row.profile: row.inventory_key for row in rows} == original
+            assert len(changes) == 3 and {change.to_version for change in changes} == {"2.0", "3.0", "4.0"}
+            for row in rows:
+                history = await inventory_console.client.get(
+                    f"/api/v1/extensions/inventory/{row.inventory_key}/versions")
+                assert history.status_code == 200
+                assert len(history.json()["changes"]) == 1
+                assert history.json()["changes"][0]["to_version"] == row.version
+    response = await inventory_console.client.get("/api/v1/extensions/inventory", params={"enabled": "unknown"})
+    assert response.status_code == 200 and response.json()["total"] == 3
+    assert all(row["enabled"] is None for row in response.json()["items"])
+    for state in ("true", "false"):
+        assert (await inventory_console.client.get("/api/v1/extensions/inventory", params={"enabled": state})).json()[
+            "total"] == 0
+    response = await inventory_console.client.post("/api/v1/exports/extension-inventory", params={"enabled": "unknown"})
+    assert response.status_code == 200
+    exported = list(csv.DictReader(io.StringIO(response.text.removeprefix(ANTI_HR_WARNING))))
+    assert len(exported) == 3 and {row["enabled"] for row in exported} == {"unknown"}
+
+
 def utc(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
 
