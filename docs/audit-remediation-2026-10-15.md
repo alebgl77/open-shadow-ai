@@ -68,6 +68,10 @@ Review complete test outcomes, including skips and environment refusals; do not 
 
 Governance fixtures load only when their tests execute, allowing filtered runtime test collection without the repository-only assets while retaining all governance assertions. Verify both corrections with the relevant native runtime and Windows jobs for the reviewed exact commit.
 
+After a qualification step fails, the workflow's displayed diagnostic step name may provide fixed codes for triage. A state of unavailable means the diagnostic is unknown; it does not identify the failure's cause. Use this metadata without downloading private reports, raw logs or mixed artifacts. These codes confer no approval or qualification authority and do not change the original failure or acceptance requirements.
+
+Fresh qualification loads pair the UTC source-time base with a monotonic cadence anchor sampled immediately afterwards. Preparation still counts toward the original budget, deadline and measured duration. Retained manifests and retry payloads keep identical bytes and event IDs; the configured event rate remains unchanged. The verifier continues to reject negative latency without clamping.
+
 ## 4. Rebuild and redeploy deliberately
 
 Before a maintenance window, back up stores, configuration and matching keys, rehearse restoration, and quiesce collectors/remote producers and application writers. Preserve private volumes and credentials. If upgrading from an older schema, complete the [existing upgrade procedure](deployment.md#updates) first; the commands below are not a substitute for ClickHouse/PostgreSQL/Redis migration ordering.

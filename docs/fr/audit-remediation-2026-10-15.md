@@ -68,6 +68,10 @@ Examinez les résultats complets, y compris tests ignorés et refus de l'environ
 
 Les fixtures de gouvernance ne sont chargées que lors de l'exécution de leurs tests, ce qui permet de collecter une sélection de tests runtime sans les fichiers propres au dépôt tout en conservant toutes les assertions de gouvernance. Vérifiez les deux corrections avec les jobs natifs runtime et Windows concernés pour le commit exact revu.
 
+Après l'échec d'une étape de qualification, le nom affiché de l'étape de diagnostic du workflow peut fournir des codes fixes pour orienter l'analyse. L'état unavailable signifie que le diagnostic est inconnu ; il n'identifie pas la cause de l'échec. Consultez ces métadonnées sans télécharger rapports privés, journaux bruts ni artefacts mixtes. Ces codes ne confèrent aucune autorité d'approbation ou de qualification et ne modifient ni l'échec initial ni les critères d'acceptation.
+
+Pour une nouvelle charge de qualification, la base temporelle UTC des sources est associée à un repère monotone de cadence relevé immédiatement après. La préparation reste comprise dans le budget, l'échéance et la durée mesurée d'origine. Les manifestes conservés et les payloads des nouvelles tentatives gardent les mêmes octets et identifiants d'événements ; le débit configuré reste inchangé. Le vérificateur continue de rejeter toute latence négative sans la ramener à zéro.
+
 ## 4. Reconstruire et redéployer de manière maîtrisée
 
 Avant la fenêtre de maintenance, sauvegardez magasins, configuration et clés correspondantes, répétez la restauration et suspendez collecteurs/producteurs distants et écritures applicatives. Préservez volumes privés et identifiants. Depuis un schéma plus ancien, terminez d'abord la [procédure de mise à niveau existante, en anglais](../deployment.md#updates) ; les commandes suivantes ne remplacent pas l'ordre des migrations ClickHouse/PostgreSQL/Redis.
