@@ -11,7 +11,7 @@ v2 fixes:
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
 
 import structlog
@@ -66,6 +66,10 @@ def _derive_entity_type(source_type: str, category: str) -> str:
     if source_type in ("dns", "proxy", "network"):
         return "api_service" if "api" in category or "platform" in category else "saas_app"
     return "saas_app"
+
+
+def _automatic_status(confidence: float) -> str:
+    return "suspected" if confidence < 0.70 else "probable" if confidence < 0.90 else "high_confidence"
 
 
 class NetworkObservation(BaseModel):
@@ -360,7 +364,7 @@ class Correlator:
         )
         reasoning = generate_reasoning_summary(confidence, conf_factors, risk, risk_factors)
 
-        status = "suspected" if confidence < 0.70 else "probable" if confidence < 0.90 else "high_confidence"
+        status = _automatic_status(confidence)
         # URL paths and user agents are matched at ingestion and never retained.
         value = getattr(event, match_field, "")
         observed = f"{match_field}={value}" if value not in ("", None) else f"{match_field} matched at ingestion"
@@ -535,12 +539,17 @@ class Correlator:
         detection.risk_score = risk
         detection.reasoning_summary = generate_reasoning_summary(confidence, conf_factors, risk, risk_factors)
 
-        # Update status (only upgrade, never downgrade)
-        if confidence >= 0.90 and detection.shadow_ai_status not in ("confirmed", "false_positive"):
+        if detection.shadow_ai_status in ("stale", "archived"):
+            # Purge marks observations strictly older than 30 days stale. Only new,
+            # current evidence can reactivate, using the same one-event rules as creation.
+            # Historical catalog confidence remains useful but does not establish fresh activity.
+            if event_ts >= now - timedelta(days=30):
+                incoming_confidence, _ = compute_confidence(
+                    [Signal(source_type=event.source_type, confidence_base=match_confidence, match_field=match_field)]
+                )
+                detection.shadow_ai_status = _automatic_status(incoming_confidence)
+        # Ordinary active statuses only upgrade, never downgrade.
+        elif confidence >= 0.90 and detection.shadow_ai_status not in ("confirmed", "false_positive"):
             detection.shadow_ai_status = "high_confidence"
         elif confidence >= 0.70 and detection.shadow_ai_status in ("suspected",):
-            detection.shadow_ai_status = "probable"
-
-        # Reactivate if stale
-        if detection.shadow_ai_status in ("stale", "archived"):
             detection.shadow_ai_status = "probable"
