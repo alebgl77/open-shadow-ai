@@ -1,0 +1,51 @@
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [],
+    "checks": [
+      {"context": "compose-integration", "app_id": 15368},
+      {"context": "frontend", "app_id": 15368},
+      {"context": "network-sensor", "app_id": 15368},
+      {"context": "powershell", "app_id": 15368},
+      {"context": "production-qualification", "app_id": 15368},
+      {"context": "python (3.12)", "app_id": 15368},
+      {"context": "python (3.13)", "app_id": 15368},
+      {"context": "dependency-security (ubuntu-latest)", "app_id": 15368},
+      {"context": "dependency-security (windows-latest)", "app_id": 15368},
+      {"context": "agent-offline (ubuntu-latest)", "app_id": 15368},
+      {"context": "agent-offline (ubuntu-24.04-arm)", "app_id": 15368},
+      {"context": "agent-offline (windows-latest)", "app_id": 15368},
+      {"context": "image-security (ubuntu-latest, api)", "app_id": 15368},
+      {"context": "image-security (ubuntu-latest, worker)", "app_id": 15368},
+      {"context": "image-security (ubuntu-latest, collector)", "app_id": 15368},
+      {"context": "image-security (ubuntu-latest, test)", "app_id": 15368},
+      {"context": "image-security (ubuntu-latest, frontend)", "app_id": 15368},
+      {"context": "image-security (ubuntu-24.04-arm, api)", "app_id": 15368},
+      {"context": "image-security (ubuntu-24.04-arm, worker)", "app_id": 15368},
+      {"context": "image-security (ubuntu-24.04-arm, collector)", "app_id": 15368},
+      {"context": "image-security (ubuntu-24.04-arm, test)", "app_id": 15368},
+      {"context": "image-security (ubuntu-24.04-arm, frontend)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-latest, postgres)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-latest, clickhouse)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-latest, redis)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-latest, node-exporter)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-latest, prometheus)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-24.04-arm, postgres)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-24.04-arm, clickhouse)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-24.04-arm, redis)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-24.04-arm, node-exporter)", "app_id": 15368},
+      {"context": "derived-service-builds (ubuntu-24.04-arm, prometheus)", "app_id": 15368}
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": true,
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 0,
+    "require_last_push_approval": false
+  },
+  "restrictions": null,
+  "required_conversation_resolution": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
