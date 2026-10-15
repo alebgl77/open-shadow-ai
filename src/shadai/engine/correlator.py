@@ -142,10 +142,16 @@ async def _inventory_context(session, catalog_item_id: str, *, now: datetime) ->
     }
 
 
+def _network_observation_candidates(bundle) -> list:
+    section = bundle.get("network") if isinstance(bundle, dict) else None
+    values = section.get("network_observations") if isinstance(section, dict) else None
+    return values if isinstance(values, list) else []
+
+
 def _network_context(event: CanonicalEvent, previous: dict | None = None, *, now: datetime | None = None) -> dict:
     """Bounded metadata from validated canonical fields; never retain packet content."""
     now = now or datetime.now(UTC)
-    previous = sanitize_evidence({"network": previous or {}}, now=now)["network"]
+    previous = previous or {}
     counts = {
         protocol: max(0, int(previous.get("protocol_counts", {}).get(protocol, 0))) for protocol in NETWORK_PROTOCOLS
     }
@@ -154,12 +160,14 @@ def _network_context(event: CanonicalEvent, previous: dict | None = None, *, now
         mode="json"
     )
     observations = []
-    for value in previous.get("network_observations", [])[-9:]:
+    values = previous.get("network_observations", [])
+    for value in values if isinstance(values, list) else []:
         try:
             observations.append(NetworkObservation.model_validate(value).model_dump(mode="json"))
         except ValidationError:
             # Do not propagate unknown legacy keys or malformed evidence into the allowlist.
             continue
+    # Merge before retention selects the newest unique observations by actual observation time.
     section = {"protocol_counts": counts, "network_observations": observations + [observation]}
     retained = sanitize_evidence({"network": section}, now=now)["network"]
     return {"protocol_counts": retained["protocol_counts"], "network_observations": retained["network_observations"]}
@@ -308,6 +316,13 @@ class Correlator:
                     risk=detection.risk_score,
                 )
             else:
+                # Identity synchronization also sanitizes/caps the bundle. Preserve only
+                # network candidates locally until they can be merged with this event.
+                network_candidates = (
+                    _network_observation_candidates(detection.evidence_bundle)
+                    if event.source_type == "network"
+                    else None
+                )
                 await sync_identity_members(session, detection, event, now)
                 if governance:
                     detection.governance_id = governance.governance_id
@@ -321,6 +336,7 @@ class Correlator:
                     now,
                     gov_classification,
                     inventory=inventory,
+                    network_candidates=network_candidates,
                 )
                 if governance:
                     apply_policy(detection, governance)
@@ -427,6 +443,7 @@ class Correlator:
         gov_classification: str | None,
         *,
         inventory: dict | None = None,
+        network_candidates: list | None = None,
     ) -> None:
         if detection.first_seen_at.tzinfo is None:
             detection.first_seen_at = detection.first_seen_at.replace(tzinfo=UTC)
@@ -446,6 +463,8 @@ class Correlator:
             detection.entity_type = derived_type
 
         # Update evidence bundle
+        if event.source_type == "network" and network_candidates is None:
+            network_candidates = _network_observation_candidates(detection.evidence_bundle)
         bundle = sanitize_evidence(detection.evidence_bundle, now=now)
         window = bundle.get("_identity_window")
         window = dict(window) if isinstance(window, dict) else {}
@@ -494,7 +513,8 @@ class Correlator:
             ]
             src_ev["sample_observations"] = samples + [sample]
         if event.source_type == "network":
-            src_ev.update(_network_context(event, src_ev, now=now))
+            previous = {**src_ev, "network_observations": network_candidates}
+            src_ev.update(_network_context(event, previous, now=now))
         if event.source_type == "browser" and inventory is not None:
             # Replaced, not merged: the inventory is the current state; the sanitizer ages and bounds it.
             src_ev.update(inventory)

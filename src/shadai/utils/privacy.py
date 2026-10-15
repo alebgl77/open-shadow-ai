@@ -192,6 +192,32 @@ def retain_version_changes(values, *, now: datetime, cutoff: datetime) -> list[d
     return [change.model_dump(mode="json") for change in retained[-VERSION_EVIDENCE_LIMIT:]]
 
 
+def retain_network_observations(values, *, now: datetime, cutoff: datetime) -> list[dict]:
+    """Latest unique in-window observations; duplicate UUIDs never renew retained activity."""
+    from shadai.engine.correlator import NetworkObservation
+
+    observations = {}
+    for value in values if isinstance(values, list) else []:
+        try:
+            observation = NetworkObservation.model_validate(value)
+        except (ValueError, TypeError):
+            continue
+        if not cutoff <= observation.timestamp <= now + timedelta(minutes=5):
+            continue
+        # Choose the earliest valid retained claim for a UUID. Conflicting claims at
+        # that instant resolve by their canonical fields, independently of arrival order.
+        key = (
+            observation.timestamp, observation.protocol, observation.domain,
+            observation.src_ip, observation.dst_ip, observation.dst_port,
+            observation.collector_id, observation.event_id.int,
+        )
+        previous = observations.get(observation.event_id)
+        if previous is None or key < previous[0]:
+            observations[observation.event_id] = (key, observation)
+    retained = sorted(observations.values(), key=lambda value: (value[1].timestamp, value[1].event_id.int))[-10:]
+    return [observation.model_dump(mode="json") for _, observation in retained]
+
+
 def sanitize_evidence(bundle, *, now: datetime | None = None, config=None) -> dict:
     """Read and maintenance boundary: unknown-age shapes fail closed."""
     now = now or datetime.now(UTC)
@@ -229,20 +255,9 @@ def sanitize_evidence(bundle, *, now: datetime | None = None, config=None) -> di
         section["sample_observations"] = samples
         section["sample_values"] = list(dict.fromkeys(sample["value"] for sample in samples))
         if "network_observations" in section:
-            from shadai.engine.correlator import NetworkObservation
-
-            observations = []
-            values = section["network_observations"]
-            for value in values if isinstance(values, list) else []:
-                try:
-                    observation = NetworkObservation.model_validate(value)
-                except (ValueError, TypeError):
-                    continue
-                if cutoff <= observation.timestamp <= now + timedelta(minutes=5):
-                    observations.append(observation.model_dump(mode="json"))
-            section["network_observations"] = sorted(observations, key=lambda observation: observation["timestamp"])[
-                -10:
-            ]
+            section["network_observations"] = retain_network_observations(
+                section["network_observations"], now=now, cutoff=cutoff
+            )
         if "version_changes" in section:
             section["version_changes"] = retain_version_changes(section["version_changes"], now=now, cutoff=cutoff)
         if "versions" in section:
