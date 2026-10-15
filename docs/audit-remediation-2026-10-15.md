@@ -29,6 +29,8 @@ F08 intentionally rejects timestamp-free records. Configure the exporter to repo
 
 F02 presents known busy/unavailable responses in English, French and Simplified Chinese without exposing raw server errors. Four slots are per API process, not a cluster-wide password quota. Correct capacity sizing still requires measurements; adding API processes changes total admitted native work. Keep existing peer limits and trusted-proxy settings.
 
+The bootstrap correction writes LF line endings only in newly created secret files; Windows CRLF output can introduce a carriage return that ClickHouse rejects. Existing files remain byte-for-byte unchanged, so this does not repair previously generated CRLF secrets. Do not trim or replace live password files in place: affected existing installations need coordinated credential rotation consistent with store credentials and backups. Existing privacy and security checks remain in force.
+
 ## 3. Prepare and validate the source
 
 Use a trusted checkout of the reviewed revision and a disposable development environment. The following Bash example installs the committed hash-checked dependency closure and local projects; on Windows replace the activation command with `./tmp/audit-remediation-env/Scripts/Activate.ps1` in PowerShell. Do not reuse this environment as the production runtime.
@@ -63,6 +65,8 @@ cd ..
 ```
 
 Review complete test outcomes, including skips and environment refusals; do not sum overlapping suite counts. A local source test or cross-built binary does not replace native OCI builds, scanner evidence, real store qualification or Windows ACL checks.
+
+Governance fixtures load only when their tests execute, allowing filtered runtime test collection without the repository-only assets while retaining all governance assertions. Verify both corrections with the relevant native runtime and Windows jobs for the reviewed exact commit.
 
 ## 4. Rebuild and redeploy deliberately
 

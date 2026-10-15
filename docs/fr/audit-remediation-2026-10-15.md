@@ -29,6 +29,8 @@ F08 rejette volontairement les enregistrements sans date. Configurez l'exporteur
 
 F02 présente les réponses connues de saturation/indisponibilité en anglais, français et chinois simplifié sans exposer les erreurs brutes du serveur. Les quatre places sont par processus API, sans quota de mots de passe global au cluster. Le dimensionnement exige toujours des mesures ; ajouter des processus API modifie le travail natif total admis. Conservez limites par pair et réglages des proxys de confiance.
 
+La correction du bootstrap écrit des fins de ligne LF uniquement dans les fichiers secrets nouvellement créés ; la sortie CRLF sous Windows peut introduire un retour chariot rejeté par ClickHouse. Les fichiers existants restent inchangés octet pour octet : les secrets CRLF déjà générés ne sont donc pas réparés. Ne modifiez ni ne remplacez sur place les fichiers de mots de passe en service : les installations existantes concernées nécessitent une rotation coordonnée des identifiants, cohérente avec ceux des magasins et les sauvegardes. Les contrôles de confidentialité et de sécurité existants restent en vigueur.
+
 ## 3. Préparer et vérifier le code
 
 Utilisez un checkout de confiance de la révision revue et un environnement de développement jetable. Cet exemple Bash installe les dépendances commitées vérifiées par hash et les projets locaux ; sous Windows, remplacez l'activation par `./tmp/audit-remediation-env/Scripts/Activate.ps1` dans PowerShell. Ne réutilisez pas cet environnement comme runtime de production.
@@ -63,6 +65,8 @@ cd ..
 ```
 
 Examinez les résultats complets, y compris tests ignorés et refus de l'environnement ; n'additionnez pas les comptes de suites qui se recouvrent. Un test source local ou un binaire compilé pour une autre cible ne remplace pas les constructions OCI natives, preuves d'analyse, qualification des vrais magasins ou contrôles ACL Windows.
+
+Les fixtures de gouvernance ne sont chargées que lors de l'exécution de leurs tests, ce qui permet de collecter une sélection de tests runtime sans les fichiers propres au dépôt tout en conservant toutes les assertions de gouvernance. Vérifiez les deux corrections avec les jobs natifs runtime et Windows concernés pour le commit exact revu.
 
 ## 4. Reconstruire et redéployer de manière maîtrisée
 
