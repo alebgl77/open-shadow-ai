@@ -12,17 +12,17 @@
 
 了解环境中出现了哪些 AI 服务与工具、每条信号来自何处，以及它实际能够证明什么。在面向调查的界面中，汇集网络元数据、终端清单和 Microsoft 目录信号。
 
-[专家实施与运维手册](docs/zh-CN/README.md) · [快速开始](#快速开始) · [文档与语言覆盖范围](docs/README.md) · [部署（英文参考）](docs/deployment.md) · [生产环境验收验证（英文参考）](docs/production-qualification.md) · [采集器运维（英文参考）](docs/collector-operations.md) · [Microsoft 与 Active Directory（英文参考）](docs/microsoft.md) · [SSO 与 SCIM（英文参考）](docs/sso-scim.md) · [架构（英文参考）](docs/architecture.md) · [路线图](docs/zh-CN/roadmap.md)
+[专家实施与运维手册](docs/zh-CN/README.md) · [快速开始](#快速开始) · [专业文档入口](docs/README.md) · [路线图](docs/zh-CN/roadmap.md)
 
-[10 月 15 日审计修复与运维检查](docs/zh-CN/audit-remediation-2026-10-15.md)
+[10 月 15 日审计修复与运维检查](docs/zh-CN/audit-remediation-2026-10-15.md) · [仓库治理](docs/zh-CN/repository-governance.md)
 
 > 本项目处于早期阶段，适用于评估和受控试点。每个部署仅服务一个组织。Docker、Kubernetes 和实际 Microsoft 环境需要在自身环境中完成运维验证；不声称获得认证或提供生产 SLA。
 
-后端为开发预览版 **0.3.0**；独立终端代理为 **0.3.0**（已发布的 `v0.3.0` 预发行版附带代理 0.1.0）。英语、法语和简体中文手册提供等效的实施流程。详细参考资料和历史验证记录保留其声明的语言与各自来源的范围。
+本 README 描述于 **2026 年 10 月 15 日** 对齐的维护中源代码，提交为 `d159ed68012281a2c9e887e1281d44f0fb75112c`（[PR #17](https://github.com/alebgl77/open-shadow-ai/pull/17) 的合并提交），后端预览版和独立终端代理均为 **0.3.0**。最新发布的预发行版仍为 `v0.3.0`（**2026 年 10 月 7 日**，`49a58d7`，代理 `0.1.0`），早于扩展清单、本地化、关系图及 10 月 15 日修复。
 
 控制台在登录前后均提供英语、法语和简体中文。经过校验的浏览器本地语言偏好独立于身份验证；没有可用偏好或存储被阻止时，默认使用英语。原始来源数据与机器/API 标识保留原值。参见[语言覆盖范围](docs/README.md)。
 
-这些语言选项由[提交 `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669)引入 `main`。已发布的 `v0.3.0` 预发行版位于提交 `49a58d7`，早于本地化功能及 [PR #15](https://github.com/alebgl77/open-shadow-ai/pull/15) 引入的扩展清单。两个源代码修订均声明版本 `0.3.0`；核对功能可用性与 CI 证据时，应记录实际部署的准确提交。
+通过[专业文档入口](docs/README.md)了解实施阅读顺序和源代码/预发行版可用性，再按[专家手册](docs/zh-CN/README.md)操作。仅凭版本号 `0.3.0` 无法确定交付的代码：应记录实际部署的准确提交、配置、镜像摘要以及 CI/构建证据。后续变更需要各自的验收验证；CI 成功不会发布镜像，也不能认证目标环境。
 
 ![使用合成演示数据的 Open Shadow AI 调查仪表板](docs/assets/dashboard-desktop.webp)
 
@@ -63,17 +63,22 @@ npm run demo
 前提条件：Git、Python 3.12+，以及可正常使用的 Docker Engine 和 Compose v2。项目不附带 Docker 运行时。初始界面通过 HTTP 绑定本地主机；远程终端代理需要 HTTPS 反向代理。
 
 ```bash
+set -e
 git clone https://github.com/alebgl77/open-shadow-ai.git
 cd open-shadow-ai
 bash scripts/bootstrap.sh
 docker compose config --quiet
-docker compose up -d --build
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --build api ingest-worker correlation-worker purge-worker frontend
+for attempt in $(seq 1 30); do
+  if MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 2
+done
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
-在 Windows 上，用 `./scripts/bootstrap.ps1` 替代 Bash 引导脚本。两者都保留现有机密值与配置。使用 `-DryRun` 或 `--dry-run` 预览。
+Windows 上，先准备可信的检出目录，并在 PowerShell 中运行 `./scripts/bootstrap.ps1`。然后在 Git Bash 中使用同一检出目录和 Docker 上下文：先运行 `set -e`，再运行上方代码块中的 Compose 命令，跳过 `bash scripts/bootstrap.sh`。重试循环需要 Bash，不能直接在 PowerShell 中运行。逐次调用的前缀 `MSYS2_ARG_CONV_EXCL='*'` 可防止 [Git Bash 路径转换](https://www.msys2.org/docs/filesystem-paths/)改写容器路径，不会修改全局环境设置。两个引导程序均保留已有机密值与配置；使用 `-DryRun` 或 `--dry-run` 预览。
 
 核对与重建之前，等待新工作进程初始化实际 Redis 组；如仍在初始化，则重试。升级时，在启动带索引的新版本之前，停止所有旧版写入程序/工作进程/重放客户端。就绪检查要求保留结构已完成核对与重建。有关故障行为及隔离演练，参见[队列保留（英文参考）](docs/queue-retention.md)与[验收验证（英文参考）](docs/production-qualification.md)。
 
@@ -95,12 +100,14 @@ AD 导出与终端安装由运维人员执行，流程见 [Microsoft 指南（�
 
 ## 当前交付内容
 
+下列能力描述上述维护中源代码。请单独核对其在已发布预发行版中的可用性。
+
 | 能力 | 状态与实际边界 |
 |---|---|
 | React 调查界面、目录和治理流程 | 已实现；需使用自身数据评估 |
 | DNS/代理解析器与 syslog 采集器 | 已实现；解析器和监听器必须与来源匹配 |
 | [被动网络分析（英文参考）](docs/network-analysis.md) | Zeek/Suricata/TShark 元数据导入、可选离线 PCAP 或明确启用的实时传感器，以及 `/network` 证据视图；观测到名称不能证明 AI 请求 |
-| [AI 关系图](docs/zh-CN/cartography.md) | `/cartography` 将网络观测和主机报告的安装清单与目录服务相连，提供 3D 操作和可访问的证据；覆盖范围设有上限，存在与观测不能证明使用 |
+| [AI 关系图](docs/zh-CN/cartography.md) | `/cartography` 将网络观测与主机报告的安装记录关联至目录服务，提供 3D/列表导航、已保留事件的证据，以及基于已加载观测的协议/目录类别雷达图；覆盖范围有限，存在与观测不能证明使用 |
 | 终端代理 | 已实现进程/容器/运行时/扩展清单；操作系统和设备群部署验证待完成 |
 | 浏览器扩展清单 | 已实现：在运行代理 0.3.0 的主机上记录可访问本地用户/配置文件的逐安装状态（版本、启用状态、安装来源、用户、配置文件），并在**扩展**页面提供版本变更历史与经审计的导出；属于存在证据，按身份保留窗口保存，不表示使用 |
 | Microsoft Entra 采集器 | 已实现服务主体清单与可选权限授予采集；AI 匹配需要审核后的应用 ID 映射；实际租户验证待完成 |

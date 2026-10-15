@@ -117,12 +117,19 @@ python scripts/test-network-key-acl.py
 python scripts/test-delivery-spool-acl.py --temporary-parent "$env:USERPROFILE"
 ```
 
-The following service checks require a disposable Compose project after bootstrap. Never run them against production:
+The following service checks require a disposable Compose project after bootstrap. Never run them against production. Run this block in Bash (Linux, WSL or Git Bash); its retry loop is not PowerShell syntax. The inline `MSYS2_ARG_CONV_EXCL='*'` preserves the container path when Git Bash invokes native Windows Docker; see [MSYS2 argument conversion](https://www.msys2.org/docs/filesystem-paths/). It applies only to that command:
 
 ```bash
+set -e
 docker compose --profile test run --build --rm integration-test
 docker compose down --volumes
-docker compose up -d --build --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
+docker compose up -d --build api ingest-worker correlation-worker purge-worker frontend
+for attempt in $(seq 1 30); do
+  if MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 2
+done
+docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 python scripts/integration-smoke.py
 ```
 

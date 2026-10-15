@@ -1,5 +1,7 @@
 # Repository governance
 
+[English](repository-governance.md) | [Français](fr/repository-governance.md) | [简体中文](zh-CN/repository-governance.md)
+
 The reviewed desired policy for `alebgl77/open-shadow-ai` is [`.github/main-protection.json`](../.github/main-protection.json). Committing this file does not enable GitHub branch protection. Enforcement must be applied separately by an authorized repository administrator and verified through a fresh API readback. The file is a complete update request for the `main` branch, not a record of its live settings.
 
 ## Single-maintainer policy

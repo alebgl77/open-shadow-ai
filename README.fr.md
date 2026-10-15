@@ -11,17 +11,17 @@
 
 Comprenez quels services et outils d'IA apparaissent dans votre environnement, d'où vient chaque signal et ce qu'il permet réellement d'établir. Rassemblez métadonnées réseau, inventaires des postes et signaux des annuaires Microsoft dans une interface d'investigation.
 
-[Guide de mise en œuvre pour experts](docs/fr/README.md) · [Démarrage](#démarrage) · [Documentation et couverture linguistique](docs/README.md) · [Déploiement (référence en anglais)](docs/deployment.md) · [Qualification de production (référence en anglais)](docs/production-qualification.md) · [Exploitation des collecteurs (référence en anglais)](docs/collector-operations.md) · [Microsoft et Active Directory (référence en anglais)](docs/microsoft.md) · [SSO et SCIM (référence en anglais)](docs/sso-scim.md) · [Architecture (référence en anglais)](docs/architecture.md) · [Roadmap](docs/fr/roadmap.md)
+[Guide de mise en œuvre pour experts](docs/fr/README.md) · [Démarrage](#démarrage) · [Portail documentaire professionnel](docs/README.md) · [Roadmap](docs/fr/roadmap.md)
 
-[Corrections de l'audit du 15 octobre et vérifications d'exploitation](docs/fr/audit-remediation-2026-10-15.md)
+[Corrections de l'audit du 15 octobre et vérifications d'exploitation](docs/fr/audit-remediation-2026-10-15.md) · [Gouvernance du dépôt](docs/fr/repository-governance.md)
 
 > Logiciel en phase initiale, destiné à l'évaluation et aux pilotes maîtrisés. Une organisation par installation. Docker, Kubernetes et les environnements Microsoft réels exigent une validation opérationnelle sur votre infrastructure ; aucune certification ni aucun SLA de production ne sont revendiqués.
 
-Le backend est en préversion **0.3.0** ; l'agent autonome pour les postes est en version **0.3.0** (la préversion publiée `v0.3.0` livre l'agent 0.1.0). Les guides anglais, français et chinois simplifié proposent les mêmes procédures de mise en œuvre. Les références détaillées et comptes rendus historiques conservent leur langue indiquée et la portée propre à leurs sources.
+Ce README décrit le code maintenu aligné au **15 octobre 2026**, commit `d159ed68012281a2c9e887e1281d44f0fb75112c` (fusion de la [PR nº 17](https://github.com/alebgl77/open-shadow-ai/pull/17)), avec le backend en préversion **0.3.0** et l'agent autonome **0.3.0**. La dernière préversion publiée reste `v0.3.0` (**7 octobre 2026**, `49a58d7`, agent `0.1.0`) ; elle précède l'inventaire des extensions, la localisation, la cartographie et les corrections du 15 octobre.
 
 La console propose l'anglais, le français et le chinois simplifié avant et après connexion. La préférence de langue validée, locale au navigateur, est séparée de l'authentification ; l'anglais est utilisé sans préférence disponible ou si le stockage est bloqué. Les données brutes des sources et identifiants techniques/API conservent leurs valeurs originales. Voir la [couverture linguistique](docs/README.md).
 
-Ces langues ont été introduites sur `main` par le [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). La préversion publiée `v0.3.0`, au commit `49a58d7`, précède la localisation et l’inventaire des extensions introduit par la [PR nº 15](https://github.com/alebgl77/open-shadow-ai/pull/15). Les deux révisions sources déclarent `0.3.0` ; consignez le commit exact déployé pour vérifier les fonctionnalités disponibles et leurs preuves CI.
+Utilisez le [portail documentaire professionnel](docs/README.md) pour le parcours de mise en œuvre et la disponibilité selon le code ou la préversion, puis suivez le [guide pour experts](docs/fr/README.md). Le seul numéro `0.3.0` n'identifie pas le code livré : consignez le commit exact déployé, la configuration, les digests d'images et les preuves CI/de construction. Les évolutions ultérieures exigent leur propre qualification ; une CI réussie ne publie pas les images et ne certifie pas votre environnement cible.
 
 ![Interface d'investigation Open Shadow AI avec des données de démonstration synthétiques](docs/assets/dashboard-desktop.webp)
 
@@ -62,17 +62,22 @@ Ouvrez la route `/demo` à l'adresse locale affichée par le serveur de dévelop
 Prérequis : Git, Python 3.12+ et un Docker Engine fonctionnel avec Compose v2. Aucun runtime Docker n'est fourni. L'interface initiale écoute en HTTP sur localhost ; les agents distants nécessitent un reverse proxy HTTPS.
 
 ```bash
+set -e
 git clone https://github.com/alebgl77/open-shadow-ai.git
 cd open-shadow-ai
 bash scripts/bootstrap.sh
 docker compose config --quiet
-docker compose up -d --build
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --build api ingest-worker correlation-worker purge-worker frontend
+for attempt in $(seq 1 30); do
+  if MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 2
+done
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
-Sous Windows, remplacez le bootstrap Bash par `./scripts/bootstrap.ps1`. Les deux préservent les secrets et la configuration existants. Utilisez `-DryRun` ou `--dry-run` pour prévisualiser.
+Sous Windows, préparez un checkout de confiance et exécutez d’abord `./scripts/bootstrap.ps1` dans PowerShell. Dans Git Bash, utilisez ce même checkout et contexte Docker : exécutez `set -e`, puis les commandes Compose du bloc ci-dessus ; ignorez `bash scripts/bootstrap.sh`. La boucle nécessite Bash et ne s’exécute pas directement dans PowerShell. Le préfixe par appel `MSYS2_ARG_CONV_EXCL='*'` empêche la [conversion de chemins de Git Bash](https://www.msys2.org/docs/filesystem-paths/) de modifier les chemins des conteneurs ; il ne modifie aucun réglage global d’environnement. Les deux bootstraps préservent les secrets et la configuration existants ; prévisualisez avec `-DryRun` ou `--dry-run`.
 
 Attendez que les nouveaux workers initialisent leurs groupes Redis réels avant la réconciliation ; réessayez si cette initialisation est encore en cours. Lors d'une mise à niveau, arrêtez tous les anciens producteurs, workers et clients de rejeu avant de lancer la version indexée. La readiness exige le schéma de rétention réconcilié. Consultez la [rétention des files (référence en anglais)](docs/queue-retention.md) et la [qualification (référence en anglais)](docs/production-qualification.md) pour les comportements de panne et la répétition isolée.
 
@@ -94,12 +99,14 @@ La [connexion OIDC et le provisionnement SCIM facultatifs (référence en anglai
 
 ## Ce qui est livré
 
+Les capacités ci-dessous décrivent le code maintenu indiqué plus haut. Vérifiez séparément leur disponibilité dans la préversion publiée.
+
 | Fonctionnalité | État et limite pratique |
 |---|---|
 | Interface React d'investigation, catalogue et processus de gouvernance | Implémentés ; à évaluer avec vos données |
 | Parseurs DNS/proxy et collecteur syslog | Implémentés ; le parseur et le listener doivent correspondre à la source |
 | [Analyse réseau passive (référence en anglais)](docs/network-analysis.md) | Imports de métadonnées Zeek/Suricata/TShark, PCAP hors ligne facultatif ou capteur live explicitement choisi, vue des preuves `/network` ; les noms observés ne prouvent pas des requêtes IA |
-| [Cartographie IA](docs/fr/cartography.md) | `/cartography` relie observations réseau et installations déclarées aux services du catalogue, avec navigation 3D et preuves accessibles ; couverture bornée, présence et observations ne prouvent pas l'usage |
+| [Cartographie IA](docs/fr/cartography.md) | `/cartography` relie observations réseau et installations déclarées par les postes aux services du catalogue, avec navigation 3D/liste, preuves des événements conservés et radars protocole/famille du catalogue sur les observations chargées ; couverture bornée, présence et observations ne prouvent pas un usage |
 | Agent pour les postes | Inventaire des processus, conteneurs, runtimes et extensions implémenté ; vérification par OS et déploiement de parc à réaliser |
 | Inventaire des extensions de navigateur | État par installation (version, activation, source d'installation, utilisateur, profil) pour les utilisateurs/profils locaux accessibles des postes équipés de l’agent 0.3.0, historique des changements de version et export audité dans **Extensions** implémentés ; preuve de présence conservée pendant la fenêtre d'identité, pas d'usage |
 | Collecteur Microsoft Entra | Inventaire des service principals et grants facultatifs implémenté ; classification IA fondée sur des mappings d'application-ID revus ; validation sur tenant réel à réaliser |

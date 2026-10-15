@@ -2,11 +2,31 @@
 
 [English](README.md) | [Français](../fr/README.md) | [简体中文](../zh-CN/README.md)
 
-This handbook takes an infrastructure or identity specialist from a bounded evaluation to an operationally reviewed pilot. It covers backend development preview **0.3.0** and standalone agent **0.3.0**. Its operational procedures were aligned on **2026-10-08** using source commit `49a58d778d3014879e30a3ac5334df45cd426dbf` as their baseline; the browser extension inventory procedures (agent 0.3.0, ClickHouse migration `003`, PostgreSQL migration `006`) were introduced by [PR #15](https://github.com/alebgl77/open-shadow-ai/pull/15) on **2026-10-13** beyond that core operational baseline. The three-language console and handbooks were merged into `main` in [commit `7a12513eb1e1e3a800ba8d71f4726a3b5045b669`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). The published `v0.3.0` prerelease at `49a58d7` predates localization and the extension inventory, and ships agent 0.1.0; both source revisions declare backend `0.3.0`. Record the exact deployed commit when checking availability and CI evidence. Later source changes require their own operational and CI evidence. Work from the repository root for every command unless a procedure says otherwise. Command examples preserve the detailed procedures' syntax; documentation-only hosts, IDs, paths and interfaces must be replaced with reviewed values before execution.
+This handbook takes an infrastructure or identity specialist from a bounded evaluation to an operationally reviewed pilot. Its procedures are aligned on **2026-10-15** with maintained source commit `d159ed68012281a2c9e887e1281d44f0fb75112c`, the merge of [PR #17](https://github.com/alebgl77/open-shadow-ai/pull/17), covering backend development preview **0.3.0** and standalone agent **0.3.0**.
+
+| Source | Available baseline |
+|---|---|
+| Maintained source above | Browser extension inventory, three-language console and handbooks, cartography and 15 October corrections |
+| Published prerelease `v0.3.0`, **2026-10-07**, `49a58d778d3014879e30a3ac5334df45cd426dbf` | Earlier backend `0.3.0` and agent `0.1.0`; does not contain the additions above |
+
+Version `0.3.0` alone cannot identify features or security corrections. Use the maintained checkout for these procedures and record the exact deployed commit, configuration revision, image digests and CI/build evidence. Later revisions require their own qualification. Source changes and successful CI do not publish or deploy images or certify your environment. Work from the repository root for every command unless a procedure says otherwise. Bash blocks require Bash; section 2 explains the separate Windows bootstrap and shell sequence. Replace documentation-only hosts, IDs, paths and interfaces with reviewed values before execution.
 
 One installation serves **one organization**. A `tenant_id` is a scope guard, not an isolation boundary. No production certification, SLA, measured enterprise throughput, automatic fleet deployment or universal AI detection is claimed. The complete English, French and Simplified Chinese handbooks cover equivalent procedures; detailed linked documents are explicitly labeled English references. Historical audits and changelogs retain their own language and validation scope. Existing motion diagrams use French labels and synthetic data. The [English roadmap (English reference)](../roadmap.md) describes future stages and their delivery gates.
 
 The console language selector works before and after sign-in for English, French and Simplified Chinese. Its validated browser-local preference is separate from authentication; absent or blocked storage defaults to English. Raw source values and machine/API identifiers stay literal. See [Documentation and language coverage](../README.md).
+
+Read sections 1–4 for scope and installation, 5–6 for identity, 7 for collection, 8–10 for operation and recovery, and 11–13 for security, qualification and maintenance. Use these detailed references alongside the handbook:
+
+| Need | Reference |
+|---|---|
+| Installation and topology | [Deployment (English reference)](../deployment.md) · [Architecture (English reference)](../architecture.md) |
+| AD inventory, SSO and SCIM | [Microsoft (English reference)](../microsoft.md) · [OIDC/SCIM (English reference)](../sso-scim.md) |
+| Collection and network limits | [Source coverage (English reference)](../collectors.md) · [Network analysis (English reference)](../network-analysis.md) · [Cartography and radars](../cartography.md) |
+| Operations, retention and recovery | [Collector operations (English reference)](../collector-operations.md) · [Queue retention (English reference)](../queue-retention.md) · [Backup and restore (English reference)](../deployment.md#backup-and-restore) |
+| Qualification and evidence | [Qualification (English reference)](../production-qualification.md) · [Validation record (English reference)](../validation.md) |
+| 15 October corrections and repository controls | [Remediation and operator checks](../audit-remediation-2026-10-15.md) · [Repository governance](../repository-governance.md) |
+
+The remediation guide covers F01–F10, new-secret compatibility, rebuilding and target checks. Follow the governance guide for the reviewed 32-check, administrator-enforced PR profile and its deliberate zero-approval single-maintainer setting; verify current enforcement through its readback procedure.
 
 ## 1. Define scope and evidence
 
@@ -30,21 +50,28 @@ Require Git, Python 3.12+ and a working Docker Engine with Compose v2; Docker is
 On Linux/macOS, bootstrap from a trusted checkout:
 
 ```bash
+set -e
 git clone https://github.com/alebgl77/open-shadow-ai.git
 cd open-shadow-ai
 bash scripts/bootstrap.sh
 docker compose config --quiet
-docker compose up -d --build
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --build api ingest-worker correlation-worker purge-worker frontend
+for attempt in $(seq 1 30); do
+  if MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 2
+done
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
-On Windows, replace only the bootstrap command with:
+On Windows, prepare a trusted checkout and run the bootstrap in PowerShell:
 
 ```powershell
 ./scripts/bootstrap.ps1
 ```
+
+In Git Bash, use that same checkout and Docker context: run `set -e`, then the Compose commands in the block above; skip `bash scripts/bootstrap.sh`. The retry loop requires Bash and cannot run directly in PowerShell. The per-call `MSYS2_ARG_CONV_EXCL='*'` prevents [Git Bash path conversion](https://www.msys2.org/docs/filesystem-paths/) from rewriting container paths; it does not change global environment settings.
 
 The two bootstraps preserve existing configuration and six base secrets; use `--dry-run` or `-DryRun` to preview. Unix secret storage uses a private `0700` parent. Windows validates ownership, complete ACLs and reparse/ancestor safety before generating bytes; new directories permit the current user and SYSTEM without administrator elevation. A refused existing tree needs a trusted private destination, not automatic permission repair.
 
@@ -65,11 +92,11 @@ Stores have no host ports; API/UI bind to localhost. `/health` proves API proces
 
 Set `SHADAI_TENANT_ID` consistently and dedicate external store credentials to this installation. Base bootstrap secrets do not provision a usable Microsoft credential, OIDC client secret, SCIM token or metrics token. Distribute each credential through the approved secret-management channel and private files; never put values in Git, `.env`, command arguments, browser storage, logs or SYSVOL. Protect the host account and Docker daemon.
 
-Port 8443 serves internal HTTP. Publish one trusted HTTPS origin through a reverse proxy in front of the frontend, which forwards `/api/`; keep raw API/store ports private. Agents and AD upload require HTTPS, validate certificates and reject redirects. Set `SHADAI_CA_BUNDLE` or the collector's CA-file option for a private CA. Configure the final endpoint directly and keep verification enabled.
+Port 8443 serves internal HTTP. Publish one trusted HTTPS origin through a reverse proxy in front of the frontend, which forwards `/api/`; keep raw API/store ports private. Agents and AD upload require HTTPS, validate certificates and reject redirects. For a private CA, use `SHADAI_CA_BUNDLE` for the endpoint agent or the relevant Python collector's CA-file option. AD PowerShell upload uses the platform certificate trust store; provision the CA there. Configure the final endpoint directly and keep verification enabled.
 
 Compose's dedicated `edge` network defaults to `172.30.0.0/24`, frontend `172.30.0.2`, API `172.30.0.3`. For overlap, change **all three** `SHADAI_EDGE_SUBNET`, `SHADAI_EDGE_FRONTEND_IP`, `SHADAI_EDGE_API_IP` coherently and recreate the network in a maintenance window. Uvicorn trusts only that frontend address, whose nginx overwrites incoming client-address headers. An additional upstream proxy requires exact-address real-IP trust and restricted ingress; otherwise its clients share one login quota. Never broaden `TRUSTED_PROXY_IPS` or trust `*` to pass a test.
 
-Use exact `CORS_ORIGINS` only if cross-origin access is needed. Console cookies are HttpOnly, SameSite=Strict, and Secure/`__Host-` outside localhost; check `SESSION_COOKIE_SECURE` against the actual public origin. Cookie-authenticated writes require `X-CSRF-Token`. PostgreSQL TLS belongs in `DATABASE_URL`, Redis TLS in `rediss://` `REDIS_URL`. External ClickHouse uses native TLS with `CLICKHOUSE_SECURE=true` and normally port 9440; private CA, client certificates and hostname settings are documented in [TLS configuration (English reference)](../deployment.md#remote-access-and-tls).
+Use exact `CORS_ORIGINS` only if cross-origin access is needed. Console cookies are HttpOnly and SameSite=Strict. In automatic mode, Secure/`__Host-` is disabled only for loopback hosts (`localhost`, `127.0.0.1`, `::1`, `[::1]` and `*.localhost`); other hosts enable it. An explicit `SESSION_COOKIE_SECURE` value takes precedence; verify it against the actual public origin. Cookie-authenticated writes require `X-CSRF-Token`. PostgreSQL TLS belongs in `DATABASE_URL`, Redis TLS in `rediss://` `REDIS_URL`. External ClickHouse uses native TLS with `CLICKHOUSE_SECURE=true` and normally port 9440; private CA, client certificates and hostname settings are documented in [TLS configuration (English reference)](../deployment.md#remote-access-and-tls).
 
 ## 4. Prepare Kubernetes with external stores
 
@@ -200,7 +227,7 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli SAVE'
 ```
 
-Production recovery objectives require tested database-native backups. Restore into a separate checkout/project with empty stores, matching version/keys, unused ports and edge subnet. Keep that project name on every command; repeated imports are unsafe. Restore stopped Redis volumes through the storage platform or explicitly document a discarded in-flight interval. Compare events/detections, verify readiness/login and a new synthetic event end to end. Restore local spools only to their original verified binding.
+Production recovery objectives require tested database-native backups. Restore into a separate checkout/project with empty stores, matching version/keys, unused ports and edge subnet. Start only the three stores with `docker compose -p osa-restore-drill up -d --wait --wait-timeout 180 postgres clickhouse redis` under that restore project before importing. Use Bash `set -e` and verify each import; startup readiness does not prove restored data correctness. Keep that project name on every command; repeated imports are unsafe. Restore stopped Redis volumes through the storage platform or explicitly document a discarded in-flight interval. Compare events/detections, verify readiness/login and a new synthetic event end to end. Restore local spools only to their original verified binding.
 
 PostgreSQL migration `003` locks local users and rejects empty/case-folded duplicate names; rename explicitly, never merge accounts silently. Migration `004` adds scoped credentials. **Migration `005` resets unaged historical identity arrays/counts, clears `primary_evidence`, removes retained `sample_values`, `sample_observations` and `network_observations` excerpts, and marks risk stale.** Detection records remain. Their historical identity evidence age cannot be proven; the migration does not assign fresh dates. Review that irreversible evidence/count change on a restored copy. Migration `006` only creates the extension inventory tables; its downgrade drops them and the agents' next snapshots rebuild them. ClickHouse `002_event_metadata.sql` and `003_extension_inventory.sql` must precede dependency-starting API commands because the health probe selects `browser_profile`, which `003` adds and old volumes lack. A staged rollout upgrades ClickHouse, then workers, then the API, then agents; events queued by a new API would dead-letter on old workers:
 
@@ -215,7 +242,7 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 # --no-deps avoids starting an API dependency graph before the migrations have completed.
 docker compose run --rm --no-deps api python -m shadai.cli init-db
 docker compose up -d
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 ```
 

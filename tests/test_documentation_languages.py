@@ -12,6 +12,16 @@ GROUPS = (
     ("docs/en/README.md", "docs/fr/README.md", "docs/zh-CN/README.md"),
     ("docs/roadmap.md", "docs/fr/roadmap.md", "docs/zh-CN/roadmap.md"),
     ("docs/cartography.md", "docs/fr/cartography.md", "docs/zh-CN/cartography.md"),
+    (
+        "docs/audit-remediation-2026-10-15.md",
+        "docs/fr/audit-remediation-2026-10-15.md",
+        "docs/zh-CN/audit-remediation-2026-10-15.md",
+    ),
+    (
+        "docs/repository-governance.md",
+        "docs/fr/repository-governance.md",
+        "docs/zh-CN/repository-governance.md",
+    ),
 )
 FENCE = re.compile(
     r"^ {0,3}(?:(?P<backtick>`{3,})|(?P<tilde>~{3,}))(?P<language>[^\n]*)\n(?P<body>.*?)"
@@ -52,7 +62,11 @@ def local_targets(path, document):
     return targets
 
 
-@pytest.mark.parametrize("group", GROUPS, ids=("introduction", "handbook", "roadmap", "cartography"))
+@pytest.mark.parametrize(
+    "group",
+    GROUPS,
+    ids=("introduction", "handbook", "roadmap", "cartography", "audit-remediation", "repository-governance"),
+)
 @pytest.mark.parametrize("language", (1, 2), ids=("fr", "zh-CN"))
 def test_translations_preserve_procedures_sections_and_language_navigation(group, language):
     canonical_path = ROOT / group[0]
@@ -70,6 +84,6 @@ def test_translations_preserve_procedures_sections_and_language_navigation(group
 
 def test_documentation_index_resolves_all_localized_entry_points():
     index = ROOT / "docs/README.md"
-    required = {(ROOT / entry).resolve() for group in GROUPS[:2] for entry in group}
+    required = {(ROOT / entry).resolve() for group in GROUPS for entry in group}
     assert required <= local_targets(index, read_document(index))
     assert all(target.is_file() for group in GROUPS for target in (ROOT / entry for entry in group))
