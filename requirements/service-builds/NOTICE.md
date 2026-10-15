@@ -1,4 +1,4 @@
-# Maintained service recipe 2
+# Maintained service recipe 3
 
 These recipes preserve PostgreSQL 16.15, Redis 7.4.11, ClickHouse 25.8.33.6,
 gosu 1.19, node_exporter 1.12.1 and Prometheus 3.15.0. They replace the final
@@ -26,9 +26,14 @@ Every publisher source is unchanged. Recipe 2 compiles gosu and node_exporter wi
 Go 1.26.9, the fixed standard library reported for CVE-2026-78667,
 CVE-2026-78669, CVE-2026-97031, CVE-2026-78659, CVE-2026-78660, CVE-2026-94440
 and CVE-2026-97030, which the security gate found in recipe 1's Go 1.26.6
-binaries. gosu updates only x/sys 0.1.0 to 0.44.0, the fixed version reported
+binaries. gosu updates x/sys 0.1.0 to 0.44.0, the fixed version reported
 for CVE-2026-39824; that module requires the Go language directive to move
-from 1.20 to 1.25.0. Its module graph is otherwise unchanged from recipe 1.
+from 1.20 to 1.25.0. Recipe 3 additionally updates github.com/moby/sys/user
+from 0.1.0 to the exact 0.4.1 release for CVE-2026-61801 / GHSA-mjcv-p78q-w5fw
+(affected versions through 0.4.0). The selected graph still contains only
+that module and x/sys 0.44.0; the Go directive and compiler remain unchanged.
+The checksum database authenticates both new module checksums; superseded
+checksums retained in go.sum do not select those older versions.
 node_exporter updates x/net 0.57.0 to 0.60.0, the fixed version reported for
 CVE-2026-78669, CVE-2026-78659 and CVE-2026-78660 in that module. x/net 0.60.0
 requires x/crypto 0.57.0 (superseding recipe 1's 0.56.0, which fixed
@@ -39,9 +44,9 @@ own requirements also move x/term to 0.46.0, x/mod to 0.41.0 and x/tools to
 0.49.0 in the complete selected graph; none of the three is built into the
 binary. No other selected module version changes in either maintained build.
 The reviewed `go.mod.diff` and upstream module files record that difference.
-The node_exporter binary reports `1.12.1-shadai.2`; gosu retains its upstream
+The node_exporter binary reports `1.12.1-shadai.3`; gosu retains its upstream
 1.19 version and reports the new compiler. Image labels identify maintenance
-recipe 2 and the upstream source commit.
+recipe 3 and the upstream source commit.
 
 Prometheus rebuilds `prometheus` and `promtool` from the 3.15.0 release source
 with Go 1.26.9 for the same standard library advisories (CVE-2026-78667,
@@ -62,7 +67,7 @@ download), unpacks it under `web/ui` and reproduces the publisher's
 `scripts/compress_assets.sh` with the build stage's busybox tools: every asset
 is gzip-compressed beside its original and the sorted `.gz` paths are embedded
 through `embed.go`. Both binaries are built with the publisher's `netgo` and
-`builtinassets` tags and report `3.15.0-shadai.2`. The final runtime is the
+`builtinassets` tags and report `3.15.0-shadai.3`. The final runtime is the
 official `prom/prometheus:v3.15.0` image with only `/bin/prometheus` and
 `/bin/promtool` replaced; its `nobody` user, working directory, entrypoint,
 example configuration and volume are inherited unchanged.
@@ -128,6 +133,7 @@ Primary sources: [gosu 1.19](https://github.com/tianon/gosu/releases/tag/1.19),
 [Go downloads](https://go.dev/dl/), [Go checksum database](https://go.dev/ref/mod#authenticating),
 [Alpine package repositories](https://dl-cdn.alpinelinux.org/alpine/),
 [x/sys advisory](https://pkg.go.dev/vuln/GO-2026-5024),
+[moby/sys/user advisory](https://github.com/advisories/GHSA-mjcv-p78q-w5fw),
 [x/crypto SSH advisories](https://pkg.go.dev/vuln/GO-2026-6354),
 [second SSH advisory](https://pkg.go.dev/vuln/GO-2026-6355),
 [OpenPGP residual](https://pkg.go.dev/vuln/GO-2026-5932).

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -37,7 +38,9 @@ GO_MODULE_ZIPS = {"prometheus": ("prometheus/prometheus", "v3.15.0", "v0.315.0")
 GO_MODULE_FIELDS = {"source_kind", "repository", "tag", "commit", "module", "module_version", "zip_h1",
                     "source_url", "source_sha256", "archive_prefix", "web_ui"}
 GO_DELTAS = {
-    "gosu": (("go 1.20\n", "go 1.25.0\n"), ("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")),
+    "gosu": (("go 1.20\n", "go 1.25.0\n"),
+             ("github.com/moby/sys/user v0.1.0\n", "github.com/moby/sys/user v0.4.1\n"),
+             ("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")),
     "node-exporter": (("go 1.25.0\n", "go 1.26.0\n"), ("golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0"),
                       ("golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.57.0"),
                       ("golang.org/x/net v0.57.0", "golang.org/x/net v0.60.0"),
@@ -95,12 +98,77 @@ def _unique_service_manifest_object(pairs):
     return value
 
 
+def maintenance_recipe_labels(recipe: str) -> list[str]:
+    """Read actual LABEL assignments; reject syntax outside the maintained recipe grammar."""
+    values = []
+    pending = ""
+    escape = "\\"
+    directives = True
+    seen_directives = set()
+    for raw in recipe.removeprefix("\ufeff").split("\n"):
+        raw = raw.removesuffix("\r")
+        if any(char.isspace() and char not in " \t\v\f\r" for char in raw):
+            raise ValueError("Unsupported maintained recipe whitespace")
+        stripped = raw.lstrip(" \t\v\f\r")
+        if stripped.startswith("#"):
+            directive = re.fullmatch(r"#\s*(syntax|escape|check)\s*=\s*(.*?)\s*", stripped, re.IGNORECASE)
+            if directives and directive:
+                name, value = directive[1].lower(), directive[2]
+                if name in seen_directives:
+                    raise ValueError("Duplicate maintained recipe parser directive")
+                seen_directives.add(name)
+                if name == "escape":
+                    if value != escape:
+                        raise ValueError("Unsupported maintained recipe escape directive")
+            else:
+                directives = False
+            continue  # A comment never continues or terminates an unfinished instruction.
+        if not stripped:
+            directives = False
+            continue
+        directives = False
+        line = (raw if pending else stripped).rstrip(" \t")
+        continued = line.endswith(escape) and (len(line) == 1 or line[-2] != escape)
+        pending += line[:-1] if continued else line
+        if continued:
+            continue
+        instruction = pending.split(None, 1)
+        pending = ""
+        command = instruction[0].upper()
+        arguments = instruction[1] if len(instruction) == 2 else ""
+        if command in {"RUN", "COPY", "ADD", "ONBUILD"} and "<<" in arguments:
+            raise ValueError("Unsupported maintained recipe heredoc instruction")
+        if command != "LABEL":
+            continue
+        lexer = shlex.shlex(arguments, posix=True)
+        lexer.whitespace_split, lexer.commenters, lexer.escape = True, "", escape
+        lexer.whitespace = " \t\v\f\r"
+        try:
+            words = list(lexer)
+        except ValueError as exc:
+            raise ValueError("Malformed maintained recipe LABEL instruction") from exc
+        if not words:
+            raise ValueError("Empty maintained recipe LABEL instruction")
+        if "=" not in words[0]:
+            pairs = [(words[0], " ".join(words[1:]))] if len(words) >= 2 else []
+        else:
+            pairs = [word.split("=", 1) for word in words if "=" in word]
+            if len(pairs) != len(words):
+                raise ValueError("Malformed maintained recipe LABEL assignment")
+        if not pairs or any(not key or "$" in key for key, _ in pairs):
+            raise ValueError("Malformed or dynamic maintained recipe LABEL key")
+        values.extend(value for key, value in pairs if key == "io.shadai.maintenance.recipe")
+    if pending:
+        raise ValueError("Unfinished maintained recipe instruction")
+    return values
+
+
 def check_service_builds(root: Path, images: dict) -> dict:
     path = root / "requirements/service-builds/manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_service_manifest_object)
     if not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or \
             type(manifest.get("recipe_version")) is not int or \
-            manifest.get("schema") != 1 or manifest.get("recipe_version") != 2 or \
+            manifest.get("schema") != 1 or manifest.get("recipe_version") != 3 or \
             set(manifest.get("services", {})) != set(SERVICES):
         raise ValueError("Incomplete or unknown maintained service manifest")
     files = {f"requirements/service-builds/{component}/{name}"
@@ -123,7 +191,7 @@ def check_service_builds(root: Path, images: dict) -> dict:
         if version != VERSIONS[name] or service.get("base") != name + "-base" or \
                 service.get("dockerfile") != images[name]["dockerfile"] or \
                 service.get("runtime_tag") != images[name]["reference"] or \
-                images[name]["reference"] != f"shadai/{name}:{version}-maintained.2":
+                images[name]["reference"] != f"shadai/{name}:{version}-maintained.3":
             raise ValueError(f"Maintained service recipe/reference mismatch: {name}")
     if manifest.get("toolchain") != {"version": "go1.26.9", "image": "golang", "goproxy": "https://proxy.golang.org",
                                      "gosumdb": "sum.golang.org", "gotoolchain": "local"}:
@@ -135,6 +203,8 @@ def check_service_builds(root: Path, images: dict) -> dict:
         bases = re.findall(r"(?m)^FROM (\S+)", recipe)
         if bases != [images["golang"]["reference"], images[name + "-base"]["reference"]]:
             raise ValueError("Maintained recipe must use its exact compiler/fetch and service base images")
+        if maintenance_recipe_labels(recipe) != ["3"]:
+            raise ValueError("Maintained recipe label must use the approved global revision")
     components = manifest.get("components", {})
     if type(components) is not dict or set(components) != set(GO_COMPONENTS):
         raise ValueError("Incomplete maintained source inventory")

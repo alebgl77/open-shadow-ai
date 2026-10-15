@@ -79,7 +79,7 @@ PROMTOOL_CI_CASES = [
 ]
 
 
-MAINTAINED_PROMETHEUS = 'shadai/prometheus:3.15.0-maintained.2'
+MAINTAINED_PROMETHEUS = 'shadai/prometheus:3.15.0-maintained.3'
 PROMETHEUS_BASE = ('prom/prometheus:v3.15.0@sha256:'
                    'efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e')
 PROMETHEUS_RECIPE = 'deploy/service-builds/Dockerfile.prometheus'
