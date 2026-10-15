@@ -65,7 +65,11 @@ kubectl -n open-shadow-ai get pods
 kubectl -n open-shadow-ai rollout status deployment/api
 ```
 
-API readiness checks database connections. Worker readiness checks Redis reachability; its process probe is not proof of processing progress. Alert on queue backlog, dead-letter entries and stale collectors separately. Check PVC/database recovery, resource pressure, disruption and restore behavior. No live cluster validation has been performed as part of this package.
+API readiness checks database connections. Each worker uses its own stage-specific `shadai.workers.probe`: startup requires initialization; liveness checks process identity and a fresh local heartbeat; readiness additionally checks bounded stage progress and the dependencies used by that stage. All three stages check PostgreSQL; ingest/correlation also check Redis and queue-retention/schema state; ingest/purge also check ClickHouse. Purge readiness requires a successful cycle within its configured window. A healthy peer or a reachable Redis alone cannot make a stalled worker ready.
+
+Readiness runs through `/app/entrypoint.py` to resolve mounted secret files; startup and liveness remain local so a store outage does not trigger restart loops. The baseline uses the same probe commands and budgets as the target qualification renderer: 6-second timeout, startup every 5 seconds with 60 failures, liveness/readiness every 10 seconds with 3 failures. Preserve the writable 64 MiB `/tmp` volume and UID/GID 10001 for private process-probe records.
+
+Alert on queue backlog, dead-letter entries and stale collectors separately. Check PVC/database recovery, resource pressure, disruption and restore behavior. These manifest and probe checks do not establish production throughput or recovery objectives. No live cluster validation has been performed as part of this package.
 
 ## Collector storage and monitoring
 
