@@ -98,6 +98,7 @@ Optional [OIDC sign-in and SCIM provisioning (English reference)](docs/sso-scim.
 | React investigation interface, catalog and governance workflow | Implemented; evaluate with your data |
 | DNS/proxy parsers and syslog collector | Implemented; parser and listener must match the source |
 | [Passive network analysis (English reference)](docs/network-analysis.md) | Zeek/Suricata/TShark metadata imports, optional offline PCAP or explicit live sensor, and `/network` evidence view; observed names do not prove AI requests |
+| [AI cartography](docs/cartography.md) | `/cartography` connects network observations and reported host installations to catalog services, with 3D navigation and accessible evidence; bounded coverage, presence and observations do not prove use |
 | Endpoint agent | Implemented process/container/runtime/extension inventory; OS and fleet rollout verification pending |
 | Browser extension inventory | Implemented per-installation state (version, enabled, install source, user, profile) for accessible local users/profiles on agent 0.3.0 hosts, version-change history and audited export in **Extensions**; presence evidence kept for the identity window, not usage |
 | Microsoft Entra collector | Implemented service-principal inventory and optional grants; AI matching requires reviewed application-ID mappings; live tenant validation pending |

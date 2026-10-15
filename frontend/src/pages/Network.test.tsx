@@ -69,7 +69,7 @@ describe('passive network console', () => {
     }
     expect(screen.getByText('Status unknown')).toBeTruthy()
     expect(screen.getByText(/A lookup or connection is not proof of AI use/)).toBeTruthy()
-    expect(get).toHaveBeenCalledWith('/catalog?page_size=500')
+    expect(get).toHaveBeenCalledWith('/catalog?page_size=100')
     expect(get).toHaveBeenCalledWith('/network/events?hours=24&page=1&page_size=20', expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 

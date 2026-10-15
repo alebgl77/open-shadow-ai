@@ -2,7 +2,7 @@ import { AxiosError, AxiosHeaders, type AxiosAdapter } from 'axios'
 import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, type Detection, type TimelineEntry } from './detections'
 import type { Governance, CatalogItem } from '@/types'
 import { csvCell } from '@/lib/export'
-import { NETWORK_PROTOCOLS, type NetworkEvent, type NetworkProtocol } from './network'
+import { NETWORK_PROTOCOLS, type NetworkEvent, type NetworkProtocol, type NetworkRelation } from './network'
 import { CATALOG_MATCHES, ENABLED_STATES, IDENTITY_DAYS_DEFAULT, INSTALL_SOURCES, INVENTORY_SORT_COLUMNS, SORT_ORDERS, enabledState, type ExtensionInventoryItem, type ExtensionVersionChange, type InventorySortColumn, type StoredInstallSource } from './inventory'
 
 const NOW = Date.now()
@@ -53,6 +53,7 @@ const networkEvents: NetworkEvent[] = Array.from({ length: 36 }, (_, index) => {
     dst_port: protocol === 'DNS' ? 53 : protocol === 'HTTP' ? 80 : 443,
     collector_id: index % 2 ? 'demo-lab-02' : 'demo-edge-01', parser_version: 'demo-metadata-1', matched,
     catalog_match_id: matched ? `catalog-${index % 3 + 1}` : null,
+    match_field: matched ? 'domain' : null, match_confidence: matched ? .8 : null,
   }
 })
 
@@ -178,6 +179,16 @@ function networkInWindow(params: URLSearchParams) {
   return networkEvents.filter(event => Date.parse(event.timestamp) >= NOW - hours * 3600000)
 }
 
+function filteredNetwork(params: URLSearchParams) {
+  const protocol = params.get('protocol')
+  if (protocol && !NETWORK_PROTOCOLS.includes(protocol as NetworkProtocol)) throw new Error('Invalid network protocol')
+  return [...new Map(networkInWindow(params).map(event => [event.event_id, event])).values()].filter(event =>
+    (!protocol || event.protocol === protocol) &&
+    (!params.has('source_ip') || (event.src_ip || '') === params.get('source_ip')) &&
+    (!params.has('catalog_match_id') || (event.catalog_match_id || '') === params.get('catalog_match_id')) &&
+    (!params.has('domain') || (event.domain || event.sni || event.url_host || '') === params.get('domain')))
+}
+
 function matchingDetections(params: URLSearchParams, defaultSort: keyof Detection): Detection[] {
   let items = detections.filter(d => ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status'].every(key => !params.get(key) || params.get(key)!.split(',').includes(String(d[key as keyof Detection]))))
   if (params.get('search')) items = items.filter(d => d.entity_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
@@ -210,10 +221,31 @@ export function demoRequest(method: string, input: string, body: Record<string, 
       limitations: ['These observations and sensors are fictional.', 'Imported metadata covers only the configured collection points.', 'DNS is weaker evidence than an observed connection. Protocols remain one network source.', 'No user, model, prompt or token attribution is inferred from network addresses.'],
     }
   }
+  if (path === '/network/relations') {
+    const events = filteredNetwork(params)
+    const grouped = new Map<string, NetworkRelation>()
+    for (const event of events) {
+      const source_ip = event.src_ip || '', domain = event.domain || event.sni || event.url_host || ''
+      const key = JSON.stringify([source_ip, domain, event.catalog_match_id, event.protocol])
+      const prior = grouped.get(key)
+      if (prior) {
+        prior.observations++
+        prior.first_seen = prior.first_seen < event.timestamp ? prior.first_seen : event.timestamp
+        prior.last_seen = prior.last_seen > event.timestamp ? prior.last_seen : event.timestamp
+      } else grouped.set(key, { source_ip, domain, catalog_match_id: event.catalog_match_id, protocol: event.protocol, observations: 1, first_seen: event.timestamp, last_seen: event.timestamp })
+    }
+    const limit = Number(params.get('limit') || 300)
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('Invalid relation limit')
+    const items = [...grouped].sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([, item]) => item)
+    return { hours: Number(params.get('hours') || 24), protocol: params.get('protocol'), items, total_observations: events.length, total_relations: grouped.size, represented_observations: items.reduce((sum, item) => sum + item.observations, 0), represented_relations: items.length, truncated: grouped.size > items.length, limitations: ['These observations and sensors are fictional.', 'Imported metadata covers only the configured collection points.', 'No user, model, prompt or token attribution is inferred from network addresses.'] }
+  }
+  if (path.startsWith('/network/events/')) {
+    const found = networkInWindow(params).find(event => event.event_id === decodeURIComponent(path.slice('/network/events/'.length)))
+    if (!found) throw new Error('Network event not found')
+    return { ...found }
+  }
   if (path === '/network/events') {
-    const protocol = params.get('protocol')
-    if (protocol && !NETWORK_PROTOCOLS.includes(protocol as NetworkProtocol)) throw new Error('Invalid network protocol')
-    const events = networkInWindow(params).filter(event => !protocol || event.protocol === protocol)
+    const events = filteredNetwork(params)
     const page = Math.max(1, Number(params.get('page') || 1))
     const page_size = Math.max(1, Math.min(100, Number(params.get('page_size') || 20)))
     return { items: events.slice((page - 1) * page_size, page * page_size), total: events.length, page, page_size }
@@ -266,6 +298,11 @@ export function demoRequest(method: string, input: string, body: Record<string, 
     return withVersionEvidence({ ...found })
   }
   if (path === '/catalog') return catalog.filter(item => !params.get('search') || item.canonical_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
+  if (path.startsWith('/catalog/')) {
+    const item = catalog.find(item => item.catalog_item_id === decodeURIComponent(path.slice('/catalog/'.length)))
+    if (!item) throw new Error('Demo catalog item not found')
+    return { ...item }
+  }
   if (path === '/governance') {
     if (method === 'post') policies = [...policies, { ...policies[0], ...body, governance_id: `demo-policy-${policies.length + 1}`, created_at: new Date().toISOString() } as Governance]
     return method === 'post' ? policies[policies.length - 1] : policies
@@ -279,5 +316,8 @@ export const demoAdapter: AxiosAdapter = async config => {
     const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data
     const data = demoRequest(config.method || 'get', config.url || '/', body)
     return { data, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config }
-  } catch (error) { throw new AxiosError(error instanceof Error ? error.message : 'Demo request failed', 'ERR_DEMO', config) }
+  } catch (error) {
+    const notFound = error instanceof Error && error.message === 'Network event not found'
+    throw new AxiosError(error instanceof Error ? error.message : 'Demo request failed', 'ERR_DEMO', config, undefined, notFound ? { data: { detail: 'Network event not found' }, status: 404, statusText: 'Not Found', headers: new AxiosHeaders(), config } : undefined)
+  }
 }
