@@ -395,7 +395,7 @@ def test_synthetic_prometheus_model_binds_both_binaries_to_one_source_copy_layer
         assert claim['source_proof']['authenticated_provenance'] is False
         assert claim['source_proof']['binary_copy_layer'] == claim['original_binary_file']['comment'].split(' ')[1]
     assert projections[0]['source_proof_sha256'] == projections[1]['source_proof_sha256']
-    assert metadata['service_recipe']['runtime_tag'] == 'shadai/prometheus:3.15.0-maintained.2'
+    assert metadata['service_recipe']['runtime_tag'] == 'shadai/prometheus:3.15.0-maintained.3'
     assert metadata['verdict'] == 'passed' and metadata['findings'] == []
 
 

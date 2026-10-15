@@ -81,6 +81,7 @@ class LoadSender:
 
     def run(self, url, key, *, deadline=None):
         start = self.clock()
+        schedule_start = start
         profile = self.profile
         deadline = min(deadline or float("inf"), start + profile["limits"]["max_wall_seconds"])
 
@@ -113,6 +114,7 @@ class LoadSender:
                 preparation_budget()
         else:
             timestamp = datetime.now(UTC).isoformat()
+            schedule_start = self.clock()
             batches = batched_fixtures(self.run_id, self.case, profile, self.collector, timestamp)
             names, hashes = [], []
             retained_bytes = 0
@@ -193,7 +195,7 @@ class LoadSender:
                 for index, name in enumerate(manifest["batches"]):
                     if self.cancelled.is_set() or self.clock() >= deadline:
                         break
-                    due = start + index * profile["load"]["batch_size"] / profile["load"]["events_per_second"]
+                    due = schedule_start + index * profile["load"]["batch_size"] / profile["load"]["events_per_second"]
                     if self.cancelled.wait(min(max(0, due - self.clock()), max(0, deadline - self.clock()))):
                         break
                     if self.clock() >= deadline:

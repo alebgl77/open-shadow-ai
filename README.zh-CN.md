@@ -14,6 +14,8 @@
 
 [专家实施与运维手册](docs/zh-CN/README.md) · [快速开始](#快速开始) · [文档与语言覆盖范围](docs/README.md) · [部署（英文参考）](docs/deployment.md) · [生产环境验收验证（英文参考）](docs/production-qualification.md) · [采集器运维（英文参考）](docs/collector-operations.md) · [Microsoft 与 Active Directory（英文参考）](docs/microsoft.md) · [SSO 与 SCIM（英文参考）](docs/sso-scim.md) · [架构（英文参考）](docs/architecture.md) · [路线图](docs/zh-CN/roadmap.md)
 
+[10 月 15 日审计修复与运维检查](docs/zh-CN/audit-remediation-2026-10-15.md)
+
 > 本项目处于早期阶段，适用于评估和受控试点。每个部署仅服务一个组织。Docker、Kubernetes 和实际 Microsoft 环境需要在自身环境中完成运维验证；不声称获得认证或提供生产 SLA。
 
 后端为开发预览版 **0.3.0**；独立终端代理为 **0.3.0**（已发布的 `v0.3.0` 预发行版附带代理 0.1.0）。英语、法语和简体中文手册提供等效的实施流程。详细参考资料和历史验证记录保留其声明的语言与各自来源的范围。

@@ -13,6 +13,8 @@ Comprenez quels services et outils d'IA apparaissent dans votre environnement, d
 
 [Guide de mise en œuvre pour experts](docs/fr/README.md) · [Démarrage](#démarrage) · [Documentation et couverture linguistique](docs/README.md) · [Déploiement (référence en anglais)](docs/deployment.md) · [Qualification de production (référence en anglais)](docs/production-qualification.md) · [Exploitation des collecteurs (référence en anglais)](docs/collector-operations.md) · [Microsoft et Active Directory (référence en anglais)](docs/microsoft.md) · [SSO et SCIM (référence en anglais)](docs/sso-scim.md) · [Architecture (référence en anglais)](docs/architecture.md) · [Roadmap](docs/fr/roadmap.md)
 
+[Corrections de l'audit du 15 octobre et vérifications d'exploitation](docs/fr/audit-remediation-2026-10-15.md)
+
 > Logiciel en phase initiale, destiné à l'évaluation et aux pilotes maîtrisés. Une organisation par installation. Docker, Kubernetes et les environnements Microsoft réels exigent une validation opérationnelle sur votre infrastructure ; aucune certification ni aucun SLA de production ne sont revendiqués.
 
 Le backend est en préversion **0.3.0** ; l'agent autonome pour les postes est en version **0.3.0** (la préversion publiée `v0.3.0` livre l'agent 0.1.0). Les guides anglais, français et chinois simplifié proposent les mêmes procédures de mise en œuvre. Les références détaillées et comptes rendus historiques conservent leur langue indiquée et la portée propre à leurs sources.

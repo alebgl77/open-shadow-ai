@@ -62,7 +62,7 @@ def test_actual_recipes_inventory_and_deployed_roles_are_complete(service_tree):
     assert all("@sha256:" in value["reference"] for value in images.values() if value["role"] == "build-only")
     assert images["prometheus-base"] == {"role": "build-only", "reference": "prom/prometheus:v3.15.0@sha256:"
                                          "efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e"}
-    assert images["prometheus"] == {"role": "derived-runtime", "reference": "shadai/prometheus:3.15.0-maintained.2",
+    assert images["prometheus"] == {"role": "derived-runtime", "reference": "shadai/prometheus:3.15.0-maintained.3",
                                     "dockerfile": "deploy/service-builds/Dockerfile.prometheus"}
 
 
@@ -392,10 +392,19 @@ def test_release_sources_and_only_approved_module_difference():
                                 "golang.org/x/text v0.40.0")) for line in removed_sums)
     gosu = ROOT / "requirements/service-builds/gosu"
     assert (gosu / "go.mod").read_text() == (gosu / "upstream.go.mod").read_text().replace(
-        "go 1.20\n", "go 1.25.0\n").replace("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")
+        "go 1.20\n", "go 1.25.0\n").replace(
+        "github.com/moby/sys/user v0.1.0\n", "github.com/moby/sys/user v0.4.1\n").replace(
+        "golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")
     gosu_sums = set((gosu / "go.sum").read_text().splitlines()) - \
         set((gosu / "upstream.go.sum").read_text().splitlines())
-    assert len(gosu_sums) == 2 and all(line.startswith("golang.org/x/sys v0.44.0") for line in gosu_sums)
+    assert gosu_sums == {
+        "github.com/moby/sys/user v0.4.1 h1:RgjRlaDKi/Xmyrz4t8lyzXT6v2ooFeO/7xtchmhVWE0=",
+        "github.com/moby/sys/user v0.4.1/go.mod h1:E9QsW5WRe1kUAf7kW8hXKwu1uhsZEAdPLYHYSDudF4Y=",
+        "golang.org/x/sys v0.44.0 h1:ildZl3J4uzeKP07r2F++Op7E9B29JRUy+a27EibtBTQ=",
+        "golang.org/x/sys v0.44.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=",
+    }
+    assert (gosu / "modules.txt").read_text().splitlines() == [
+        "github.com/tianon/gosu", "github.com/moby/sys/user v0.4.1", "golang.org/x/sys v0.44.0"]
     prometheus = ROOT / "requirements/service-builds/prometheus"
     upstream = (prometheus / "upstream.go.mod").read_text()
     assert "go 1.26.0\n" in upstream and "toolchain" not in upstream
@@ -428,7 +437,11 @@ def test_release_sources_and_only_approved_module_difference():
 @pytest.mark.parametrize("component,before,after", [
     ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.1.0"),
     ("gosu", "golang.org/x/sys v0.44.0", "golang.org/x/sys v0.45.0"),
-    ("gosu", "github.com/moby/sys/user v0.1.0", "github.com/moby/sys/user v0.2.0"),
+    ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.1.0"),
+    ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.2.0"),
+    ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.0"),
+    ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.2"),
+    ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.10"),
     ("node-exporter", "golang.org/x/crypto v0.57.0", "golang.org/x/crypto v0.56.0"),
     ("node-exporter", "golang.org/x/net v0.60.0", "golang.org/x/net v0.57.0"),
     ("node-exporter", "golang.org/x/sys v0.48.0", "golang.org/x/sys v0.49.0"),
@@ -446,12 +459,126 @@ def test_refreshed_hash_cannot_authorize_stale_or_unapproved_go_delta(service_tr
 
     name = f"requirements/service-builds/{component}/go.mod"
     path = service_tree / name
-    value = path.read_text().replace(before, after)
+    value = path.read_text()
+    assert before in value
+    value = value.replace(before, after)
     path.write_text(value)
     edit_manifest(service_tree, lambda manifest: manifest["files"].update(
         {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
     with pytest.raises(ValueError, match="approved targeted dependency updates"):
         PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+@pytest.mark.parametrize("filename", ["go.mod", "go.sum", "modules.txt"])
+def test_gosu_module_closure_tampering_is_detected(service_tree, filename):
+    path = service_tree / "requirements/service-builds/gosu" / filename
+    value = path.read_text()
+    assert "github.com/moby/sys/user v0.4.1" in value
+    path.write_text(value.replace("github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.0"))
+    with pytest.raises(ValueError, match="input hash mismatch"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+@pytest.mark.parametrize("revision", [2, 4, True, "3"])
+def test_global_recipe_revision_cannot_drift(service_tree, revision):
+    edit_manifest(service_tree, lambda manifest: manifest.update(recipe_version=revision))
+    with pytest.raises(ValueError, match="unknown maintained service manifest"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+@pytest.mark.parametrize("service", PINS.SERVICES)
+def test_refreshed_hash_cannot_authorize_a_stale_recipe_label(service_tree, service):
+    name = f"deploy/service-builds/Dockerfile.{service}"
+    path = service_tree / name
+    value = path.read_text()
+    assert 'io.shadai.maintenance.recipe="3"' in value
+    path.write_text(value.replace('io.shadai.maintenance.recipe="3"', 'io.shadai.maintenance.recipe="2"'))
+    edit_manifest(service_tree, lambda manifest: manifest["files"].update(
+        {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
+    with pytest.raises(ValueError, match="approved global revision"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+
+
+@pytest.mark.parametrize("mutation", ["comment", "run", "continued-run", "env", "other-label", "missing-label",
+                                      "later-unquoted", "later-single-quoted", "later-quoted-key",
+                                      "duplicate-approved", "same-instruction-override"])
+def test_rehashed_recipe_label_decoys_and_overrides_are_rejected(service_tree, mutation):
+    name = "deploy/service-builds/Dockerfile.clickhouse"
+    path = service_tree / name
+    value = path.read_text()
+    label = "io.shadai.maintenance.recipe"
+    if mutation in {"comment", "run", "continued-run", "env", "other-label", "missing-label"}:
+        value = value.replace(f'{label}="3"', f"{label}=2")
+        decoys = {"comment": f'# {label}="3"\n', "run": f'RUN echo \'{label}="3"\'\n',
+                  "continued-run": f'RUN echo \\\n  {label}="3"\n',
+                  "env": f'ENV NOTE=\'{label}="3"\'\n', "other-label": f'LABEL note=\'{label}="3"\'\n',
+                  "missing-label": f'# {label}="3"\n'}
+        value += decoys[mutation]
+        if mutation == "missing-label":
+            value = value.replace(f"{label}=2", "io.shadai.other=2")
+    elif mutation == "same-instruction-override":
+        value = value.replace(f'{label}="3"', f'{label}="3" {label}=2')
+    else:
+        overrides = {"later-unquoted": f"{label}=2", "later-single-quoted": f"{label}='2'",
+                     "later-quoted-key": f'"{label}"=2', "duplicate-approved": f"{label}=3"}
+        value += "LABEL " + overrides[mutation] + "\n"
+    path.write_text(value)
+    edit_manifest(service_tree, lambda manifest: manifest["files"].update(
+        {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
+    with pytest.raises(ValueError, match="approved global revision"):
+        PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+    with pytest.raises(ValueError, match="approved global revision"):
+        PINS.check_references(service_tree)
+
+
+@pytest.mark.parametrize("assignment", [
+    "io.shadai.maintenance.recipe=3", '"io.shadai.maintenance.recipe"="3"',
+    "'io.shadai.maintenance.recipe'='3'", "io.shadai.maintenance.recipe='3'",
+    "io.shadai.maintenance.recipe=\\3", "io.shadai.maintenance.recipe=\\\n3",
+    "io.shadai.maintenance.\\\nrecipe=3", "io.shadai.maintenance.recipe=\\\n# ignored comment \\\n3",
+])
+def test_rehashed_recipe_accepts_actual_quoted_unquoted_and_continued_labels(service_tree, assignment):
+    name = "deploy/service-builds/Dockerfile.clickhouse"
+    path = service_tree / name
+    value = path.read_text().replace('LABEL io.shadai.maintenance.recipe="3"', "  lAbEl\t" + assignment)
+    path.write_text(value)
+    edit_manifest(service_tree, lambda manifest: manifest["files"].update(
+        {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
+    PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
+    PINS.check_references(service_tree)
+
+
+@pytest.mark.parametrize("recipe", [
+    'LABEL io.shadai.maintenance.recipe="3"\n', "LABEL io.shadai.maintenance.recipe 3\n",
+    "# escape=\\\nLABEL io.shadai.maintenance.recipe=3\n",
+    "# comment\n# escape=`\nLABEL io.shadai.maintenance.recipe=\\\n3\n",
+    '\ufeff# escape=\\\nLABEL note=#inline-hash io.shadai.maintenance.recipe="3"\n',
+])
+def test_recipe_label_parser_accepts_literal_revision_forms(recipe):
+    assert PINS.maintenance_recipe_labels(recipe) == ["3"]
+
+
+@pytest.mark.parametrize("recipe", [
+    'LABEL io.shadai.maintenance.recipe="3\n', "LABEL\n", "LABEL only-key\n", "LABEL =3\n",
+    "LABEL io.shadai.maintenance.recipe=3 broken\n", 'LABEL "${KEY}"=3\n',
+    "LABEL io.shadai.maintenance.recipe=3\\\n", "RUN <<EOF\nLABEL io.shadai.maintenance.recipe=3\nEOF\n",
+    "ONBUILD RUN <<EOF\nLABEL io.shadai.maintenance.recipe=3\nEOF\n",
+    "# escape=`\nLABEL io.shadai.maintenance.recipe=3\n",
+    "\v# escape=`\nLABEL io.shadai.maintenance.recipe=3\n",
+    'LABEL note=x\u00a0io.shadai.maintenance.recipe="3"\n',
+    "# escape=!\nLABEL io.shadai.maintenance.recipe=3\n",
+    "# escape=\\\n# escape=\\\nLABEL io.shadai.maintenance.recipe=3\n",
+])
+def test_recipe_label_parser_refuses_malformed_dynamic_or_unsupported_syntax(recipe):
+    with pytest.raises(ValueError, match="maintained recipe"):
+        PINS.maintenance_recipe_labels(recipe)
+
+
+def test_recipe_label_parser_ignores_physical_line_and_escaped_escape_decoys():
+    label = "io.shadai.maintenance.recipe"
+    assert PINS.maintenance_recipe_labels(f'RUN echo x\vLABEL {label}="3"\n') == []
+    escaped = "RUN echo " + "\\" * 3 + f"\nLABEL {label}=2\n"
+    assert PINS.maintenance_recipe_labels(escaped) == ["2"]
 
 
 def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
@@ -485,11 +612,11 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
                           component["web_ui"]["sha256"] + "  /tmp/web-ui.tar.gz' | sha256sum -c -",
                           "cp embed.go.tmpl embed.go", "gzip -c", "sort -z | xargs -0 echo //go:embed >> embed.go",
                           "echo var EmbedFS embed.FS >> embed.go",
-                          "-tags netgo,builtinassets", "version.Version=3.15.0-shadai.2",
+                          "-tags netgo,builtinassets", "version.Version=3.15.0-shadai.3",
                           "version.Revision=" + component["commit"], "-o /out/prometheus ./cmd/prometheus",
                           "-o /out/promtool ./cmd/promtool", "COPY --from=build /out/prometheus /out/promtool /bin/",
                           "COPY --from=build /src/LICENSE /src/NOTICE /usr/local/share/licenses/shadai/prometheus/",
-                          'io.shadai.maintenance.version="v3.15.0-shadai.2"',
+                          'io.shadai.maintenance.version="v3.15.0-shadai.3"',
                           "RUN /bin/prometheus --version && /bin/promtool --version"):
                 assert guard in recipe, guard
             assert recipe.count("go build ") == 2 and "gzip -n" not in recipe  # busybox gzip has no -n flag.

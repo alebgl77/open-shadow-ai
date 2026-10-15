@@ -11,7 +11,7 @@ v2 fixes:
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
 
 import structlog
@@ -66,6 +66,10 @@ def _derive_entity_type(source_type: str, category: str) -> str:
     if source_type in ("dns", "proxy", "network"):
         return "api_service" if "api" in category or "platform" in category else "saas_app"
     return "saas_app"
+
+
+def _automatic_status(confidence: float) -> str:
+    return "suspected" if confidence < 0.70 else "probable" if confidence < 0.90 else "high_confidence"
 
 
 class NetworkObservation(BaseModel):
@@ -138,10 +142,16 @@ async def _inventory_context(session, catalog_item_id: str, *, now: datetime) ->
     }
 
 
+def _network_observation_candidates(bundle) -> list:
+    section = bundle.get("network") if isinstance(bundle, dict) else None
+    values = section.get("network_observations") if isinstance(section, dict) else None
+    return values if isinstance(values, list) else []
+
+
 def _network_context(event: CanonicalEvent, previous: dict | None = None, *, now: datetime | None = None) -> dict:
     """Bounded metadata from validated canonical fields; never retain packet content."""
     now = now or datetime.now(UTC)
-    previous = sanitize_evidence({"network": previous or {}}, now=now)["network"]
+    previous = previous or {}
     counts = {
         protocol: max(0, int(previous.get("protocol_counts", {}).get(protocol, 0))) for protocol in NETWORK_PROTOCOLS
     }
@@ -150,12 +160,14 @@ def _network_context(event: CanonicalEvent, previous: dict | None = None, *, now
         mode="json"
     )
     observations = []
-    for value in previous.get("network_observations", [])[-9:]:
+    values = previous.get("network_observations", [])
+    for value in values if isinstance(values, list) else []:
         try:
             observations.append(NetworkObservation.model_validate(value).model_dump(mode="json"))
         except ValidationError:
             # Do not propagate unknown legacy keys or malformed evidence into the allowlist.
             continue
+    # Merge before retention selects the newest unique observations by actual observation time.
     section = {"protocol_counts": counts, "network_observations": observations + [observation]}
     retained = sanitize_evidence({"network": section}, now=now)["network"]
     return {"protocol_counts": retained["protocol_counts"], "network_observations": retained["network_observations"]}
@@ -304,6 +316,13 @@ class Correlator:
                     risk=detection.risk_score,
                 )
             else:
+                # Identity synchronization also sanitizes/caps the bundle. Preserve only
+                # network candidates locally until they can be merged with this event.
+                network_candidates = (
+                    _network_observation_candidates(detection.evidence_bundle)
+                    if event.source_type == "network"
+                    else None
+                )
                 await sync_identity_members(session, detection, event, now)
                 if governance:
                     detection.governance_id = governance.governance_id
@@ -317,6 +336,7 @@ class Correlator:
                     now,
                     gov_classification,
                     inventory=inventory,
+                    network_candidates=network_candidates,
                 )
                 if governance:
                     apply_policy(detection, governance)
@@ -360,7 +380,7 @@ class Correlator:
         )
         reasoning = generate_reasoning_summary(confidence, conf_factors, risk, risk_factors)
 
-        status = "suspected" if confidence < 0.70 else "probable" if confidence < 0.90 else "high_confidence"
+        status = _automatic_status(confidence)
         # URL paths and user agents are matched at ingestion and never retained.
         value = getattr(event, match_field, "")
         observed = f"{match_field}={value}" if value not in ("", None) else f"{match_field} matched at ingestion"
@@ -423,6 +443,7 @@ class Correlator:
         gov_classification: str | None,
         *,
         inventory: dict | None = None,
+        network_candidates: list | None = None,
     ) -> None:
         if detection.first_seen_at.tzinfo is None:
             detection.first_seen_at = detection.first_seen_at.replace(tzinfo=UTC)
@@ -442,6 +463,8 @@ class Correlator:
             detection.entity_type = derived_type
 
         # Update evidence bundle
+        if event.source_type == "network" and network_candidates is None:
+            network_candidates = _network_observation_candidates(detection.evidence_bundle)
         bundle = sanitize_evidence(detection.evidence_bundle, now=now)
         window = bundle.get("_identity_window")
         window = dict(window) if isinstance(window, dict) else {}
@@ -490,7 +513,8 @@ class Correlator:
             ]
             src_ev["sample_observations"] = samples + [sample]
         if event.source_type == "network":
-            src_ev.update(_network_context(event, src_ev, now=now))
+            previous = {**src_ev, "network_observations": network_candidates}
+            src_ev.update(_network_context(event, previous, now=now))
         if event.source_type == "browser" and inventory is not None:
             # Replaced, not merged: the inventory is the current state; the sanitizer ages and bounds it.
             src_ev.update(inventory)
@@ -535,12 +559,17 @@ class Correlator:
         detection.risk_score = risk
         detection.reasoning_summary = generate_reasoning_summary(confidence, conf_factors, risk, risk_factors)
 
-        # Update status (only upgrade, never downgrade)
-        if confidence >= 0.90 and detection.shadow_ai_status not in ("confirmed", "false_positive"):
+        if detection.shadow_ai_status in ("stale", "archived"):
+            # Purge marks observations strictly older than 30 days stale. Only new,
+            # current evidence can reactivate, using the same one-event rules as creation.
+            # Historical catalog confidence remains useful but does not establish fresh activity.
+            if event_ts >= now - timedelta(days=30):
+                incoming_confidence, _ = compute_confidence(
+                    [Signal(source_type=event.source_type, confidence_base=match_confidence, match_field=match_field)]
+                )
+                detection.shadow_ai_status = _automatic_status(incoming_confidence)
+        # Ordinary active statuses only upgrade, never downgrade.
+        elif confidence >= 0.90 and detection.shadow_ai_status not in ("confirmed", "false_positive"):
             detection.shadow_ai_status = "high_confidence"
         elif confidence >= 0.70 and detection.shadow_ai_status in ("suspected",):
-            detection.shadow_ai_status = "probable"
-
-        # Reactivate if stale
-        if detection.shadow_ai_status in ("stale", "archived"):
             detection.shadow_ai_status = "probable"

@@ -7,6 +7,7 @@ from shadai.config import get_config
 from shadai.database import get_postgres_session
 from shadai.models.user import UserORM
 from shadai.security.auth import csrf_token_for, hash_password
+from shadai.security.password_work import PasswordWork
 
 PASSWORD = "correct-horse-battery-staple"
 
@@ -28,11 +29,14 @@ async def console(identity_sessions, monkeypatch):
     monkeypatch.setattr("shadai.security.auth.get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr("shadai.api.auth.get_redis", AsyncMock(return_value=redis))
     app.dependency_overrides[get_postgres_session] = database
+    passwords = PasswordWork()
+    monkeypatch.setattr(app.state, "password_work", passwords, raising=False)
     transport = httpx.ASGITransport(app)
     try:
         yield app, transport, redis
     finally:
         app.dependency_overrides.clear()
+        await passwords.aclose()
 
 
 def client(transport, base_url="https://console.example.test"):

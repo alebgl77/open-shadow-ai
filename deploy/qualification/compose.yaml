@@ -28,7 +28,7 @@ x-runtime: &runtime
     - '${SHADAI_QUAL_REPO:?}/catalog:/app/catalog:ro'
 services:
   node-exporter:
-    image: shadai/node-exporter:1.12.1-maintained.2
+    image: shadai/node-exporter:1.12.1-maintained.3
     pull_policy: build
     build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: deploy/service-builds/Dockerfile.node-exporter}
     profiles: [tools]
@@ -41,7 +41,7 @@ services:
     command: [--path.procfs=/host/proc, --path.sysfs=/host/sys, --path.rootfs=/host/root, --collector.disable-defaults, --collector.meminfo, --collector.filesystem, '--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker|var/lib/containers)($|/)']
     volumes: [/proc:/host/proc:ro, /sys:/host/sys:ro, '/:/host/root:ro,rslave']
   postgres:
-    image: shadai/postgres:16.15-maintained.2
+    image: shadai/postgres:16.15-maintained.3
     pull_policy: build
     build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: deploy/service-builds/Dockerfile.postgres}
     labels: *labels
@@ -51,7 +51,7 @@ services:
     networks: [lab]
     healthcheck: {test: [CMD-SHELL, 'pg_isready -U shadai -d shadai'], interval: 2s, timeout: 2s, retries: 60}
   clickhouse:
-    image: shadai/clickhouse:25.8.33.6-maintained.2
+    image: shadai/clickhouse:25.8.33.6-maintained.3
     pull_policy: build
     build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: deploy/service-builds/Dockerfile.clickhouse}
     labels: *labels
@@ -66,7 +66,7 @@ services:
     ulimits: {nofile: {soft: 262144, hard: 262144}}
     healthcheck: {test: [CMD-SHELL, 'clickhouse-client --user shadai --password "$$(cat /run/secrets/ch_password)" --query "SELECT 1"'], interval: 2s, timeout: 3s, retries: 60}
   redis:
-    image: shadai/redis:7.4.11-maintained.2
+    image: shadai/redis:7.4.11-maintained.3
     pull_policy: build
     build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: deploy/service-builds/Dockerfile.redis}
     labels: *labels
@@ -76,7 +76,7 @@ services:
     command: [sh, -c, 'exec redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction --requirepass "$$(cat /run/secrets/redis_password)"']
     healthcheck: {test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping'], interval: 2s, timeout: 2s, retries: 60}
   labredis-pressure:
-    image: shadai/redis:7.4.11-maintained.2
+    image: shadai/redis:7.4.11-maintained.3
     pull_policy: build
     build: {context: '${SHADAI_QUAL_REPO:?}', dockerfile: deploy/service-builds/Dockerfile.redis}
     labels: {com.shadai.qualification.run: '${SHADAI_QUAL_RUN:?}', com.shadai.qualification.role: pressure}

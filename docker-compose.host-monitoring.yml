@@ -1,6 +1,6 @@
 services:
   node-exporter:
-    image: shadai/node-exporter:1.12.1-maintained.2
+    image: shadai/node-exporter:1.12.1-maintained.3
     pull_policy: build
     build: {context: ., dockerfile: deploy/service-builds/Dockerfile.node-exporter}
     user: '65534:65534'
@@ -21,7 +21,7 @@ services:
       - /:/host/root:ro,rslave
     networks: [host-monitoring]
   host-prometheus:
-    image: shadai/prometheus:3.15.0-maintained.2
+    image: shadai/prometheus:3.15.0-maintained.3
     pull_policy: build
     build: {context: ., dockerfile: deploy/service-builds/Dockerfile.prometheus}
     user: '65534:65534'
