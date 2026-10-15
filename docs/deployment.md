@@ -44,7 +44,9 @@ The bundled nginx replaces `X-Forwarded-For` with its TCP peer address. Uvicorn 
 
 If another TLS proxy is placed ahead of nginx, its TCP address is the default client identity. To preserve distinct clients, explicitly configure nginx's `set_real_ip_from` for only that upstream proxy's exact private address, plus `real_ip_header X-Forwarded-For`; require the upstream to overwrite incoming client-address headers and restrict frontend ingress to that proxy. Review this host-specific configuration before publication. Without it, clients behind the upstream share one login limit. Docker/host NAT that already hides source addresses has the same limitation; proxy headers from arbitrary clients are never a safe substitute.
 
-Use an exact `CORS_ORIGINS` JSON array only when clients need cross-origin access. The bundled frontend uses same-origin requests and keeps the console session in an HttpOnly, SameSite=Strict cookie, so a reload no longer signs users out. The cookie is Secure and `__Host-` prefixed on every host except `localhost`; serve remote access over HTTPS, or set `SESSION_COOKIE_SECURE` (`true`, `false` or `auto`) when the reverse proxy changes the host name. Endpoint agents and the AD uploader require HTTPS and validate certificates. Supply `SHADAI_CA_BUNDLE` for a private CA; never disable validation.
+Use an exact `CORS_ORIGINS` JSON array only when clients need cross-origin access. The bundled frontend uses same-origin requests and keeps the console session in an HttpOnly, SameSite=Strict cookie, so a reload no longer signs users out. With `SESSION_COOKIE_SECURE=auto` (the default), the cookie is Secure and `__Host-` prefixed except on `localhost`, `127.0.0.1`, `::1`, `[::1]` and hosts ending in `.localhost`. An explicit `SESSION_COOKIE_SECURE=true` or `false` takes precedence over that host check. Serve remote access over HTTPS and verify the setting against the actual public origin.
+
+Endpoint agents and the AD uploader require HTTPS and validate certificates. For a private CA, set `SHADAI_CA_BUNDLE` on the endpoint agent or use `--ca-file` for the network collector. The AD uploader (`scripts/Export-ActiveDirectory.ps1`) uses `Invoke-RestMethod` and the platform trust store; provision the private CA there through your approved platform process before uploading. It does not read `SHADAI_CA_BUNDLE`. Never disable certificate or hostname validation.
 
 Compose keeps its stores on the private project network. When the API and workers reach an external ClickHouse, enable native TLS with `CLICKHOUSE_SECURE=true` (port 9440 unless `CLICKHOUSE_PORT` is set). Certificate and hostname verification are always on; `CLICKHOUSE_CA_CERTS`, `CLICKHOUSE_CERTFILE`/`CLICKHOUSE_KEYFILE` and `CLICKHOUSE_SERVER_HOSTNAME` cover a private CA, mutual TLS and a certificate name that differs from the host. The same keys exist under `database:` in `shadai.yaml`. PostgreSQL and Redis take TLS through `DATABASE_URL` and a `rediss://` `REDIS_URL`.
 
@@ -64,18 +66,20 @@ Collector hardening adds PostgreSQL migrations `004` (scoped registry/credential
 
 The extension inventory adds PostgreSQL migration `006` (`006_extension_inventory`, chained after `005`), which creates `extension_inventory` (the current state of every browser extension installation per host, user, browser and profile, keyed by pseudonymous digests) and `extension_version_changes` (one row per observed version change). It only creates tables and indexes, performs no data transformation and is idempotent to re-run through Alembic; `init-db` applies it with the rest of the chain. Run it before starting the new ingest workers and API, which write to and read from these tables. Both tables hold identity-bearing rows bounded by `retention.identity_days` and are rebuilt from the agents' next inventory snapshots, so the downgrade drops them without preserving data.
 
+The Bash commands below set `MSYS2_ARG_CONV_EXCL='*'` only on Docker calls that pass container paths. This prevents [Git Bash/MSYS2 argument conversion](https://www.msys2.org/docs/filesystem-paths/) when invoking native Windows Docker; Linux and WSL receive the same Docker arguments. Keep the prefix scoped to those calls.
+
 ```bash
 set -e
 docker compose build
 # Stop writers; start only stores, without waiting for the new ClickHouse schema probe.
 docker compose stop api frontend ingest-worker correlation-worker purge-worker
 docker compose up -d postgres clickhouse redis
-docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --multiquery' < migrations/clickhouse/002_event_metadata.sql
-docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --multiquery' < migrations/clickhouse/003_extension_inventory.sql
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --multiquery' < migrations/clickhouse/002_event_metadata.sql
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --multiquery' < migrations/clickhouse/003_extension_inventory.sql
 # --no-deps avoids starting an API dependency graph before the migrations have completed.
 docker compose run --rm --no-deps api python -m shadai.cli init-db
 docker compose up -d
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 ```
 
@@ -94,19 +98,22 @@ umask 077
 mkdir -p backups
 docker compose stop api frontend ingest-worker correlation-worker purge-worker
 docker compose exec -T postgres pg_dump -U shadai -d shadai -Fc > backups/postgres.dump
-docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --query "SELECT * FROM shadai.events FORMAT Native"' > backups/events.native
-docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli SAVE'
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --query "SELECT * FROM shadai.events FORMAT Native"' > backups/events.native
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli SAVE'
 ```
 
 Preserve the three store volumes and optional `syslog_spool` through the platform's volume backup mechanism, plus private endpoint/network spool snapshots, restricted copies of `config/`, `secrets/` and the deployment commit. Stop each client before snapshotting SQLite. Retain matching encryption keys for encrypted credentials and the pseudonym basis; local spool snapshots still contain plaintext metadata. Encrypt backups, restrict access and test recovery. A Redis volume snapshot preserves queue/pending state subject to actual AOF/flush settings; PostgreSQL and event exports alone do not. Backups are not automatically scrubbed by privacy activation or historical cleanup.
 
-For a restore drill, create an isolated project with empty stores and the same application version; do not restore over a live installation. Start only its stores, then import the exports (fresh schema initialization has already created ClickHouse tables):
+For a restore drill, create an isolated project with empty stores and the same application version; do not restore over a live installation. Start only its stores and wait for their Compose healthchecks before importing the exports:
 
 ```bash
-docker compose -p osa-restore-drill up -d postgres clickhouse redis
+set -e
+docker compose -p osa-restore-drill up -d --wait --wait-timeout 180 postgres clickhouse redis
 docker compose -p osa-restore-drill exec -T postgres pg_restore -U shadai -d shadai --no-owner < backups/postgres.dump
-docker compose -p osa-restore-drill exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --query "INSERT INTO shadai.events FORMAT Native"' < backups/events.native
+MSYS2_ARG_CONV_EXCL='*' docker compose -p osa-restore-drill exec -T clickhouse sh -c 'clickhouse-client --user shadai --password "$(cat /run/secrets/ch_password)" --query "INSERT INTO shadai.events FORMAT Native"' < backups/events.native
 ```
+
+On empty volumes, initialization creates the ClickHouse tables. The wait checks PostgreSQL accepting TCP connections with `pg_isready`, an authenticated ClickHouse query selecting the newest `browser_profile` column, and authenticated Redis `PING`. These startup checks do not establish a successful restoration; complete the post-restore validation below.
 
 Run the drill from a separate checkout with restored private configuration/secrets and an unused `SHADAI_EDGE_SUBNET` plus matching frontend/API addresses; also choose unused host API/UI ports before starting its applications. Keep `-p osa-restore-drill` on **every** restore/start/cleanup command. Confirm that project's stores are empty before importing; project naming does not make repeated imports safe. Restore Redis from its stopped volume backup using your volume platform, or deliberately start a new queue and document the discarded in-flight interval. Do not blindly replay old events into a populated store. Restore keys/config, start the application, check readiness, log in, compare event/detection counts and verify a synthetic event end to end. Logical exports are not a guarantee of exactly-once recovery.
 
