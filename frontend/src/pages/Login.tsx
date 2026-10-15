@@ -22,7 +22,13 @@ export default function Login() {
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setError(''); setLoading(true)
     try { const res = await apiLogin(username, password); auth.login(res.csrf_token, res.user); navigate('/dashboard') }
-    catch (error) { setError(axios.isAxiosError(error) && error.response?.status === 401 ? 'The username or password is incorrect.' : 'Unable to reach your workspace. Check the service connection and try again.') }
+    catch (error) {
+      const response = axios.isAxiosError(error) ? error.response : undefined
+      if (response?.status === 401) setError('The username or password is incorrect.')
+      else if (response?.status === 429 && response.data?.detail === 'Password service is busy') setError('Password service is busy')
+      else if (response?.status === 503 && response.data?.detail === 'Password service is unavailable') setError('Password service is unavailable')
+      else setError('Unable to reach your workspace. Check the service connection and try again.')
+    }
     finally { setLoading(false) }
   }
   async function demo() { const { resetDemo } = await import('@/api/demo'); resetDemo(); auth.enterDemo(); navigate('/dashboard') }

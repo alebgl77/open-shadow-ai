@@ -10,6 +10,7 @@ import client from './client'
 import { exchangeSsoSession, parseAuthProviders, SSO_FAILURE_MESSAGE, SSO_LOGIN_PATH, type LoginResponse } from './auth'
 import { queryClient } from './query-client'
 import { useAuthStore } from '@/stores/auth'
+import { createI18n, LOCALE_STORAGE_KEY, LocaleProvider, type Locale } from '@/i18n'
 
 const provider = { local_enabled: true, sso: { enabled: true, label: 'Company identity', login_url: SSO_LOGIN_PATH } }
 const disabled = { local_enabled: true, sso: { enabled: false, label: 'Single sign-on', login_url: SSO_LOGIN_PATH } }
@@ -24,10 +25,11 @@ function LocationProbe() {
   const location = useLocation()
   return <output data-testid="route">{location.pathname}{location.search}{location.hash}</output>
 }
-function renderAuth(path: string) {
-  return render(<StrictMode><QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[path]}><Routes><Route path="/login" element={<Login/>}/><Route path="/auth/callback" element={<SsoCallback/>}/><Route path="/dashboard" element={<p>Workspace ready</p>}/></Routes><LocationProbe/></MemoryRouter></QueryClientProvider></StrictMode>)
+function renderAuth(path: string, locale?: Locale) {
+  const content = <QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[path]}><Routes><Route path="/login" element={<Login/>}/><Route path="/auth/callback" element={<SsoCallback/>}/><Route path="/dashboard" element={<p>Workspace ready</p>}/></Routes><LocationProbe/></MemoryRouter></QueryClientProvider>
+  return render(<StrictMode>{locale ? <LocaleProvider>{content}</LocaleProvider> : content}</StrictMode>)
 }
-beforeEach(() => { useAuthStore.getState().logout(); queryClient.clear() })
+beforeEach(() => { localStorage.clear(); useAuthStore.getState().logout(); queryClient.clear() })
 afterEach(() => { cleanup(); useAuthStore.getState().logout(); queryClient.clear(); vi.restoreAllMocks() })
 
 describe('SSO provider discovery', () => {
@@ -134,6 +136,38 @@ describe('one-use SSO callback', () => {
 })
 
 describe('existing sign-in paths', () => {
+  it.each([
+    ['en', 429, 'Password service is busy', 'Sign-in is busy. Try again shortly.'],
+    ['en', 503, 'Password service is unavailable', 'Sign-in is temporarily unavailable. Try again shortly.'],
+    ['fr', 429, 'Password service is busy', 'Le service de connexion est occupé. Réessayez dans un instant.'],
+    ['fr', 503, 'Password service is unavailable', 'Le service de connexion est temporairement indisponible. Réessayez dans un instant.'],
+    ['zh-CN', 429, 'Password service is busy', '登录服务繁忙。请稍后重试。'],
+    ['zh-CN', 503, 'Password service is unavailable', '登录服务暂时不可用。请稍后重试。'],
+  ] as const)('localizes the known password service response in %s (%s)', async (locale, status, detail, expected) => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, locale)
+    vi.spyOn(client,'get').mockResolvedValue({data:disabled})
+    vi.spyOn(client,'post').mockRejectedValue({isAxiosError:true,response:{status,data:{detail}}})
+    const { tr } = createI18n(locale)
+    renderAuth('/login', locale)
+    fireEvent.change(screen.getByLabelText(tr('Username')),{target:{value:'local-admin'}})
+    fireEvent.change(screen.getByLabelText(tr('Password')),{target:{value:'local-password'}})
+    fireEvent.click(screen.getByRole('button',{name:tr('Sign in to workspace')}))
+    expect((await screen.findByRole('alert')).textContent).toBe(expected)
+    expect(useAuthStore.getState().isAuthenticated).toBe(false)
+  })
+  it.each([
+    [429, 'Private remote failure'], [503, 'Private remote failure'],
+    [503, 'Password service is busy'], [429, 'Password service is unavailable'],
+    [429, 'Too many login attempts'],
+  ])('keeps unrecognized password response %s generic without reflecting server details', async (status, detail) => {
+    vi.spyOn(client,'get').mockResolvedValue({data:disabled})
+    vi.spyOn(client,'post').mockRejectedValue({isAxiosError:true,response:{status,data:{detail}}})
+    renderAuth('/login')
+    fireEvent.change(screen.getByLabelText('Username'),{target:{value:'local-admin'}})
+    fireEvent.change(screen.getByLabelText('Password'),{target:{value:'local-password'}})
+    fireEvent.click(screen.getByRole('button',{name:'Sign in to workspace'}))
+    expect((await screen.findByRole('alert')).textContent).toBe('Unable to reach your workspace. Check the service connection and try again.')
+  })
   it('still signs in with a local account', async () => {
     vi.spyOn(client,'get').mockResolvedValue({data:disabled})
     const post=vi.spyOn(client,'post').mockResolvedValue({data:session})

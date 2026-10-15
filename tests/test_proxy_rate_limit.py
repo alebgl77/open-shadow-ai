@@ -18,6 +18,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from shadai.api import auth
 from shadai.database import get_postgres_session
+from shadai.security.password_work import PasswordWork
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,7 +37,7 @@ def proxy_config():
 
 
 @pytest.fixture
-def login_app(monkeypatch, proxy_config):
+async def login_app(monkeypatch, proxy_config):
     app = FastAPI()
     app.include_router(auth.router)
     counters = Counter()
@@ -54,7 +55,12 @@ def login_app(monkeypatch, proxy_config):
         yield session
 
     app.dependency_overrides[get_postgres_session] = database
-    return ProxyHeadersMiddleware(app, trusted_hosts=[proxy_config.frontend_ip]), counters
+    passwords = PasswordWork()
+    app.state.password_work = passwords
+    try:
+        yield ProxyHeadersMiddleware(app, trusted_hosts=[proxy_config.frontend_ip]), counters
+    finally:
+        await passwords.aclose()
 
 
 class BundledProxy:

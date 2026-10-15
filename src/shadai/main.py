@@ -32,6 +32,7 @@ from shadai.api.sso import router as sso_router
 from shadai.config import get_config, validate_security
 from shadai.database import close_all, init_clickhouse, init_postgres, init_redis
 from shadai.security.crypto import init_crypto
+from shadai.security.password_work import PasswordWork
 from shadai.security.scim import SCIMError
 from shadai.utils.logging import setup_logging
 from shadai.utils.metrics import operational_metrics
@@ -46,6 +47,8 @@ async def lifespan(app: FastAPI):
     config = get_config()
     setup_logging(config.server.log_level)
     validate_security(config)
+    passwords = PasswordWork()
+    app.state.password_work = passwords
     try:
         await init_postgres(config.database)
         init_clickhouse(config.database)
@@ -58,7 +61,11 @@ async def lifespan(app: FastAPI):
             await sync_catalog(session, config.catalog)
         yield
     finally:
-        await close_all()
+        try:
+            await passwords.aclose()
+        finally:
+            app.state.password_work = None
+            await close_all()
 
 
 app = FastAPI(

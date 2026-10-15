@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -21,14 +23,26 @@ from shadai.security.auth import (
     decode_access_token,
     effective_roles,
     get_current_user,
-    hash_password,
     request_token,
     set_session_cookie,
-    verify_password,
 )
+from shadai.security.password_work import DUMMY_HASH, PasswordWork, PasswordWorkBusyError, PasswordWorkUnavailableError
 from shadai.security.rbac import require_role
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+
+@contextmanager
+def _password_work(request: Request) -> Iterator[PasswordWork]:
+    service = getattr(request.app.state, "password_work", None)
+    try:
+        if service is None:
+            raise PasswordWorkUnavailableError()
+        yield service
+    except PasswordWorkBusyError:
+        raise HTTPException(429, "Password service is busy", headers={"Retry-After": "1"}) from None
+    except PasswordWorkUnavailableError:
+        raise HTTPException(503, "Password service is unavailable", headers={"Retry-After": "1"}) from None
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -51,7 +65,10 @@ async def login(
     result = await session.execute(select(UserORM).where(UserORM.username_key == body.username.strip().casefold()))
     user = result.scalar_one_or_none()
 
-    if user is None or user.identity_kind != "local" or not verify_password(body.password, user.password_hash):
+    local = user is not None and user.identity_kind == "local"
+    with _password_work(request) as passwords:
+        matched = await passwords.verify(body.password, user.password_hash if local else DUMMY_HASH)
+    if not local or not matched:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -150,10 +167,12 @@ async def create_user(
     admin: UserORM = Depends(require_role("admin")),
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
+    with _password_work(request) as passwords:
+        password_hash = await passwords.hash(body.password)
     user = UserORM(
         username=body.username,
         email=body.email,
-        password_hash=hash_password(body.password),
+        password_hash=password_hash,
         role=body.role,
     )
     session.add(user)

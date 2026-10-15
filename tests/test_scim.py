@@ -12,6 +12,7 @@ from shadai.database import get_postgres_session
 from shadai.models.audit import AuditLogORM
 from shadai.models.user import UserORM
 from shadai.security.auth import create_access_token, hash_password
+from shadai.security.password_work import PasswordWork
 from shadai.security.scim import PATCH_SCHEMA, PREFIX, USER_SCHEMA, SCIMError, filter_condition, normalize_user
 
 
@@ -29,6 +30,8 @@ async def scim_client(identity_config, identity_sessions, monkeypatch):
     monkeypatch.setattr("shadai.security.auth.get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr("shadai.api.auth.get_redis", AsyncMock(return_value=redis))
     app.dependency_overrides[get_postgres_session] = database
+    passwords = PasswordWork()
+    monkeypatch.setattr(app.state, "password_work", passwords, raising=False)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app),
@@ -38,6 +41,7 @@ async def scim_client(identity_config, identity_sessions, monkeypatch):
             yield client
     finally:
         app.dependency_overrides.clear()
+        await passwords.aclose()
 
 
 def user_payload(name="alice", external_id="external-alice"):
