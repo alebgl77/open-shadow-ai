@@ -48,7 +48,7 @@ def bootstrap(destination: Path, dry_run: bool = False) -> None:
                 target.parent.chmod(0o700)
             # Exclusive creation makes reruns and concurrent invocations non-destructive.
             try:
-                with target.open("x", encoding="utf-8") as output:
+                with target.open("x", encoding="utf-8", newline="\n") as output:
                     output.write(generate() + "\n")
                 target.chmod(0o444)
             except FileExistsError:
