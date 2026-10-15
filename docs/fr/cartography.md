@@ -42,6 +42,33 @@ Au clavier, utilisez les boutons de source, de service et **Examiner la relation
 
 Le rendu est borné et effectué à la demande, sans animation au repos ni amortissement de caméra, y compris pour les utilisateurs préférant réduire les animations. Distance, taille des nœuds et position visuelle ne mesurent ni topologie réseau réelle, ni volume transféré, ni risque. Le graphe représente les preuves, pas le trajet des paquets.
 
+### Lire les deux radars réseau
+
+Les deux cartes radar indépendantes résument les relations réseau chargées pour la fenêtre temporelle et la requête de protocole actuelles, **avant** les filtres locaux de type de relation, de catégorie et de recherche et les bornes du dessin de 160 nœuds/320 liens. Les installations sont exclues ; elles restent des preuves de présence dans leur fenêtre de rétention indépendante.
+
+![Deux cartes radar en français montrant les parts par protocole et famille actuelle du catalogue à partir d'observations synthétiques de démonstration](../assets/cartography-radars.fr.png)
+
+Capture de l'application réelle, interface en français, données synthétiques de démonstration. Les parts portent uniquement sur les observations chargées.
+
+Chaque axe est pondéré par les observations, pas par le nombre de relations. Soit `R` l'ensemble des tuples exacts uniques (`source_ip`, `domain`, `catalog_match_id`, `protocol`) après la déduplication existante. Alors `D = Σ(r ∈ R) observations(r)`, `n(axis) = Σ(r ∈ axis) observations(r)` et `share(axis) = 100 × n(axis) / D`. Les deux radars utilisent la même échelle **0–100%**. Avec `D = 0`, le résumé est indisponible et aucun polygone n'est tracé ; avec `D > 0`, un axe absent vaut **0%**. La surface du polygone n'est ni un score agrégé ni une mesure d'activité, de risque ou de confiance de correspondance.
+
+Le radar des protocoles comporte exactement quatre axes : `DNS`, `TLS`, `QUIC` et `HTTP`. Le radar des familles du catalogue comporte six axes, selon les catégories **actuelles** du catalogue chargé :
+
+| Axe de famille du catalogue | Relations incluses |
+|---|---|
+| Conversation, rédaction et recherche | `llm_chat`, `writing_assistant`, `translation_ai`, `search_ai` |
+| Code et automatisation | `code_assistant`, `agent_automation` |
+| Médias et design | `image_gen`, `voice_ai`, `video_ai`, `design_ai` |
+| Autre catégorie disponible | Toute autre catégorie non vide, notamment plateformes, données, catégories personnalisées et `saas_app` de la démonstration |
+| Catégorie indisponible | `catalog_match_id` non nul dont l'entrée n'est pas chargée ou dont la catégorie est vide |
+| Aucune association au catalogue | `catalog_match_id` nul ou absent |
+
+Une entrée de catalogue introuvable n'est pas une absence d'association. Les catégories restent libres ; le regroupement ne les renomme pas et ne déduit pas une famille d'une marque ou d'un nom de service. Les catégories actuelles ne reconstituent pas la classification historique. Une association au catalogue ne prouve ni usage, activité, modèle ou identité, ni risque ou confiance. Si le chargement du catalogue échoue, le radar des familles est indisponible au lieu d'être rempli de zéros synthétiques ; celui des protocoles reste utilisable lorsque les relations réseau sont valides. Une erreur réseau ne substitue pas un autre jeu de données.
+
+Comparez le dénominateur chargé calculé et affiché `D` avec `total_observations` pour la fenêtre demandée et l'avertissement `truncated` ; vérifiez aussi la couverture du catalogue, limitée à **500 entrées**. Les **500 premiers groupes de relations** du serveur sont un échantillon chargé, pas un échantillon représentatif de toute la fenêtre. N'extrapolez pas leurs parts aux observations omises. Les filtres locaux du graphe et les bornes du dessin ne changent pas ce dénominateur.
+
+Sélectionnez le bouton natif de légende d'un axe, à la souris ou au clavier, pour lister les relations chargées correspondantes avec leurs comptes et détails. Sélectionner un axe ne modifie pas les filtres du graphe et ne recalcule pas le dénominateur. Toute relation listée, même hors des bornes du dessin, peut être examinée avec les filtres exacts d'événements et leurs gardes existants. Son panneau de détail indique explicitement un **contexte isolé à une seule relation** : les voisins des nœuds sont limités à ce graphe isolé. Les requêtes d'événements par source ou service peuvent toujours inclure volontairement tous les protocoles, comme décrit ci-dessus. Un changement de fenêtre ou de protocole, une nouvelle réponse, une erreur ou un refus d'autorisation efface les détails de relation et d'événement ciblés. Les détails d'événement n'acquièrent ni nom de fichier source ni numéro de ligne.
+
 ## 4. Vérifier couverture et limites
 
 Le navigateur dessine au plus **160 nœuds et 320 liens**. Il lit au plus **500 relations réseau**, **300 lignes d'inventaire** sur trois pages et **500 entrées du catalogue** sur cinq pages. Les identifiants de catalogue non chargés restent littéraux, sans noms ni catégories inventés. Le serveur retourne les totaux exacts `total_relations` et `total_observations` dans le périmètre réseau demandé, compte le sous-ensemble renvoyé dans `represented_relations` et `represented_observations`, et signale explicitement la troncature avec `truncated`. Ces comptes de sous-ensemble API portent sur les lignes renvoyées avant filtres et bornes du dessin dans le navigateur. Les totaux peuvent dépasser le graphe affiché ; le dessin et la liste constituent un sous-ensemble borné. Examinez les avertissements de couverture de l'inventaire et du catalogue plutôt que de considérer une page ou un graphe tronqué comme un inventaire complet.

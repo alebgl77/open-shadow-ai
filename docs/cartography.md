@@ -42,6 +42,33 @@ Use the table's source, service and **Inspect relationship** buttons with the ke
 
 Rendering is bounded and runs on demand, without idle animation or camera damping, including for reduced-motion users. Layout distance, node size and visual position do not measure actual network topology, transfer volume or risk. The graph is a view of evidence, not a reconstruction of packet paths.
 
+### Read the two network radars
+
+The two independent radar cards summarize the loaded network relationships for the current time window and protocol query, **before** local relationship type, category and search filters and the 160-node/320-edge drawing caps. Installation evidence is excluded; it remains presence evidence within its independent retention window.
+
+![Two English radar cards showing protocol and current catalog family shares from synthetic demo observations](assets/cartography-radars.png)
+
+Actual application screenshot, English interface, synthetic demo data. The shares describe loaded observations only.
+
+Each axis is weighted by observations, not by the number of relationships. Let `R` contain the unique exact (`source_ip`, `domain`, `catalog_match_id`, `protocol`) tuples after the existing deduplication. Then `D = Σ(r ∈ R) observations(r)`, `n(axis) = Σ(r ∈ axis) observations(r)` and `share(axis) = 100 × n(axis) / D`. Both radars use the same **0–100%** scale. With `D = 0`, the summary is unavailable and no polygon is drawn; with `D > 0`, an absent axis is **0%**. Polygon area is neither an aggregate score nor a measure of activity, risk or matching confidence.
+
+The protocol radar has exactly four axes: `DNS`, `TLS`, `QUIC` and `HTTP`. The catalog family radar has six axes, using the **current** loaded catalog categories:
+
+| Catalog family axis | Included relationships |
+|---|---|
+| Conversation, writing and search | `llm_chat`, `writing_assistant`, `translation_ai`, `search_ai` |
+| Code and automation | `code_assistant`, `agent_automation` |
+| Media and design | `image_gen`, `voice_ai`, `video_ai`, `design_ai` |
+| Other available category | Every other nonempty category, including platforms, data, custom categories and the demo's `saas_app` |
+| Category unavailable | Non-null `catalog_match_id` whose entry is not loaded or whose category is empty |
+| No catalog association | Null or absent `catalog_match_id` |
+
+A missing catalog lookup is not an absent association. Categories remain free-form; the grouping does not rename them or infer a family from a brand or service name. Current categories do not reconstruct historical classification. Catalog association proves neither use, activity, model or identity, nor risk or confidence. If catalog loading fails, the family radar is unavailable rather than filled with synthetic zeroes; the protocol radar remains usable when network relationships are valid. A network error does not substitute another dataset.
+
+Compare the displayed computed loaded denominator `D` with the requested window's `total_observations` and `truncated` notice; also check catalog coverage, limited to **500 entries**. The server's top **500 relationship groups** are a loaded sample, not a representative sample of the full window. Do not extrapolate their shares to omitted observations. Local graph filters and drawing caps do not change this denominator.
+
+Select an axis's native legend button, with the mouse or keyboard, to list its matching loaded relationships with counts and details. Selecting an axis does not change graph filters or recalculate the denominator. Any listed relationship, including one outside the drawing caps, can be inspected through the existing guarded exact event filters. Its detail panel explicitly identifies an **isolated one-relationship context**: node neighbors are limited to that isolated graph. Source or service event queries can still intentionally include all protocols, as described above. A changed window or protocol, a new payload, an error or an authorization denial clears focused relationship and event details. Event details do not acquire a source filename or line number.
+
 ## 4. Check coverage and limits
 
 The browser draws at most **160 nodes and 320 edges**. It reads at most **500 network relationships**, **300 inventory rows** across three pages, and **500 catalog entries** across five pages. Unloaded catalog IDs stay literal; they do not receive invented names or categories. The server returns exact `total_relations` and `total_observations` for the requested network scope, counts the returned subset in `represented_relations` and `represented_observations`, and explicitly marks `truncated` relationships. These API subset counts describe returned rows before the browser's filters and drawing caps. Totals can exceed the displayed graph; the canvas and list are a bounded subset. Review inventory and catalog coverage notices rather than treating one page or a truncated graph as a complete inventory.

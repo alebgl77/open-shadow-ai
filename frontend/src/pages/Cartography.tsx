@@ -5,9 +5,11 @@ import { Link } from 'react-router-dom'
 import { Box, ChevronLeft, Info, Network, Search, Shield, X } from 'lucide-react'
 import { useI18n } from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
-import { NETWORK_NOTICE, NETWORK_PROTOCOLS, getNetworkEvent, getNetworkEvents, networkEndpoint, type NetworkFilters, type NetworkProtocol } from '@/api/network'
+import { NETWORK_NOTICE, NETWORK_PROTOCOLS, getNetworkEvent, getNetworkEvents, networkEndpoint, type NetworkFilters, type NetworkProtocol, type NetworkRelation, type NetworkRelations } from '@/api/network'
 import { buildGraph, neighbors, type Graph, type GraphNode, type Selection } from '@/components/cartography/model'
 import { loadCatalog, loadCatalogItem, loadInventory, loadRelations } from '@/components/cartography/data'
+import Radars from '@/components/cartography/Radars'
+import { buildRadars, relationKey, type RadarSelection } from '@/components/cartography/radar'
 import ErrorAlert from '@/components/ui/ErrorAlert'
 import type { MessageKey } from '@/i18n/messages'
 import '@/components/cartography/cartography.css'
@@ -16,6 +18,8 @@ const Scene = lazy(() => import('@/components/cartography/Scene'))
 const PAGE_SIZE = 20
 const statusOf = (error: unknown) => isAxiosError(error) ? error.response?.status : undefined
 const INSTALL_LABELS: Record<string, MessageKey> = { store: 'Store', user: 'User-installed', unpacked: 'Unpacked', external: 'External installer', policy: 'Policy', component: 'Browser component', orphan: 'Orphan', unknown: 'Unknown source', '': 'Source not reported' }
+type RadarOrigin = { axis: RadarSelection; network: NetworkRelations; revision: number; hours: number; protocol: NetworkProtocol | undefined; catalogRevision: number }
+type RadarFocus = { row: NetworkRelation; selection: NonNullable<Selection>; trigger: HTMLButtonElement }
 
 export default function Cartography() {
   const { mode, session, user, isAuthenticated, cartographyDeniedSession } = useAuthStore()
@@ -32,6 +36,7 @@ function CartographyWorkspace({ scope }: { scope: readonly [string, number, stri
   const [kind, setKind] = useState<'all' | 'network' | 'installation'>('all'), [category, setCategory] = useState(''), [search, setSearch] = useState('')
   const [view, setView] = useState<'3d' | '2d'>('3d'), [unavailable, setUnavailable] = useState(false)
   const [selection, setSelection] = useState<Selection>(null), [closed, setClosed] = useState(false), [denied, setDenied] = useState(false)
+  const [radarOrigin, setRadarOrigin] = useState<RadarOrigin | null>(null), [radarFocus, setRadarFocus] = useState<RadarFocus | null>(null)
   const deniedRef = useRef(false), mounted = useRef(true)
   const prefix = useMemo(() => ['cartography', ...scope], [scope[0], scope[1], scope[2]]) // Session identity is deliberately part of every key.
   const guard = useCallback(async <T,>(read: () => Promise<T>): Promise<T> => {
@@ -51,21 +56,49 @@ function CartographyWorkspace({ scope }: { scope: readonly [string, number, stri
   }, [queries, prefix])
   useEffect(() => {
     if (!denied) return
-    setSelection(null); void queries.cancelQueries({ queryKey: prefix }).then(() => queries.removeQueries({ queryKey: prefix }))
+    setSelection(null); setRadarOrigin(null); setRadarFocus(null); void queries.cancelQueries({ queryKey: prefix }).then(() => queries.removeQueries({ queryKey: prefix }))
   }, [denied, queries, prefix])
   const network = useQuery({ queryKey: [...prefix, 'relations', hours, protocol], queryFn: ({ signal }) => guard(() => loadRelations(hours, protocol, signal)), enabled: !denied, retry: false })
   const inventory = useQuery({ queryKey: [...prefix, 'inventory'], queryFn: ({ signal }) => guard(() => loadInventory(signal)), enabled: !denied, retry: false })
   const catalog = useQuery({ queryKey: [...prefix, 'catalog'], queryFn: ({ signal }) => guard(() => loadCatalog(signal)), enabled: !denied, retry: false })
+  const networkRevision = queries.getQueryState([...prefix, 'relations', hours, protocol])?.dataUpdateCount || 0
+  const catalogRevision = queries.getQueryState([...prefix, 'catalog'])?.dataUpdateCount || 0
+  const radars = useMemo(() => buildRadars(network.isError || denied ? undefined : network.data, catalog.isSuccess && !denied ? catalog.data.items : undefined), [network.data, network.isError, catalog.data, catalog.isSuccess, denied])
+  // Bind radar-origin evidence to this successful payload; refetch/error/new query invalidates it synchronously.
+  const radarAxis = radarOrigin && !denied && !network.isError && !network.isFetching && radarOrigin.network === network.data && radarOrigin.revision === networkRevision && radarOrigin.hours === hours && radarOrigin.protocol === protocol &&
+    (radarOrigin.axis.chart === 'protocols' || (catalog.isSuccess && !catalog.isFetching && radarOrigin.catalogRevision === catalogRevision)) ? radarOrigin.axis : null
+  const focusedGraph = useMemo(() => radarAxis && radarFocus && network.data ? buildGraph({ ...network.data, items: [radarFocus.row] }, [], catalog.isSuccess ? catalog.data.items : [], { kind: 'all', category: '', search: '' }) : null, [radarAxis, radarFocus, network.data, catalog.data, catalog.isSuccess])
   const graph = useMemo(() => buildGraph(network.isError || denied ? undefined : network.data, inventory.isError || denied ? [] : inventory.data?.items || [], catalog.isError || denied ? [] : catalog.data?.items || [], { kind, category, search }), [network.data, network.isError, inventory.data, inventory.isError, catalog.data, catalog.isError, kind, category, search, denied])
   const nodeLabel = useCallback((node: GraphNode) => node.label || (node.kind === 'ip' ? tr('Source address not observed') : node.kind === 'host' ? tr('Host label not reported') : tr('Hostname not observed')), [tr])
   const labels = useMemo(() => new Map(graph.nodes.map(node => [node.id, nodeLabel(node)])), [graph, nodeLabel])
-  const choose = (value: Selection) => { setClosed(false); setSelection(value) }
+  const focusedLabels = useMemo(() => new Map(focusedGraph?.nodes.map(node => [node.id, nodeLabel(node)])), [focusedGraph, nodeLabel])
+  const choose = (value: Selection) => { setRadarOrigin(null); setRadarFocus(null); setClosed(false); setSelection(value) }
   const resetSelection = () => { setSelection(null); setClosed(false) }
+  const closeRadar = () => { setRadarOrigin(null); setRadarFocus(null) }
+  const chooseAxis = (axis: RadarSelection) => {
+    if (!network.data || network.isError || network.isFetching || denied) return
+    setSelection(null); setClosed(true); setRadarFocus(null)
+    setRadarOrigin({ axis, network: network.data, revision: networkRevision, hours, protocol, catalogRevision })
+  }
+  const inspectRadar = (row: NetworkRelation, trigger: HTMLButtonElement) => {
+    if (!radarAxis) return
+    const isolated = buildGraph({ ...network.data!, items: [row] }, [], catalog.isSuccess ? catalog.data.items : [], { kind: 'all', category: '', search: '' })
+    if (isolated.edges[0]) setRadarFocus({ row, selection: { kind: 'edge', id: isolated.edges[0].id }, trigger })
+  }
+  const closeRadarFocus = () => {
+    setRadarFocus(null)
+    const auth = useAuthStore.getState(), current = queries.getQueryState([...prefix, 'relations', hours, protocol])
+    const currentCatalog = queries.getQueryState([...prefix, 'catalog'])
+    if (radarOrigin && radarAxis && radarFocus?.trigger.isConnected && !deniedRef.current && auth.cartographyDeniedSession !== scope[1] && auth.isAuthenticated && auth.mode === scope[0] && auth.session === scope[1] && auth.user?.role === scope[2] &&
+      current?.status === 'success' && current.fetchStatus !== 'fetching' && current.dataUpdateCount === radarOrigin.revision &&
+      (radarAxis.chart === 'protocols' || (currentCatalog?.status === 'success' && currentCatalog.fetchStatus !== 'fetching' && currentCatalog.dataUpdateCount === radarOrigin.catalogRevision))) radarFocus.trigger.focus()
+  }
+  useEffect(() => { if (radarOrigin && !radarAxis) { setRadarOrigin(null); setRadarFocus(null) } }, [radarOrigin, radarAxis])
   useEffect(() => {
-    if (denied || closed) return
+    if (denied || closed || radarAxis) return
     const exists = selection?.kind === 'node' ? graph.nodes.some(node => node.id === selection.id) : graph.edges.some(edge => edge.id === selection?.id)
     if (!exists) setSelection(graph.edges.length ? { kind: 'edge', id: graph.edges[0].id } : null)
-  }, [graph, selection, closed, denied])
+  }, [graph, selection, closed, denied, radarAxis])
   const categories = [...new Set(catalog.data?.items.map(item => item.category) || [])].sort()
   const onUnavailable = useCallback(() => { setUnavailable(true); setView('2d') }, [])
   const pending = network.isPending || inventory.isPending
@@ -73,8 +106,8 @@ function CartographyWorkspace({ scope }: { scope: readonly [string, number, stri
   return <div className="cartography">
     <header className="cart-heading"><div><p className="eyebrow">{tr('Evidence topology')}</p><h1 className="page-heading">{tr('AI cartography')}</h1><p className="page-description">{tr('Explore observed connections and reported installations. Follow each relationship back to its evidence.')}</p></div><div className="cart-mode" role="group" aria-label={tr('Cartography display')}><button aria-pressed={view === '3d'} onClick={() => { setUnavailable(false); setView('3d') }}><Box size={15}/>3D</button><button aria-pressed={view === '2d'} onClick={() => setView('2d')}><Network size={15}/>{tr('List view')}</button></div></header>
     <div className="cart-toolbar">
-      <label>{tr('Observation window')}<select className="field" value={hours} onChange={event => { setHours(Number(event.target.value)); resetSelection() }}>{[24, 168].map(value => <option key={value} value={value}>{tr('Last {hours} hours', { hours: formatNumber(value) })}</option>)}</select></label>
-      <label>{tr('Protocol')}<select className="field" value={protocol || ''} onChange={event => { setProtocol(event.target.value as NetworkProtocol || undefined); resetSelection() }}><option value="">{tr('All protocols')}</option>{NETWORK_PROTOCOLS.map(value => <option key={value}>{value}</option>)}</select></label>
+      <label>{tr('Observation window')}<select className="field" value={hours} onChange={event => { setHours(Number(event.target.value)); closeRadar(); resetSelection() }}>{[24, 168].map(value => <option key={value} value={value}>{tr('Last {hours} hours', { hours: formatNumber(value) })}</option>)}</select></label>
+      <label>{tr('Protocol')}<select className="field" value={protocol || ''} onChange={event => { setProtocol(event.target.value as NetworkProtocol || undefined); closeRadar(); resetSelection() }}><option value="">{tr('All protocols')}</option>{NETWORK_PROTOCOLS.map(value => <option key={value}>{value}</option>)}</select></label>
       <label>{tr('Relationship type')}<select className="field" value={kind} onChange={event => { setKind(event.target.value as typeof kind); resetSelection() }}><option value="all">{tr('All relationships')}</option><option value="network">{tr('Network observation')}</option><option value="installation">{tr('Reported installation')}</option></select></label>
       <label>{tr('Category')}<select className="field" value={category} onChange={event => { setCategory(event.target.value); resetSelection() }}><option value="">{tr('All categories')}</option>{categories.map(value => <option key={value} value={value}>{enumLabel(value)}</option>)}</select></label>
       <label className="cart-search">{tr('Search the graph')}<span><Search size={15}/><input className="field" type="search" value={search} onChange={event => { setSearch(event.target.value); resetSelection() }} placeholder={tr('IP, host label, service or hostname')} /></span></label>
@@ -94,6 +127,8 @@ function CartographyWorkspace({ scope }: { scope: readonly [string, number, stri
       </section>
       {selection && <Detail key={`${selection.kind}:${selection.id}:${hours}:${protocol || ''}`} graph={graph} selection={selection} labels={labels} hours={hours} prefix={prefix} guard={guard} choose={choose} close={() => { setSelection(null); setClosed(true) }} />}
     </div>
+    <Radars protocols={radars.protocols} families={radars.families} network={network.isError ? undefined : network.data} catalog={catalog.isSuccess ? catalog.data.items : undefined} catalogCapped={!!catalog.data?.capped} networkLoading={network.isPending} catalogLoading={catalog.isPending} selected={radarAxis} onSelect={chooseAxis} onClose={closeRadar} onInspect={inspectRadar} focusedKey={radarAxis && radarFocus ? relationKey(radarFocus.row) : undefined}
+      detail={radarAxis && radarFocus && focusedGraph && <Detail key={`radar:${relationKey(radarFocus.row)}:${radarFocus.selection.kind}:${radarFocus.selection.id}:${hours}:${protocol || ''}`} graph={focusedGraph} selection={radarFocus.selection} labels={focusedLabels} hours={hours} prefix={prefix} guard={guard} isolated choose={value => { if (value) setRadarFocus({ ...radarFocus, selection: value }) }} close={closeRadarFocus} />}/>
     {graph.omittedEdges > 0 && <p className="cart-note" role="status">{tr('Graph display is bounded to 160 nodes and 320 relationships.')} {tr('{count} loaded relationships omitted from the graph', { count: formatNumber(graph.omittedEdges) })}</p>}
     {(network.data?.truncated || inventory.data?.truncated) && <p className="cart-note" role="status">{network.data?.truncated && tr('Server relation limit reached.')}{' '}{inventory.data?.truncated && tr('Inventory page limit reached.')}{' '}{tr('Search, category and relationship filters apply to loaded evidence. Change the window or protocol to request another network selection.')}{' '}<Link to={`/network?hours=${hours}${protocol ? `&protocol=${protocol}` : ''}`} className="text-accent">{tr('Open network observations')}</Link>{' · '}<Link to="/extensions?view=inventory" className="text-accent">{tr('Open the complete inventory')}</Link></p>}
     <p className="cart-note">{network.data && !network.isError && tr('Server returned {represented} of {total} network relationships.', { represented: formatNumber(network.data.represented_relations), total: formatNumber(network.data.total_relations) })}{' '}{inventory.data && !inventory.isError && tr('Loaded {represented} of {total} retained installations.', { represented: formatNumber(inventory.data.items.length), total: formatNumber(inventory.data.total) })}{' '}{tr('Visible source groups: {ips} IP labels and {hosts} reported host labels.', { ips: formatNumber(graph.nodes.filter(node => node.kind === 'ip').length), hosts: formatNumber(graph.nodes.filter(node => node.kind === 'host').length) })}</p>
@@ -103,8 +138,9 @@ function CartographyWorkspace({ scope }: { scope: readonly [string, number, stri
 }
 
 type Guard = <T>(read: () => Promise<T>) => Promise<T>
-function Detail({ graph, selection, labels, hours, prefix, guard, choose, close }: { graph: Graph; selection: NonNullable<Selection>; labels: Map<string, string>; hours: number; prefix: unknown[]; guard: Guard; choose: (value: Selection) => void; close: () => void }) {
+function Detail({ graph, selection, labels, hours, prefix, guard, choose, close, isolated = false }: { graph: Graph; selection: NonNullable<Selection>; labels: Map<string, string>; hours: number; prefix: unknown[]; guard: Guard; choose: (value: Selection) => void; close: () => void; isolated?: boolean }) {
   const { tr, formatDate, formatNumber } = useI18n()
+  const panel = useRef<HTMLElement>(null)
   const [page, setPage] = useState(1), [eventId, setEventId] = useState<string | null>(null)
   const node = selection.kind === 'node' ? graph.nodes.find(item => item.id === selection.id) : undefined
   const edge = selection.kind === 'edge' ? graph.edges.find(item => item.id === selection.id) : undefined
@@ -125,10 +161,12 @@ function Detail({ graph, selection, labels, hours, prefix, guard, choose, close 
   const installSource = (value: string) => Object.hasOwn(INSTALL_LABELS, value) ? tr(INSTALL_LABELS[value]) : value
   const facts = (values: Array<[string, string | number]>) => <dl className="cart-facts">{values.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
   useEffect(() => { const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') { if (eventId) setEventId(null); else close() } }; window.addEventListener('keydown', escape); return () => window.removeEventListener('keydown', escape) }, [eventId, close])
-  return <aside className="cart-detail" aria-label={tr('Evidence detail')}>
+  useEffect(() => { if (isolated) panel.current?.focus() }, [isolated])
+  return <aside ref={panel} tabIndex={isolated ? -1 : undefined} className="cart-detail" aria-label={tr('Evidence detail')}>
     <div className="cart-detail-top"><span className="eyebrow">{tr('Evidence detail')}</span><button aria-label={tr('Close evidence detail')} onClick={close}><X size={17}/></button></div>
     <nav className="cart-breadcrumb" aria-label={tr('Evidence navigation')}>{eventId ? <button onClick={() => setEventId(null)}><ChevronLeft size={13}/>{tr('Back to relationship')}</button> : edge ? <button onClick={() => choose({ kind: 'node', id: edge.source })}><ChevronLeft size={13}/>{tr('Back to source')}</button> : <span>{tr('Selected node')}</span>}</nav>
     <h2>{title}</h2>
+    {isolated && <p className="cart-note cart-radar-isolated">{tr('Isolated relation from radar. Connected relationships here cover only this one loaded relation; source and service event inspection can cover all protocols in the selected window.')}</p>}
     {!eventId && <>
       <p className="cart-detail-kind">{tr(edge ? edge.kind === 'network' ? 'Network observation' : 'Reported installation' : node?.kind === 'ip' ? 'Source IP' : node?.kind === 'host' ? 'Reported host label' : node?.kind === 'service' ? 'Catalog service' : 'Unidentified host / extension')}</p>
       {node?.kind === 'host' && <><p className="cart-note">{tr('This is a reported label scoped to its collector, not a verified device identity.')}</p>{facts([[tr('Collector ID'), node.collector || tr('Not reported')]])}</>}

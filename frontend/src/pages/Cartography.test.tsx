@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { defaultScheduler, notifyManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AxiosError, AxiosHeaders } from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
@@ -181,11 +181,213 @@ describe('cartography route evidence and permissions', () => {
     mount()
     expect(await screen.findByText(/Server returned 500 of 701 network relationships/)).toBeTruthy()
     expect(screen.getByText(/180 loaded relationships omitted from the graph/)).toBeTruthy()
-    expect(screen.getByText(/Server relation limit reached/)).toBeTruthy()
+    expect(screen.getByText(/Server relation limit reached/, { selector: 'p.cart-note' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open network observations' }).getAttribute('href')).toBe('/network?hours=24')
     expect(screen.getByRole('link', { name: 'Open the complete inventory' }).getAttribute('href')).toBe('/extensions?view=inventory')
     fireEvent.click(screen.getByText('Coverage and interpretation'))
     expect(screen.getByText(/Graph shows 320 of 701 network observations/)).toBeTruthy()
+  })
+})
+
+describe('cartography radar scope and guarded drilldown', () => {
+  const protocolCard = () => screen.getByRole('region', { name: 'Protocol distribution' })
+  const familyCard = () => screen.getByRole('region', { name: 'Current catalog families' })
+  const selectTls = () => fireEvent.click(within(protocolCard()).getByRole('button', { name: /TLS/ }))
+  const inspect = () => fireEvent.click(within(screen.getByRole('region', { name: 'Radar relationship drilldown' })).getByRole('button', { name: 'Inspect relationship' }))
+  it('reaches an off-cap exact tuple without changing graph filters or normal caps and inspects guarded provenance', async () => {
+    const get = serve(), original = get.getMockImplementation()!
+    const items = Array.from({ length: 500 }, (_, index) => ({ ...relations.items[0], domain: `offcap-${String(index).padStart(3, '0')}.test`, observations: 2 }))
+    get.mockImplementation((url, config) => url?.startsWith('/network/relations') ? Promise.resolve({ data: { ...relations, items, total_observations: 1400, represented_observations: 1000, total_relations: 700, represented_relations: 500, truncated: true } }) : original(url, config))
+    mount(); await screen.findByText(event.event_id)
+    expect(screen.getByText(/180 loaded relationships omitted from the graph/)).toBeTruthy()
+    expect(within(protocolCard()).getByText('Loaded denominator: 1,000 observations.')).toBeTruthy()
+    const tls = within(protocolCard()).getByRole('button', { name: /TLS/ }); tls.focus(); expect(document.activeElement).toBe(tls)
+    fireEvent.click(tls)
+    const drilldown = screen.getByRole('region', { name: 'Radar relationship drilldown' })
+    expect(within(drilldown).getByText('500 loaded relationships in this axis')).toBeTruthy()
+    const last = within(drilldown).getByText('192.0.2.1 → offcap-499.test').closest('li')!
+    fireEvent.click(within(last).getByRole('button', { name: 'Inspect relationship' }))
+    const detail = screen.getByRole('complementary', { name: 'Evidence detail' })
+    expect(within(detail).getByText(/Isolated relation from radar/)).toBeTruthy()
+    expect(within(detail).getByText('offcap-499.test')).toBeTruthy()
+    await waitFor(() => expect(get.mock.calls.some(([url]) => url?.includes('domain=offcap-499.test'))).toBe(true))
+    const url = get.mock.calls.map(([url]) => url).find(url => url?.startsWith('/network/events?') && url.includes('domain=offcap-499.test'))!
+    expect(Object.fromEntries(new URL(url, 'https://test.invalid').searchParams)).toEqual({ hours: '24', page: '1', page_size: '20', source_ip: '192.0.2.1', catalog_match_id: 'catalog-1', domain: 'offcap-499.test', protocol: 'TLS' })
+    expect(get.mock.calls.find(([value]) => value === url)?.[1]?.signal).toBeInstanceOf(AbortSignal)
+    expect(screen.getByLabelText('Search the graph').getAttribute('value')).toBe('')
+    expect(screen.getByText(/180 loaded relationships omitted from the graph/)).toBeTruthy()
+    fireEvent.click(within(detail).getByRole('button', { name: 'Explore source' }))
+    expect(within(screen.getByRole('complementary', { name: 'Evidence detail' })).getAllByRole('button', { name: /Reviewed service/ })).toHaveLength(1)
+    expect(screen.getByText('Events cover this source address or catalog service across all protocols in the selected window.')).toBeTruthy()
+    fireEvent.click(within(screen.getByRole('complementary', { name: 'Evidence detail' })).getByRole('button', { name: /Reviewed service/ }))
+    fireEvent.click(await within(screen.getByRole('complementary', { name: 'Evidence detail' })).findByText(event.event_id))
+    await within(screen.getByRole('complementary', { name: 'Evidence detail' })).findByText('Stored matching field')
+    expect(get).toHaveBeenCalledWith(`/network/events/${event.event_id}?hours=24`, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  })
+  it('selects a true zero axis with an explicit empty state, keeps radars independent of local graph filters and clears focus on graph selection', async () => {
+    serve(); mount(); await screen.findByText(event.event_id)
+    fireEvent.click(within(protocolCard()).getByRole('button', { name: /DNS/ }))
+    expect(screen.getByText(/No loaded relationships belong to this axis/)).toBeTruthy()
+    expect(screen.queryByRole('complementary', { name: 'Evidence detail' })).toBeNull()
+    selectTls(); inspect()
+    expect(screen.getByText(/Isolated relation from radar/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Relationship type'), { target: { value: 'installation' } })
+    fireEvent.change(screen.getByLabelText('Search the graph'), { target: { value: 'no-local-results' } })
+    expect(screen.getByText('No relationships in this selection')).toBeTruthy()
+    expect(within(protocolCard()).getByText('Loaded denominator: 41 observations.')).toBeTruthy()
+    expect(screen.getByText(/Isolated relation from radar/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Relationship type'), { target: { value: 'network' } })
+    fireEvent.change(screen.getByLabelText('Search the graph'), { target: { value: '' } })
+    fireEvent.click(screen.getByText('Select a node with the keyboard'))
+    fireEvent.click(screen.getAllByRole('button', { name: /192.0.2.1/ }).find(button => button.hasAttribute('aria-pressed'))!)
+    expect(screen.queryByText(/Isolated relation from radar/)).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Radar relationship drilldown' })).toBeNull()
+    expect(screen.getAllByRole('complementary', { name: 'Evidence detail' })).toHaveLength(1)
+    expect(screen.getByText('Connected relationships')).toBeTruthy()
+  })
+  it.each(['button', 'Escape'] as const)('focuses isolated evidence and returns to its connected Inspect trigger on %s close', async close => {
+    serve(); mount(); await screen.findByText(event.event_id)
+    expect(screen.getByRole('complementary', { name: 'Evidence detail' }).getAttribute('tabindex')).toBeNull()
+    selectTls()
+    const trigger = within(screen.getByRole('region', { name: 'Radar relationship drilldown' })).getByRole('button', { name: 'Inspect relationship' })
+    trigger.focus(); fireEvent.click(trigger)
+    const detail = screen.getByRole('complementary', { name: 'Evidence detail' })
+    expect(document.activeElement).toBe(detail)
+    expect(detail.getAttribute('tabindex')).toBe('-1')
+    if (close === 'button') fireEvent.click(within(detail).getByRole('button', { name: 'Close evidence detail' }))
+    else fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('complementary', { name: 'Evidence detail' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    expect(within(protocolCard()).getByRole('button', { name: /TLS/ }).getAttribute('aria-pressed')).toBe('true')
+  })
+  it.each(['window', 'protocol', 'payload'] as const)('invalidates radar-origin evidence on %s refresh', async refresh => {
+    const get = serve(), original = get.getMockImplementation()!
+    const { queries } = mount(); await screen.findByText(event.event_id); selectTls(); inspect()
+    expect(screen.getByText(/Isolated relation from radar/)).toBeTruthy()
+    const trigger = within(screen.getByRole('region', { name: 'Radar relationship drilldown' })).getByRole('button', { name: 'Inspect relationship' }), restore = vi.spyOn(trigger, 'focus')
+    get.mockImplementation((url, config) => url?.startsWith('/network/relations') ? new Promise(() => {}) : original(url, config))
+    if (refresh === 'window') fireEvent.change(screen.getByLabelText('Observation window'), { target: { value: '168' } })
+    else if (refresh === 'protocol') fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'QUIC' } })
+    else act(() => { void queries.invalidateQueries({ queryKey: ['cartography', useAuthStore.getState().mode, useAuthStore.getState().session, 'analyst', 'relations'] }) })
+    await waitFor(() => expect(screen.queryByText(/Isolated relation from radar/)).toBeNull())
+    expect(screen.queryByRole('region', { name: 'Radar relationship drilldown' })).toBeNull()
+    expect(restore).not.toHaveBeenCalled()
+  })
+  it('replaces an equal-looking network payload and removes the previous radar focus', async () => {
+    serve(); const { queries } = mount(); await screen.findByText(event.event_id); selectTls(); inspect()
+    await act(async () => { await queries.invalidateQueries({ queryKey: ['cartography', useAuthStore.getState().mode, useAuthStore.getState().session, 'analyst', 'relations'] }) })
+    await waitFor(() => expect(screen.queryByText(/Isolated relation from radar/)).toBeNull())
+    expect(screen.queryByRole('region', { name: 'Radar relationship drilldown' })).toBeNull()
+  })
+  it.each(['relations', 'catalog'] as const)('invalidates %s radar focus after a batched equal-payload refetch at the same timestamp', async family => {
+    vi.spyOn(Date, 'now').mockReturnValue(1792029600000)
+    serve(); const { queries } = mount(); await screen.findByText(event.event_id)
+    if (family === 'relations') selectTls()
+    else fireEvent.click(within(familyCard()).getByRole('button', { name: /Code \/ automation/ }))
+    inspect(); expect(screen.getByText(/Isolated relation from radar/)).toBeTruthy()
+    const prefix = ['cartography', useAuthStore.getState().mode, useAuthStore.getState().session, 'analyst']
+    const key = family === 'relations' ? [...prefix, 'relations', 24, undefined] : [...prefix, 'catalog']
+    const before = queries.getQueryState(key)!
+    const queue: Array<() => void> = []
+    notifyManager.setScheduler(callback => { queue.push(callback) })
+    try {
+      await act(async () => { await queries.refetchQueries({ queryKey: key, exact: true }) })
+      const after = queries.getQueryState(key)!
+      expect(after.data).toBe(before.data)
+      expect(after.dataUpdatedAt).toBe(before.dataUpdatedAt)
+      expect(after.dataUpdateCount).toBe(before.dataUpdateCount + 1)
+      expect(after.fetchStatus).toBe('idle')
+      expect(queue.length).toBeGreaterThan(0)
+      await act(async () => { while (queue.length) queue.shift()!() })
+      await waitFor(() => expect(screen.queryByText(/Isolated relation from radar/)).toBeNull())
+      expect(screen.queryByRole('region', { name: 'Radar relationship drilldown' })).toBeNull()
+    } finally {
+      notifyManager.setScheduler(defaultScheduler)
+      await act(async () => { while (queue.length) queue.shift()!() })
+    }
+  })
+  it.each(['network', 'catalog'] as const)('renders unavailable %s radar evidence without substituting sample counts', async family => {
+    const get = serve(), original = get.getMockImplementation()!
+    get.mockImplementation((url, config) => url?.startsWith(family === 'network' ? '/network/relations' : '/catalog?') ? Promise.reject(error(503)) : original(url, config))
+    mount()
+    if (family === 'network') {
+      await screen.findByText('Network observations are unavailable. No sample data has been substituted.')
+      expect(screen.getAllByText('Radar evidence is unavailable. No sample data has been substituted.')).toHaveLength(2)
+      expect(screen.queryByTestId('radar-values')).toBeNull()
+    } else {
+      await screen.findByText('Catalog families are unavailable until the current catalog loads successfully.')
+      expect(within(familyCard()).queryByTestId('radar-values')).toBeNull()
+      expect(within(protocolCard()).getByTestId('radar-values')).toBeTruthy()
+      selectTls(); inspect()
+      expect(screen.getByText(/Isolated relation from radar/)).toBeTruthy()
+    }
+    expect(within(familyCard()).getAllByRole('button').every(button => (button as HTMLButtonElement).disabled)).toBe(true)
+  })
+  it('separates unmatched relations from unloaded catalog IDs and current empty categories in family drilldown', async () => {
+    const get = serve(), original = get.getMockImplementation()!
+    const items = [{ ...relations.items[0], catalog_match_id: null }, { ...relations.items[0], domain: 'unloaded.test', catalog_match_id: 'missing-id' }, { ...relations.items[0], domain: 'empty.test', catalog_match_id: 'empty-id' }]
+    get.mockImplementation((url, config) => url?.startsWith('/network/relations') ? Promise.resolve({ data: { ...relations, items, total_observations: 123 } }) : url?.startsWith('/catalog?') ? Promise.resolve({ data: [service, { ...service, catalog_item_id: 'empty-id', category: '' }] }) : original(url, config))
+    mount(); await screen.findByText(event.event_id)
+    fireEvent.click(within(familyCard()).getByRole('button', { name: /Category unavailable/ }))
+    let drilldown = screen.getByRole('region', { name: 'Radar relationship drilldown' })
+    expect(within(drilldown).getByText('2 loaded relationships in this axis')).toBeTruthy()
+    expect(within(drilldown).getByText('missing-id')).toBeTruthy()
+    expect(within(drilldown).queryByText('No catalog association')).toBeNull()
+    fireEvent.click(within(familyCard()).getByRole('button', { name: /No catalog association/ }))
+    drilldown = screen.getByRole('region', { name: 'Radar relationship drilldown' })
+    expect(within(drilldown).getByText('1 loaded relationships in this axis')).toBeTruthy()
+    inspect()
+    await waitFor(() => expect(get.mock.calls.some(([url]) => url?.startsWith('/network/events?') && new URL(url, 'https://test.invalid').searchParams.get('catalog_match_id') === '')).toBe(true))
+  })
+  it('clears both radars and isolated focus on denial, latches across remount and never accepts late evidence', async () => {
+    const get = serve(), original = get.getMockImplementation()!
+    const first = mount(); await screen.findByText(event.event_id); selectTls(); inspect()
+    let late: ((value: { data: NetworkEvent }) => void) | undefined
+    get.mockImplementation((url, config) => url?.startsWith('/network/events/') ? new Promise(resolve => { late = resolve }) : original(url, config))
+    fireEvent.click(await within(screen.getByRole('complementary', { name: 'Evidence detail' })).findByText(event.event_id))
+    await waitFor(() => expect(late).toBeTypeOf('function'))
+    get.mockImplementation((url, config) => url?.startsWith('/network/relations') ? Promise.reject(error(403)) : original(url, config))
+    await act(async () => { await first.queries.invalidateQueries({ queryKey: ['cartography', useAuthStore.getState().mode, useAuthStore.getState().session, 'analyst', 'relations'] }) })
+    expect((await screen.findByRole('alert')).textContent).toContain('Cartography access denied')
+    await act(async () => { late?.({ data: { ...event, parser_version: 'SENSITIVE_RADAR_LATE' } }) })
+    expect(screen.queryByText('SENSITIVE_RADAR_LATE')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Loaded observation radars' })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: 'Evidence detail' })).toBeNull()
+    const calls = get.mock.calls.length; first.unmount(); mount(); await act(async () => {})
+    expect(get).toHaveBeenCalledTimes(calls)
+    expect(screen.queryByRole('region', { name: 'Loaded observation radars' })).toBeNull()
+    get.mockImplementation(original); act(() => useAuthStore.getState().login('fresh', analyst))
+    await screen.findByRole('region', { name: 'Loaded observation radars' })
+    await screen.findByText(event.event_id)
+    expect(screen.queryByText(/Isolated relation from radar/)).toBeNull()
+  })
+  it('clears a selected family and focus after a background catalog failure with cached prior data', async () => {
+    const get = serve(), original = get.getMockImplementation()!
+    const { queries } = mount(); await screen.findByText(event.event_id)
+    fireEvent.click(within(familyCard()).getByRole('button', { name: /Code \/ automation/ })); inspect()
+    expect(screen.getByText(/Isolated relation from radar/)).toBeTruthy()
+    get.mockImplementation((url, config) => url?.startsWith('/catalog?') ? Promise.reject(error(503)) : original(url, config))
+    await act(async () => { await queries.invalidateQueries({ queryKey: ['cartography', useAuthStore.getState().mode, useAuthStore.getState().session, 'analyst', 'catalog'] }) })
+    await within(familyCard()).findByText('Catalog families are unavailable until the current catalog loads successfully.')
+    expect(screen.queryByText(/Isolated relation from radar/)).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Radar relationship drilldown' })).toBeNull()
+    expect(within(familyCard()).queryByTestId('radar-values')).toBeNull()
+    expect(within(protocolCard()).getByText('Loaded denominator: 41 observations.')).toBeTruthy()
+  })
+  it('rejects a held radar event after a new session and remount without restoring the old focus', async () => {
+    const get = serve(), original = get.getMockImplementation()!
+    const first = mount(); await screen.findByText(event.event_id); selectTls(); inspect()
+    let late: ((value: { data: NetworkEvent }) => void) | undefined
+    get.mockImplementation((url, config) => url?.startsWith('/network/events/') ? new Promise(resolve => { late = resolve }) : original(url, config))
+    fireEvent.click(await within(screen.getByRole('complementary', { name: 'Evidence detail' })).findByText(event.event_id))
+    await waitFor(() => expect(late).toBeTypeOf('function'))
+    first.unmount(); get.mockImplementation(original)
+    act(() => useAuthStore.getState().login('new-radar-session', analyst)); mount()
+    await screen.findByText(event.event_id)
+    await act(async () => { late?.({ data: { ...event, parser_version: 'SENSITIVE_PREVIOUS_RADAR_SESSION' } }) })
+    expect(screen.queryByText('SENSITIVE_PREVIOUS_RADAR_SESSION')).toBeNull()
+    expect(screen.queryByText(/Isolated relation from radar/)).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Radar relationship drilldown' })).toBeNull()
   })
 })
 
