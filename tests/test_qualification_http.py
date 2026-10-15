@@ -224,9 +224,17 @@ def test_boolean_ack_is_rejected_even_when_equal_to_one(tmp_path, server, childr
     reaped(children, sender.transport)
 
 
-def test_preparation_consumes_wall_budget_before_any_http(tmp_path, children):
-    times = iter([0, 0, 2])
-    sender = LoadSender(small_profile(), str(uuid4()), "preparation", tmp_path, "scoped", clock=lambda: next(times))
+def test_preparation_consumes_wall_budget_before_any_http(tmp_path, children, monkeypatch):
+    from shadai.qualification.load import batched_fixtures
+
+    now = [0]
+
+    def delayed_fixtures(*args):
+        now[0] += 2
+        yield from batched_fixtures(*args)
+
+    monkeypatch.setattr("shadai.qualification.load.batched_fixtures", delayed_fixtures)
+    sender = LoadSender(small_profile(), str(uuid4()), "preparation", tmp_path, "scoped", clock=lambda: now[0])
     with pytest.raises(QualificationError, match="preparation"):
         sender.run("http://127.0.0.1:9", "synthetic")
     assert not children
