@@ -203,13 +203,18 @@ class InventoryDelivery:
         self.total = 0
 
     def retain(self, events):
+        from shadai.api.ingestion import prepare_event
         from shadai.utils.queue_admission import record_size
         from shadai.utils.queueing import queue_fields
 
         if self.pending:
             raise RuntimeError("Inventory delivery still pending")
-        records = [{"stream": "events:oauth", "fields": queue_fields(event.model_dump_json())}
-                   for event in events]
+        accepted_at = datetime.now(UTC)
+        # Prepare every event before retaining any chunks; retries keep these exact private bytes.
+        records = [{"stream": "events:oauth", "fields": queue_fields(
+            prepare_event(event, trusted_collector=True, accepted_at=accepted_at).model_dump_json(),
+            accepted_at=accepted_at,
+        )} for event in events]
         self.pending = []
         chunk, size = [], 0
         for record in records:
