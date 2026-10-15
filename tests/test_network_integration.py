@@ -130,6 +130,28 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
         )
         assert tls.total == 1 and tls.items[0].event_id == events[1].event_id
         assert tls.items[0].catalog_match_id == item_id
+        relations = await network.get_network_relations(
+            hours=24, protocol=None, limit=2, _user=SimpleNamespace(role="analyst")
+        )
+        assert relations.total_observations == relations.total_relations == 4
+        assert relations.represented_observations == relations.represented_relations == 2
+        assert relations.truncated
+        complete = await network.get_network_relations(
+            hours=24, protocol=None, limit=500, _user=SimpleNamespace(role="analyst")
+        )
+        assert not complete.truncated and complete.represented_observations == 4
+        nameless = next(relation for relation in complete.items if relation.protocol == "QUIC")
+        assert nameless.source_ip == nameless.domain == "" and nameless.catalog_match_id is None
+        filtered = await network.get_network_events(
+            hours=24, protocol="TLS", page=1, page_size=100, source_ip="", domain=domain,
+            catalog_match_id=item_id, _user=SimpleNamespace(role="analyst"),
+        )
+        assert filtered.total == 1 and filtered.items[0].event_id == events[1].event_id
+        detail = await network.get_network_event(
+            events[1].event_id, hours=24, _user=SimpleNamespace(role="analyst")
+        )
+        assert detail.sni == domain
+        assert detail.match_field == "domain" and detail.match_confidence == pytest.approx(0.65)
         assert await queue_redis.xlen("matches") == 4  # DNS, TLS and both out-of-window DNS fixtures.
         queued = await queue_redis.xrange("matches")
         assert {CanonicalEvent.model_validate_json(fields["event"]).event_id for _, fields in queued} == {

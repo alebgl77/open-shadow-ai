@@ -11,6 +11,7 @@ GROUPS = (
     ("README.md", "README.fr.md", "README.zh-CN.md"),
     ("docs/en/README.md", "docs/fr/README.md", "docs/zh-CN/README.md"),
     ("docs/roadmap.md", "docs/fr/roadmap.md", "docs/zh-CN/roadmap.md"),
+    ("docs/cartography.md", "docs/fr/cartography.md", "docs/zh-CN/cartography.md"),
 )
 FENCE = re.compile(
     r"^ {0,3}(?:(?P<backtick>`{3,})|(?P<tilde>~{3,}))(?P<language>[^\n]*)\n(?P<body>.*?)"
@@ -51,7 +52,7 @@ def local_targets(path, document):
     return targets
 
 
-@pytest.mark.parametrize("group", GROUPS, ids=("introduction", "handbook", "roadmap"))
+@pytest.mark.parametrize("group", GROUPS, ids=("introduction", "handbook", "roadmap", "cartography"))
 @pytest.mark.parametrize("language", (1, 2), ids=("fr", "zh-CN"))
 def test_translations_preserve_procedures_sections_and_language_navigation(group, language):
     canonical_path = ROOT / group[0]

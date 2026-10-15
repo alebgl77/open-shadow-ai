@@ -12,6 +12,8 @@ This roadmap describes **six future stages, planned or exploratory**: a directio
 
 Open Shadow AI combines a catalog and deterministic rules with [network observations](network-analysis.md), endpoint inventories (including a [browser extension inventory](collectors.md#browser-extension-inventory) with version history) and [AD/Entra signals](microsoft.md). The [architecture](architecture.md) distinguishes presence, observation and instrumented usage; collector queues remain bounded. [OIDC/SCIM](sso-scim.md) is optional. [Qualification procedures](production-qualification.md) do not certify an AD fleet, identity provider or real cluster.
 
+Source revisions containing [AI cartography](cartography.md) provide a bounded graph of source-IP observations and collector-scoped reported host installations, without inferred IP-to-host joins or proof of AI use; availability must be checked against the deployed revision rather than an older release.
+
 Today: one organization per installation, with no integrated inference engine. Ollama/vLLM signatures discover tools; they do not connect to them. A DNS name reveals no prompt, tokens or invoice.
 
 <a id="six-étapes-six-bénéfices"></a>
@@ -19,7 +21,7 @@ Today: one organization per installation, with no integrated inference engine. O
 
 | Stage | Proposed priority | What you gain |
 |---|---|---|
-| 1. AI footprint | Next — planned | Connected sources, visible unknowns |
+| 1. AI footprint | Next — planned | Richer attribution and coverage, visible unknowns |
 | 2. Shadow Agent | Next — planned | Understandable agent and tool chains |
 | 3. Local analysis | Later — planned | AI assistance compatible with your constraints |
 | 4. Investigation copilot | Later — planned | Verifiable answers with supporting evidence |

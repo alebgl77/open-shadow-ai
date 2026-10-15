@@ -1,5 +1,5 @@
 import { useI18n } from '@/i18n'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth'
 import { restoreSession } from '@/api/auth'
@@ -20,6 +20,8 @@ import Sources from '@/pages/Sources'
 import Network from '@/pages/Network'
 import Settings from '@/pages/Settings'
 
+const Cartography = lazy(() => import('@/pages/Cartography'))
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { tr } = useI18n()
 
@@ -31,6 +33,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const { tr } = useI18n()
   // A reload keeps the HttpOnly session cookie; recover the profile and CSRF token from it.
   useEffect(() => { void restoreSession() }, [])
   return (
@@ -52,6 +55,7 @@ export default function App() {
                     <Route path="/extensions" element={<Extensions />} />
                     <Route path="/local-ai" element={<LocalAI />} />
                     <Route path="/network" element={<Network />} />
+                    <Route path="/cartography" element={<Suspense fallback={<p role="status">{tr('Loading cartography…')}</p>}><Cartography /></Suspense>} />
                     <Route path="/governance" element={<Governance />} />
                     <Route path="/catalog" element={<Catalog />} />
                     <Route path="/sources" element={<Sources />} />

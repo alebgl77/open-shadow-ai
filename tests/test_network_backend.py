@@ -363,9 +363,11 @@ def network_client(monkeypatch):
         if query.startswith("SELECT count()"):
             return [(3,)]
         return [
-            (event_id, datetime(2026, 1, 1), "TLS", "service.example.test", "service.example.test", "",
-             "192.0.2.1", "192.0.2.2", 443, "sensor-1", "v1", "service"),
-            (uuid4(), datetime(2026, 1, 1), "QUIC", "", "", "", "192.0.2.1", "192.0.2.2", 443, "sensor-1", "v1", ""),
+            (event_id, datetime.fromisoformat(params["end"]), params.get("protocol", "TLS"),
+             "service.example.test", "service.example.test", "",
+             "192.0.2.1", "192.0.2.2", 443, "sensor-1", "v1", "service", "sni", 0.65),
+            (uuid4(), datetime.fromisoformat(params["end"]), params.get("protocol", "QUIC"), "", "", "",
+             "192.0.2.1", "192.0.2.2", 443, "sensor-1", "v1", "", "", 0),
         ]
 
     monkeypatch.setattr(network, "get_clickhouse", lambda: SimpleNamespace(execute=execute))

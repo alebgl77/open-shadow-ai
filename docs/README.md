@@ -8,11 +8,17 @@
 | Français | [Guide de mise en œuvre pour experts](fr/README.md) | [README français](../README.fr.md) |
 | 简体中文 | [专家实施手册](zh-CN/README.md) | [中文 README](../README.zh-CN.md) |
 
-The three handbooks cover equivalent installation, identity, collection, recovery, security and qualification procedures. Technical commands, configuration keys and machine identifiers remain literal. Detailed operational documents at this level are English references; historical audits, validation records and changelogs are not claimed to have complete translations. Existing motion diagrams contain illustrative French labels and synthetic data.
+AI cartography guides: [English](cartography.md) | [Français](fr/cartography.md) | [简体中文](zh-CN/cartography.md). The three guides cover the same evidence boundaries, controls, access rules and display limits.
 
-Les trois guides couvrent les mêmes procédures d'installation, d'identité, de collecte, de reprise, de sécurité et de qualification. Les commandes, clés de configuration et identifiants techniques restent littéraux. Les documents opérationnels détaillés de ce répertoire sont des références en anglais ; les audits historiques, comptes rendus de validation et journaux de modifications ne sont pas présentés comme intégralement traduits. Les schémas animés existants contiennent des libellés illustratifs en français et des données synthétiques.
+Guides de cartographie IA : [English](cartography.md) | [Français](fr/cartography.md) | [简体中文](zh-CN/cartography.md). Les trois guides présentent les mêmes limites de preuve, commandes, règles d'accès et bornes d'affichage.
 
-三份手册涵盖等效的安装、身份管理、采集、恢复、安全和资格验证流程。技术命令、配置键和机器标识符保留原文。本目录中的详细操作文档为英文参考资料；历史审计、验证记录和变更日志并未宣称已全部翻译。现有动画图使用法语说明文字和合成数据。
+AI 关系图指南：[English](cartography.md) | [Français](fr/cartography.md) | [简体中文](zh-CN/cartography.md)。三份指南涵盖相同的证据边界、操作方式、访问规则和显示上限。
+
+The three handbooks cover equivalent installation, identity, collection, recovery, security and qualification procedures. Technical commands, configuration keys and machine identifiers remain literal. Other detailed operational documents at this level are English references; historical audits, validation records and changelogs are not claimed to have complete translations. Existing motion diagrams contain illustrative French labels and synthetic data.
+
+Les trois guides couvrent les mêmes procédures d'installation, d'identité, de collecte, de reprise, de sécurité et de qualification. Les commandes, clés de configuration et identifiants techniques restent littéraux. Les autres documents opérationnels détaillés de ce répertoire sont des références en anglais ; les audits historiques, comptes rendus de validation et journaux de modifications ne sont pas présentés comme intégralement traduits. Les schémas animés existants contiennent des libellés illustratifs en français et des données synthétiques.
+
+三份手册涵盖等效的安装、身份管理、采集、恢复、安全和资格验证流程。技术命令、配置键和机器标识符保留原文。本目录中的其他详细操作文档为英文参考资料；历史审计、验证记录和变更日志并未宣称已全部翻译。现有动画图使用法语说明文字和合成数据。
 
 The console offers English, French and Simplified Chinese before and after sign-in. Its validated browser-local preference is independent of authentication; absent or blocked storage defaults to English. Raw source data and machine/API identifiers retain their original values.
 
