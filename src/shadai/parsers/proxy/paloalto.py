@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import UTC, datetime, timedelta
 
 from shadai.models.event import CanonicalEvent
@@ -17,6 +18,13 @@ from shadai.utils.validators import sanitize_log_input
 # Key-value syslog format:
 # <14>1 2026-03-27T14:23:45.000Z PA-5220 - - - - src=192.168.1.100 dst=104.18.2.1 ... url=chat.openai.com/backend-
 # api sport=12345 dport=443 ...
+_RFC5424_TIMESTAMP = re.compile(r"^<\d{1,3}>1 (?P<timestamp>\S+)(?: |$)")
+_ISO_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"
+)
+_LOCAL_TIMESTAMP = re.compile(r"[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}")
+_BSD_TIMESTAMP = re.compile(r"[A-Z][a-z]{2} {1,2}[0-9]{1,2} [0-9]{2}:[0-9]{2}:[0-9]{2}")
 
 
 @register_parser("paloalto_url_log")
@@ -39,8 +47,12 @@ class PaloAltoURLLogParser(BaseParser):
             return None
 
         # Parse timestamp
-        ts_str = fields.get("receive_time") or fields.get("time_generated") or fields.get("timestamp", "")
-        timestamp = self._parse_timestamp(ts_str)
+        ts_str = next((fields[key] for key in ("receive_time", "time_generated", "timestamp") if key in fields), None)
+        header_time = ts_str is None
+        if header_time:
+            header = _RFC5424_TIMESTAMP.match(line)
+            ts_str = header.group("timestamp") if header else ""
+        timestamp = self._parse_timestamp(ts_str, rfc5424=header_time)
 
         url_raw = fields.get("url", "")
         domain = fields.get("hostname", "") or url_raw.split("/")[0]
@@ -115,23 +127,22 @@ class PaloAltoURLLogParser(BaseParser):
         except Exception:
             return None
 
-    def _parse_timestamp(self, ts_str: str) -> datetime:
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
-            try:
-                return datetime.strptime(ts_str, fmt).replace(tzinfo=UTC)
-            except ValueError:
-                continue
+    def _parse_timestamp(self, ts_str: str, *, rfc5424: bool = False) -> datetime:
         try:
-            # receive_time/time_generated use the firewall's local clock.
-            return self.localize(datetime.strptime(ts_str, "%Y/%m/%d %H:%M:%S"))
-        except ValueError:
-            pass
-        now = datetime.now(UTC)
-        try:
-            # BSD syslog timestamps omit the year: take the most recent one not in the future.
-            local = datetime.strptime(f"{now.astimezone(self.timezone).year} {ts_str}", "%Y %b %d %H:%M:%S")
-            if self.localize(local) > now + timedelta(days=1):
-                local = local.replace(year=local.year - 1)
-        except ValueError:
-            return now
-        return self.localize(local)
+            if _ISO_TIMESTAMP.fullmatch(ts_str):
+                # fromisoformat alone normalizes invalid offsets and accepts unsupported ISO forms.
+                value = datetime.fromisoformat(ts_str)
+            elif not rfc5424 and _LOCAL_TIMESTAMP.fullmatch(ts_str):
+                # receive_time/time_generated use the firewall's local clock.
+                value = datetime.strptime(ts_str, "%Y/%m/%d %H:%M:%S")
+            elif not rfc5424 and _BSD_TIMESTAMP.fullmatch(ts_str):
+                # BSD syslog omits the year: retain the existing most-recent-date convention.
+                now = datetime.now(UTC)
+                value = datetime.strptime(f"{now.astimezone(self.timezone).year} {ts_str}", "%Y %b %d %H:%M:%S")
+                if self.localize(value) > now + timedelta(days=1):
+                    value = value.replace(year=value.year - 1)
+            else:
+                raise ValueError("Unsupported timestamp format")
+            return self.localize(value)
+        except (ValueError, OverflowError):
+            raise ValueError("Invalid or missing Palo Alto event timestamp") from None
