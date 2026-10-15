@@ -134,7 +134,10 @@ class CanonicalEvent(BaseModel):
             return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("Timestamps require a timezone")
-        return value.astimezone(UTC)
+        try:
+            return value.astimezone(UTC)
+        except OverflowError:
+            raise ValueError("Timestamp is outside the supported UTC range") from None
 
     @model_validator(mode="after")
     def truthful_measurements(self):
