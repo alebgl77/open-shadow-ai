@@ -46,7 +46,7 @@ class SyslogCollector(BaseCollector):
         self.spool_options = {"max_bytes": spool_max_bytes, "max_batches": spool_max_batches,
                               "ttl_seconds": spool_ttl_seconds}
         self.counters.update({"udp_task_drops": 0, "udp_processing_failures": 0,
-                              "tcp_processing_failures": 0})
+                              "tcp_processing_failures": 0, "tcp_record_rejections": 0})
 
     async def run(self) -> None:
         if self.spool_options["ttl_seconds"] > get_config().retention.ingestion_max_age_days * 86400:
@@ -100,7 +100,15 @@ class SyslogCollector(BaseCollector):
                     break
                 line = data.decode("utf-8", errors="replace").strip()
                 if line:
-                    await self._process_line(line)
+                    try:
+                        event = self.parser.parse(line)
+                    except (ValueError, OverflowError) as exc:
+                        self.counters["tcp_record_rejections"] += 1
+                        logger.warning("syslog_record_rejected", collector=self.collector_id,
+                                       error_type=type(exc).__name__)
+                        continue
+                    if event:
+                        await self.push_events([event])
         except Exception as e:
             self.counters["tcp_processing_failures"] += 1
             logger.warning("syslog_tcp_error", error_type=type(e).__name__, peer=str(addr))
