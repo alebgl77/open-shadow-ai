@@ -445,8 +445,17 @@ jobs:
         with:
           python-version: "3.12"
       - name: Execute the isolated mandatory load, faults, probes, pressure and cold restore
+        id: qualification_lab
         run: |
           python scripts/qualification-lab.py run --execute --docker-context default --profile deploy/qualification/profiles/lab-smoke.json --run-dir "$HOME/shadai-qualification-${{ github.run_id }}-${{ github.run_attempt }}"
+      - name: Project finite qualification failure metadata
+        id: qualification_diagnostic
+        if: always() && steps.qualification_lab.outcome == 'failure'
+        run: |
+          python scripts/qualification-ci-metadata.py --home "$HOME" --run-id '${{ github.run_id }}' --run-attempt '${{ github.run_attempt }}' --github-sha "$GITHUB_SHA" >> "$GITHUB_OUTPUT" 2>/dev/null
+      - name: "Qualification failure diagnostic: state=${{ steps.qualification_diagnostic.outputs.state || 'unavailable' }} phase=${{ steps.qualification_diagnostic.outputs.phase || 'unknown' }} stage=${{ steps.qualification_diagnostic.outputs.stage || 'unknown' }} error_type=${{ steps.qualification_diagnostic.outputs.error_type || 'UnexpectedError' }} code=${{ steps.qualification_diagnostic.outputs.code || 'exception' }}"
+        if: always() && steps.qualification_lab.outcome == 'failure'
+        run: ':'
       - name: Build the maintained Prometheus runtime from its recipe
         timeout-minutes: 15
         run: docker --context default compose -f docker-compose.host-monitoring.yml build host-prometheus
