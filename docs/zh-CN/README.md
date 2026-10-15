@@ -2,11 +2,31 @@
 
 [English](../en/README.md) | [Français](../fr/README.md) | [简体中文](README.md)
 
-本手册帮助基础设施与身份管理专业人员从范围受限的评估，推进到经过运维评审的试点。内容覆盖后端开发预览版 **0.3.0** 和独立终端代理 **0.3.0**。操作流程于 **2026-10-08** 以源代码提交 `49a58d778d3014879e30a3ac5334df45cd426dbf` 为基线核对；浏览器扩展清单相关流程（代理 0.3.0、ClickHouse 迁移 `003`、PostgreSQL 迁移 `006`）由 [PR #15](https://github.com/alebgl77/open-shadow-ai/pull/15) 于 **2026-10-13** 引入，超出该核心操作基线。三语言控制台与手册通过[提交 `7a12513eb1e1e3a800ba8d71f4726a3b5045b669`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669)合并到 `main`。已发布的 `v0.3.0` 预发行版位于提交 `49a58d7`，早于本地化功能和扩展清单，附带代理 0.1.0；两个源代码修订均声明后端版本 `0.3.0`。核对功能可用性与 CI 证据时，应记录实际部署的准确提交。后续代码变更需要各自的操作验证和 CI 证据。除非具体流程另有说明，所有命令均从仓库根目录执行。命令示例保留详细流程中的语法；执行前，必须将仅用于文档示例的主机名、ID、路径和网络接口替换为已审核的实际值。
+本手册帮助基础设施与身份管理专业人员从范围受限的评估，推进到经过运维评审的试点。流程于 **2026 年 10 月 15 日** 对齐维护中的源代码提交 `d159ed68012281a2c9e887e1281d44f0fb75112c`，即 [PR #17](https://github.com/alebgl77/open-shadow-ai/pull/17) 的合并提交，覆盖后端开发预览版 **0.3.0** 和独立终端代理 **0.3.0**。
+
+| 来源 | 可用基线 |
+|---|---|
+| 上述维护中源代码 | 扩展清单、三语言控制台与手册、关系图及 10 月 15 日修复 |
+| 已发布的预发行版 `v0.3.0`，**2026 年 10 月 7 日**，`49a58d778d3014879e30a3ac5334df45cd426dbf` | 较早的后端 `0.3.0` 和代理 `0.1.0`，不含上述新增功能 |
+
+仅凭版本号 `0.3.0` 无法确定功能或安全修复。执行这些流程时应使用维护中的代码，并记录实际部署的准确提交、配置修订、镜像摘要以及 CI/构建证据。后续修订需要各自的验收验证。源代码变更和 CI 成功不会发布或部署镜像，也不能认证自身环境。除非具体流程另有说明，所有命令均从仓库根目录执行。Bash 代码块需要 Bash；第 2 节说明 Windows 引导程序和命令环境的分别执行顺序。执行前，必须将仅用于文档示例的主机名、ID、路径和网络接口替换为已审核的实际值。
 
 每个部署仅服务**一个组织**。`tenant_id` 用于检查范围，不构成隔离边界。本项目不声称具备生产认证、SLA、经测量的企业级吞吐量、自动化设备群部署或全面 AI 检测能力。英语、法语和简体中文手册提供完整且等效的流程；详细链接文档均明确标为英文参考。历史审计与变更日志保留各自的语言和验证范围。现有动态示意图使用法语标注与合成数据。[路线图](roadmap.md)说明未来阶段及其交付门槛。
 
 控制台的语言选择器在登录前后均可使用，支持英语、法语和简体中文。经过校验的浏览器本地偏好独立于身份验证；存储不存在或被阻止时，默认使用英语。原始来源值与机器/API 标识保持原样。参见[文档与语言覆盖范围](../README.md)。
+
+先阅读第 1–4 节了解范围与安装，第 5–6 节了解身份管理，第 7 节了解采集，第 8–10 节了解运维与恢复，再阅读第 11–13 节了解安全、验收验证与维护。结合本手册查阅以下详细资料：
+
+| 需求 | 参考资料 |
+|---|---|
+| 安装与拓扑 | [部署（英文参考）](../deployment.md) · [架构（英文参考）](../architecture.md) |
+| AD 清单、SSO 与 SCIM | [Microsoft（英文参考）](../microsoft.md) · [OIDC/SCIM（英文参考）](../sso-scim.md) |
+| 采集与网络边界 | [来源覆盖范围（英文参考）](../collectors.md) · [网络分析（英文参考）](../network-analysis.md) · [关系图与雷达图](cartography.md) |
+| 运维、保留与恢复 | [采集器运维（英文参考）](../collector-operations.md) · [队列保留（英文参考）](../queue-retention.md) · [备份与恢复（英文参考）](../deployment.md#backup-and-restore) |
+| 验收验证与证据 | [验收验证（英文参考）](../production-qualification.md) · [验证记录（英文参考）](../validation.md) |
+| 10 月 15 日修复与仓库控制 | [修复与运维检查](audit-remediation-2026-10-15.md) · [仓库治理](repository-governance.md) |
+
+修复指南涵盖 F01–F10、新机密文件的兼容性、重新构建及目标环境检查。治理指南说明已评审的 PR 规则：32 项检查同样约束管理员，并为单维护者明确设置零项批准要求；应使用指南中的回读流程核对当前执行状态。
 
 ## 1. 定义范围与证据
 
@@ -30,21 +50,28 @@ TLS 会隐藏内容。DoH 会向被动 DNS 适配器隐藏查询的名称；解�
 在 Linux/macOS 上，从可信检出目录运行引导脚本：
 
 ```bash
+set -e
 git clone https://github.com/alebgl77/open-shadow-ai.git
 cd open-shadow-ai
 bash scripts/bootstrap.sh
 docker compose config --quiet
-docker compose up -d --build
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --build api ingest-worker correlation-worker purge-worker frontend
+for attempt in $(seq 1 30); do
+  if MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 2
+done
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
-在 Windows 上，仅将引导命令替换为：
+在 Windows 上，先准备可信的检出目录，再在 PowerShell 中执行引导程序：
 
 ```powershell
 ./scripts/bootstrap.ps1
 ```
+
+然后在 Git Bash 中使用同一检出目录和 Docker 上下文：先运行 `set -e`，再运行上方代码块中的 Compose 命令，跳过 `bash scripts/bootstrap.sh`。重试循环需要 Bash，不能直接在 PowerShell 中运行。逐次调用的前缀 `MSYS2_ARG_CONV_EXCL='*'` 可防止 [Git Bash 路径转换](https://www.msys2.org/docs/filesystem-paths/)改写容器路径，不会修改全局环境设置。
 
 两种引导方式均保留现有配置和六项基础机密值；使用 `--dry-run` 或 `-DryRun` 预览。Unix 机密文件使用私有 `0700` 父目录。Windows 会在生成机密字节之前检查所有者、完整 ACL、重解析点及祖先目录安全性；新目录仅允许当前用户与 SYSTEM 访问，无需管理员提权。如果现有目录树被拒绝，应提供可信私有路径，不要自动修复权限。
 
@@ -65,11 +92,11 @@ docker compose logs --tail 100 api ingest-worker correlation-worker
 
 保持 `SHADAI_TENANT_ID` 一致，并为本部署配置专用外部存储凭据。基础引导生成的机密值不会提供可用的 Microsoft 凭据、OIDC 客户端机密、SCIM 令牌或指标令牌。通过获准的机密信息管理渠道与私有文件分发每项凭据；不得将值放入 Git、`.env`、命令参数、浏览器存储、日志或 SYSVOL。保护主机账号与 Docker 守护进程。
 
-8443 端口提供内部 HTTP。在前端之前配置反向代理，发布一个具有可信证书的 HTTPS 源站；前端转发 `/api/`，原始 API/存储端口保持私有。终端代理与 AD 上传要求 HTTPS，会验证证书并拒绝重定向。使用私有 CA 时，配置 `SHADAI_CA_BUNDLE` 或采集器的 CA 文件选项。直接配置最终地址，保持证书验证开启。
+8443 端口提供内部 HTTP。在前端之前配置反向代理，发布一个具有可信证书的 HTTPS 源站；前端转发 `/api/`，原始 API/存储端口保持私有。终端代理与 AD 上传要求 HTTPS，会验证证书并拒绝重定向。使用私有 CA 时，为终端代理配置 `SHADAI_CA_BUNDLE`，或使用相应 Python 采集器的 CA 文件选项。AD PowerShell 上传使用平台证书信任库，应在该信任库中配置 CA。直接配置最终地址，保持证书验证开启。
 
 Compose 的专用 `edge` 网络默认使用 `172.30.0.0/24`，前端为 `172.30.0.2`，API 为 `172.30.0.3`。如与现有网络冲突，必须一致地调整**全部三项** `SHADAI_EDGE_SUBNET`、`SHADAI_EDGE_FRONTEND_IP`、`SHADAI_EDGE_API_IP`，并在维护窗口内重建网络。Uvicorn 只信任该前端地址；前端 nginx 会覆盖传入的客户端地址标头。增加上游代理时，需要仅信任其精确地址提供的真实 IP，并限制入站访问，否则代理后的客户端共享一个登录配额。不要为了通过测试扩大 `TRUSTED_PROXY_IPS` 或信任 `*`。
 
-仅在需要跨源访问时配置精确的 `CORS_ORIGINS`。控制台 Cookie 使用 HttpOnly、SameSite=Strict，在 localhost 以外使用 Secure/`__Host-`；根据实际公开源站核对 `SESSION_COOKIE_SECURE`。使用 Cookie 验证身份的写入请求需要 `X-CSRF-Token`。PostgreSQL 的 TLS 参数放在 `DATABASE_URL` 中；Redis 使用 `rediss://` 的 `REDIS_URL`。外部 ClickHouse 使用原生 TLS，配置 `CLICKHOUSE_SECURE=true`，通常使用 9440 端口；私有 CA、客户端证书与主机名设置见 [TLS 配置（英文参考）](../deployment.md#remote-access-and-tls)。
+仅在需要跨源访问时配置精确的 `CORS_ORIGINS`。控制台 Cookie 使用 HttpOnly 和 SameSite=Strict。自动模式仅对回环主机（`localhost`、`127.0.0.1`、`::1`、`[::1]` 和 `*.localhost`）禁用 Secure/`__Host-`，其他主机默认启用。显式设置的 `SESSION_COOKIE_SECURE` 优先；应根据实际公开源站核对。使用 Cookie 验证身份的写入请求需要 `X-CSRF-Token`。PostgreSQL 的 TLS 参数放在 `DATABASE_URL` 中；Redis 使用 `rediss://` 的 `REDIS_URL`。外部 ClickHouse 使用原生 TLS，配置 `CLICKHOUSE_SECURE=true`，通常使用 9440 端口；私有 CA、客户端证书与主机名设置见 [TLS 配置（英文参考）](../deployment.md#remote-access-and-tls)。
 
 ## 4. 使用外部存储准备 Kubernetes
 
@@ -200,7 +227,7 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli SAVE'
 ```
 
-生产恢复目标需要经过测试的数据库原生备份。在独立检出目录/项目中恢复，使用空存储、匹配的版本/密钥、未使用的端口和边缘子网。每条命令都保留该项目名；重复导入并不安全。通过存储平台恢复已停止的 Redis 卷，或明确记录被丢弃的在途数据时间区间。比较事件/检测记录，验证就绪和登录，并完成一个新的合成事件的端到端验证。本地队列只能恢复到原始、已验证的绑定。
+生产恢复目标需要经过测试的数据库原生备份。在独立检出目录/项目中恢复，使用空存储、匹配的版本/密钥、未使用的端口和边缘子网。导入之前，在该恢复项目中仅用 `docker compose -p osa-restore-drill up -d --wait --wait-timeout 180 postgres clickhouse redis` 启动三项存储。使用 Bash `set -e`，并逐项验证导入；启动就绪不能证明恢复的数据正确。每条命令都保留该项目名；重复导入并不安全。通过存储平台恢复已停止的 Redis 卷，或明确记录被丢弃的在途数据时间区间。比较事件/检测记录，验证就绪和登录，并完成一个新的合成事件的端到端验证。本地队列只能恢复到原始、已验证的绑定。
 
 PostgreSQL 迁移 `003` 锁定本地用户，并拒绝空名称或大小写折叠后的重名；明确重命名，绝不静默合并账号。迁移 `004` 增加限定范围的凭据。**迁移 `005` 重置无法确定观测年龄的历史身份数组/计数，清除 `primary_evidence`，删除保留的 `sample_values`、`sample_observations` 和 `network_observations` 摘录，并将风险标记为过期。** 检测记录本身仍然保留。其历史身份依据的观测年龄无法证明；迁移不会赋予新的日期。在恢复副本中评审这一不可逆的证据/计数变化。迁移 `006` 仅创建扩展清单数据表；降级会删除这些表，代理的下一次快照会重新建立数据。ClickHouse `002_event_metadata.sql` 和 `003_extension_inventory.sql` 必须在会启动依赖的 API 命令之前执行，因为健康探针会查询 `browser_profile`，该列由 `003` 添加，旧卷中不存在。分阶段升级时依次升级 ClickHouse、工作进程、API 和代理；新版 API 写入队列的事件会在旧版工作进程中进入死信队列：
 
@@ -215,7 +242,7 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 # --no-deps avoids starting an API dependency graph before the migrations have completed.
 docker compose run --rm --no-deps api python -m shadai.cli init-db
 docker compose up -d
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 ```
 

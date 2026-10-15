@@ -2,11 +2,31 @@
 
 [English](../en/README.md) | [Français](README.md) | [简体中文](../zh-CN/README.md)
 
-Ce guide accompagne les spécialistes de l'infrastructure et de l'identité depuis une évaluation bornée jusqu'à un pilote soumis à une revue opérationnelle. Il couvre le backend en préversion **0.3.0** et l'agent autonome **0.3.0**. Ses procédures opérationnelles ont été alignées le **8 octobre 2026** en prenant pour socle le commit source `49a58d778d3014879e30a3ac5334df45cd426dbf` ; les procédures de l'inventaire des extensions de navigateur (agent 0.3.0, migration ClickHouse `003`, migration PostgreSQL `006`) ont été introduites par la [PR nº 15](https://github.com/alebgl77/open-shadow-ai/pull/15) le **13 octobre 2026**, au-delà de ce socle opérationnel principal. La console et les guides en trois langues ont été fusionnés dans `main` au [commit `7a12513eb1e1e3a800ba8d71f4726a3b5045b669`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). La préversion publiée `v0.3.0`, au commit `49a58d7`, précède la localisation et l'inventaire des extensions, et livre l'agent 0.1.0 ; les deux révisions sources déclarent le backend `0.3.0`. Consignez le commit exact déployé pour vérifier les fonctionnalités disponibles et leurs preuves CI. Toute évolution ultérieure exige ses propres preuves opérationnelles et CI. Exécutez les commandes depuis la racine du dépôt, sauf indication contraire. Leur syntaxe reprend les procédures détaillées ; remplacez les hôtes, identifiants, chemins et interfaces d'exemple par des valeurs revues avant exécution.
+Ce guide accompagne les spécialistes de l'infrastructure et de l'identité depuis une évaluation bornée jusqu'à un pilote soumis à une revue opérationnelle. Ses procédures sont alignées au **15 octobre 2026** sur le commit source maintenu `d159ed68012281a2c9e887e1281d44f0fb75112c`, issu de la fusion de la [PR nº 17](https://github.com/alebgl77/open-shadow-ai/pull/17), avec le backend en préversion **0.3.0** et l'agent autonome **0.3.0**.
+
+| Source | Référence disponible |
+|---|---|
+| Code maintenu ci-dessus | Inventaire des extensions, console et guides en trois langues, cartographie et corrections du 15 octobre |
+| Préversion publiée `v0.3.0`, **7 octobre 2026**, `49a58d778d3014879e30a3ac5334df45cd426dbf` | Backend antérieur `0.3.0` et agent `0.1.0` ; ne contient pas les ajouts ci-dessus |
+
+Le seul numéro `0.3.0` ne permet pas d'identifier les fonctionnalités ou corrections de sécurité. Utilisez le code maintenu pour ces procédures et consignez le commit exact déployé, la révision de configuration, les digests d'images et les preuves CI/de construction. Toute révision ultérieure exige sa propre qualification. Les changements de code et une CI réussie ne publient ni ne déploient des images et ne certifient pas votre environnement. Exécutez les commandes depuis la racine du dépôt, sauf indication contraire. Les blocs Bash nécessitent Bash ; la section 2 précise le bootstrap Windows et la séquence des shells. Remplacez les hôtes, identifiants, chemins et interfaces d'exemple par des valeurs revues avant exécution.
 
 Une installation sert **une seule organisation**. `tenant_id` contrôle un périmètre, sans constituer une frontière d'isolation. Aucune certification de production, aucun SLA, débit d'entreprise mesuré, déploiement automatique du parc ou détection universelle de l'IA ne sont revendiqués. Les guides complets anglais, français et chinois simplifié couvrent les mêmes procédures ; les documents détaillés liés sont signalés comme références en anglais. Les audits historiques et journaux de modifications conservent leur langue et leur portée de validation. Les schémas animés existants utilisent des libellés français et des données synthétiques. La [roadmap française](roadmap.md) présente les étapes futures et leurs critères de passage.
 
 Le sélecteur de langue de la console fonctionne avant et après connexion, en anglais, français et chinois simplifié. Sa préférence validée, locale au navigateur, est indépendante de l'authentification ; un stockage absent ou bloqué entraîne un retour à l'anglais. Les valeurs brutes des sources et identifiants techniques/API restent littéraux. Voir la [documentation et sa couverture linguistique](../README.md).
+
+Lisez les sections 1–4 pour le périmètre et l'installation, 5–6 pour l'identité, 7 pour la collecte, 8–10 pour l'exploitation et la reprise, puis 11–13 pour la sécurité, la qualification et la maintenance. Consultez ces références détaillées en complément du guide :
+
+| Besoin | Référence |
+|---|---|
+| Installation et topologie | [Déploiement (référence en anglais)](../deployment.md) · [Architecture (référence en anglais)](../architecture.md) |
+| Inventaire AD, SSO et SCIM | [Microsoft (référence en anglais)](../microsoft.md) · [OIDC/SCIM (référence en anglais)](../sso-scim.md) |
+| Collecte et limites réseau | [Couverture des sources (référence en anglais)](../collectors.md) · [Analyse réseau (référence en anglais)](../network-analysis.md) · [Cartographie et radars](cartography.md) |
+| Exploitation, rétention et reprise | [Exploitation des collecteurs (référence en anglais)](../collector-operations.md) · [Rétention des files (référence en anglais)](../queue-retention.md) · [Sauvegarde et restauration (référence en anglais)](../deployment.md#backup-and-restore) |
+| Qualification et preuves | [Qualification (référence en anglais)](../production-qualification.md) · [Compte rendu de validation (référence en anglais)](../validation.md) |
+| Corrections du 15 octobre et contrôles du dépôt | [Corrections et contrôles d'exploitation](audit-remediation-2026-10-15.md) · [Gouvernance du dépôt](repository-governance.md) |
+
+Le guide de correction couvre F01–F10, la compatibilité des nouveaux secrets, la reconstruction et les contrôles cibles. Le guide de gouvernance décrit le profil revu de PR à 32 contrôles, appliqué aussi aux administrateurs, et son choix délibéré de zéro approbation avec un seul mainteneur ; vérifiez l'application actuelle par sa procédure de relecture.
 
 ## 1. Définir le périmètre et les preuves
 
@@ -30,21 +50,28 @@ Exigez Git, Python 3.12+ et un Docker Engine fonctionnel avec Compose v2 ; Docke
 Sous Linux/macOS, lancez le bootstrap depuis un checkout de confiance :
 
 ```bash
+set -e
 git clone https://github.com/alebgl77/open-shadow-ai.git
 cd open-shadow-ai
 bash scripts/bootstrap.sh
 docker compose config --quiet
-docker compose up -d --build
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --build api ingest-worker correlation-worker purge-worker frontend
+for attempt in $(seq 1 30); do
+  if MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 2
+done
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
-Sous Windows, remplacez uniquement la commande de bootstrap par :
+Sous Windows, préparez un checkout de confiance et exécutez le bootstrap dans PowerShell :
 
 ```powershell
 ./scripts/bootstrap.ps1
 ```
+
+Dans Git Bash, utilisez ce même checkout et contexte Docker : exécutez `set -e`, puis les commandes Compose du bloc ci-dessus ; ignorez `bash scripts/bootstrap.sh`. La boucle nécessite Bash et ne s’exécute pas directement dans PowerShell. Le préfixe par appel `MSYS2_ARG_CONV_EXCL='*'` empêche la [conversion de chemins de Git Bash](https://www.msys2.org/docs/filesystem-paths/) de modifier les chemins des conteneurs ; il ne modifie aucun réglage global d’environnement.
 
 Les deux bootstraps préservent la configuration et les six secrets de base existants ; `--dry-run` ou `-DryRun` prévisualisent l'opération. Sous Unix, les secrets utilisent un parent privé `0700`. Windows vérifie propriétaire, ACL complètes, reparse points et ancêtres avant de générer des octets ; les nouveaux répertoires autorisent utilisateur courant et SYSTEM sans élévation administrateur. Un arbre existant refusé exige une destination privée de confiance, pas une réparation automatique des permissions.
 
@@ -65,11 +92,11 @@ Les magasins ne publient aucun port hôte ; API et interface écoutent sur local
 
 Définissez `SHADAI_TENANT_ID` de manière cohérente et dédiez les identifiants des magasins externes à cette installation. Les secrets du bootstrap ne créent pas d'identifiant Microsoft utilisable, secret client OIDC, token SCIM ou token métriques. Distribuez chacun par le canal de gestion des secrets approuvé, dans des fichiers privés ; jamais dans Git, `.env`, arguments de commande, stockage navigateur, logs ou SYSVOL. Protégez le compte hôte et le daemon Docker.
 
-Le port 8443 sert du HTTP interne. Publiez une origine HTTPS de confiance via un reverse proxy devant l'interface, qui relaie `/api/` ; gardez les ports directs API/magasins privés. Agents et upload AD exigent HTTPS, valident les certificats et refusent les redirections. Définissez `SHADAI_CA_BUNDLE` ou l'option de fichier CA du collecteur pour une CA privée. Configurez directement l'endpoint final et maintenez la vérification.
+Le port 8443 sert du HTTP interne. Publiez une origine HTTPS de confiance via un reverse proxy devant l'interface, qui relaie `/api/` ; gardez les ports directs API/magasins privés. Agents et upload AD exigent HTTPS, valident les certificats et refusent les redirections. Pour une CA privée, utilisez `SHADAI_CA_BUNDLE` pour l'agent des postes ou l'option de fichier CA du collecteur Python concerné. L'upload AD PowerShell utilise le magasin de confiance des certificats de la plateforme ; installez-y la CA. Configurez directement l'endpoint final et maintenez la vérification.
 
 Le réseau Compose `edge` dédié utilise par défaut `172.30.0.0/24`, frontend `172.30.0.2`, API `172.30.0.3`. En cas de chevauchement, modifiez ensemble **les trois** `SHADAI_EDGE_SUBNET`, `SHADAI_EDGE_FRONTEND_IP`, `SHADAI_EDGE_API_IP`, puis recréez le réseau en maintenance. Uvicorn ne fait confiance qu'à cette adresse frontend ; nginx écrase les en-têtes d'adresse client entrants. Un proxy supplémentaire en amont exige une confiance real-IP limitée à son adresse exacte et un ingress restreint ; sinon ses clients partagent un quota de connexion. N'élargissez jamais `TRUSTED_PROXY_IPS` et n'autorisez pas `*` pour faire passer un test.
 
-Utilisez `CORS_ORIGINS` exact uniquement si l'accès entre origines est nécessaire. Les cookies de console sont HttpOnly, SameSite=Strict, Secure/`__Host-` hors localhost ; vérifiez `SESSION_COOKIE_SECURE` selon l'origine publique réelle. Les écritures authentifiées par cookie exigent `X-CSRF-Token`. TLS PostgreSQL se configure dans `DATABASE_URL`, TLS Redis dans `REDIS_URL` avec `rediss://`. ClickHouse externe utilise TLS natif avec `CLICKHOUSE_SECURE=true` et normalement le port 9440 ; CA privée, certificats client et réglages de nom d'hôte figurent dans [Configuration TLS (référence en anglais)](../deployment.md#remote-access-and-tls).
+Utilisez `CORS_ORIGINS` exact uniquement si l'accès entre origines est nécessaire. Les cookies de console sont HttpOnly et SameSite=Strict. En mode automatique, Secure/`__Host-` est désactivé uniquement pour les hôtes de boucle locale (`localhost`, `127.0.0.1`, `::1`, `[::1]` et `*.localhost`) ; il est activé pour les autres. Une valeur explicite de `SESSION_COOKIE_SECURE` prévaut ; vérifiez-la selon l'origine publique réelle. Les écritures authentifiées par cookie exigent `X-CSRF-Token`. TLS PostgreSQL se configure dans `DATABASE_URL`, TLS Redis dans `REDIS_URL` avec `rediss://`. ClickHouse externe utilise TLS natif avec `CLICKHOUSE_SECURE=true` et normalement le port 9440 ; CA privée, certificats client et réglages de nom d'hôte figurent dans [Configuration TLS (référence en anglais)](../deployment.md#remote-access-and-tls).
 
 ## 4. Préparer Kubernetes avec des magasins externes
 
@@ -200,7 +227,7 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 docker compose exec -T redis sh -c 'REDISCLI_AUTH="$(cat /run/secrets/redis_password)" redis-cli SAVE'
 ```
 
-Les objectifs de production exigent des sauvegardes natives de bases testées. Restaurez dans checkout/projet séparé, magasins vides, version/clés identiques, ports et réseau edge inutilisés. Gardez le nom de projet dans chaque commande ; les imports répétés sont dangereux. Restaurez les volumes Redis arrêtés par la plateforme de stockage ou documentez l'intervalle en vol abandonné. Comparez événements/détections, validez readiness/connexion et un nouvel événement synthétique de bout en bout. Restaurez les spools uniquement sur leur binding original vérifié.
+Les objectifs de production exigent des sauvegardes natives de bases testées. Restaurez dans un checkout/projet séparé, avec magasins vides, version/clés identiques, ports et réseau edge inutilisés. Démarrez uniquement les trois magasins avec `docker compose -p osa-restore-drill up -d --wait --wait-timeout 180 postgres clickhouse redis` dans ce projet de restauration avant tout import. Utilisez Bash `set -e` et vérifiez chaque import ; la disponibilité au démarrage ne prouve pas la validité des données restaurées. Gardez le nom de projet dans chaque commande ; les imports répétés sont dangereux. Restaurez les volumes Redis arrêtés par la plateforme de stockage ou documentez l'intervalle en vol abandonné. Comparez événements/détections, validez readiness/connexion et un nouvel événement synthétique de bout en bout. Restaurez les spools uniquement sur leur binding original vérifié.
 
 La migration PostgreSQL `003` verrouille les utilisateurs locaux et refuse noms vides ou doublons après case-fold ; renommez explicitement, sans fusion silencieuse. `004` ajoute les credentials restreints. **La migration `005` remet à zéro les tableaux/compteurs historiques d'identités non datés, efface `primary_evidence`, retire les extraits `sample_values`, `sample_observations`, `network_observations` et marque le risque obsolète.** Les détections restent présentes. L'âge de leurs preuves historiques d'identité ne peut être démontré ; la migration n'invente pas de dates récentes. Examinez ce changement irréversible sur une restauration isolée. La migration `006` crée uniquement les tables de l'inventaire des extensions ; son downgrade les supprime et les prochains instantanés des agents les reconstruisent. ClickHouse `002_event_metadata.sql` et `003_extension_inventory.sql` doivent précéder les commandes API qui démarrent leurs dépendances : la sonde de santé sélectionne `browser_profile`, ajoutée par `003` et absente des anciens volumes. Un déploiement progressif met à niveau ClickHouse, puis les workers, puis l'API, puis les agents ; les événements mis en file par une nouvelle API iraient en dead letter sur d'anciens workers :
 
@@ -215,7 +242,7 @@ docker compose exec -T clickhouse sh -c 'clickhouse-client --user shadai --passw
 # --no-deps avoids starting an API dependency graph before the migrations have completed.
 docker compose run --rm --no-deps api python -m shadai.cli init-db
 docker compose up -d
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 ```
 

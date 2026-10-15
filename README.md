@@ -12,17 +12,17 @@
 
 Understand which AI services and tools appear in your environment, where each signal came from, and what it can actually prove. Bring together network metadata, endpoint inventory and Microsoft directory signals in an interface built for investigation.
 
-[Expert implementation handbook](docs/en/README.md) · [Get started](#get-started) · [Documentation and language coverage](docs/README.md) · [Deployment (English reference)](docs/deployment.md) · [Production qualification (English reference)](docs/production-qualification.md) · [Collector operations (English reference)](docs/collector-operations.md) · [Microsoft & Active Directory (English reference)](docs/microsoft.md) · [SSO & SCIM (English reference)](docs/sso-scim.md) · [Architecture (English reference)](docs/architecture.md) · [Roadmap (English reference)](docs/roadmap.md)
+[Expert implementation handbook](docs/en/README.md) · [Get started](#get-started) · [Professional documentation hub](docs/README.md) · [Roadmap (English reference)](docs/roadmap.md)
 
-[15 October audit remediation and operator checks](docs/audit-remediation-2026-10-15.md)
+[15 October audit remediation and operator checks](docs/audit-remediation-2026-10-15.md) · [Repository governance](docs/repository-governance.md)
 
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
 
-The backend is development preview **0.3.0**; the standalone endpoint agent is **0.3.0** (the published `v0.3.0` prerelease ships agent 0.1.0). The English, French and Simplified Chinese handbooks provide equivalent implementation procedures. Detailed references and historical validation records retain their stated language and source-specific scope.
+This README describes maintained source aligned on **2026-10-15**, commit `d159ed68012281a2c9e887e1281d44f0fb75112c` (merged [PR #17](https://github.com/alebgl77/open-shadow-ai/pull/17)), with backend preview **0.3.0** and standalone agent **0.3.0**. The latest published prerelease remains `v0.3.0` (**2026-10-07**, `49a58d7`, agent `0.1.0`); it predates the extension inventory, localization, cartography and 15 October corrections.
 
 The console offers English, French and Simplified Chinese before and after sign-in. A validated browser-local language preference is separate from authentication; English is the default when no preference is available or storage is blocked. Raw source data and machine/API identifiers retain their original values. See [language coverage](docs/README.md).
 
-These language options were introduced on `main` by [commit `7a12513`](https://github.com/alebgl77/open-shadow-ai/commit/7a12513eb1e1e3a800ba8d71f4726a3b5045b669). The published `v0.3.0` prerelease at `49a58d7` predates localization and the extension inventory introduced by [PR #15](https://github.com/alebgl77/open-shadow-ai/pull/15). Both source revisions declare `0.3.0`; record the exact deployed commit when checking availability and CI evidence.
+Use the [professional documentation hub](docs/README.md) for the implementation reading order and source/release availability, then follow the [expert handbook](docs/en/README.md). Version `0.3.0` alone does not identify the delivered code: record the exact deployed commit, configuration, image digests and CI/build evidence. Later changes require their own qualification; successful CI does not publish images or certify your target environment.
 
 ![Open Shadow AI investigation dashboard with synthetic demo data](docs/assets/dashboard-desktop.webp)
 
@@ -63,17 +63,22 @@ Open the `/demo` route at the local address printed by the development server. T
 Prerequisites: Git, Python 3.12+ and a working Docker Engine with Compose v2. No Docker runtime is bundled. The initial interface binds to localhost over HTTP; remote agents require an HTTPS reverse proxy.
 
 ```bash
+set -e
 git clone https://github.com/alebgl77/open-shadow-ai.git
 cd open-shadow-ai
 bash scripts/bootstrap.sh
 docker compose config --quiet
-docker compose up -d --build
-docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped
+docker compose up -d --build api ingest-worker correlation-worker purge-worker frontend
+for attempt in $(seq 1 30); do
+  if MSYS2_ARG_CONV_EXCL='*' docker compose exec -T api python /app/entrypoint.py python -m shadai.workers.redis_lifecycle reconcile --execute --legacy-writers-stopped; then break; fi
+  if [ "$attempt" = 30 ]; then exit 1; fi
+  sleep 2
+done
 docker compose up -d --wait --wait-timeout 180 api ingest-worker correlation-worker purge-worker frontend
 docker compose run --rm api python -m shadai.cli create-admin
 ```
 
-On Windows, use `./scripts/bootstrap.ps1` in place of the Bash bootstrap. Both preserve existing secrets and configuration. Use `-DryRun` or `--dry-run` to preview.
+On Windows, prepare a trusted checkout and run `./scripts/bootstrap.ps1` in PowerShell first. In Git Bash, use that same checkout and Docker context: run `set -e`, then the Compose commands in the block above; skip `bash scripts/bootstrap.sh`. The retry loop requires Bash and cannot run directly in PowerShell. The per-call `MSYS2_ARG_CONV_EXCL='*'` prevents [Git Bash path conversion](https://www.msys2.org/docs/filesystem-paths/) from rewriting container paths; it does not change global environment settings. Both bootstraps preserve existing secrets and configuration; use `-DryRun` or `--dry-run` to preview.
 
 Wait for the new workers to initialize their actual Redis groups before reconciliation; retry if initialization is still in progress. On upgrades, stop all legacy writers/workers/replay clients before starting the indexed version. Readiness requires the reconciled retention schema. See [queue retention (English reference)](docs/queue-retention.md) and [qualification (English reference)](docs/production-qualification.md) for failure behavior and the isolated rehearsal.
 
@@ -95,12 +100,14 @@ Optional [OIDC sign-in and SCIM provisioning (English reference)](docs/sso-scim.
 
 ## What is delivered
 
+The capabilities below describe the maintained source baseline above. Check release availability separately.
+
 | Capability | Status and practical boundary |
 |---|---|
 | React investigation interface, catalog and governance workflow | Implemented; evaluate with your data |
 | DNS/proxy parsers and syslog collector | Implemented; parser and listener must match the source |
 | [Passive network analysis (English reference)](docs/network-analysis.md) | Zeek/Suricata/TShark metadata imports, optional offline PCAP or explicit live sensor, and `/network` evidence view; observed names do not prove AI requests |
-| [AI cartography](docs/cartography.md) | `/cartography` connects network observations and reported host installations to catalog services, with 3D navigation and accessible evidence; bounded coverage, presence and observations do not prove use |
+| [AI cartography](docs/cartography.md) | `/cartography` connects network observations and reported host installations to catalog services, with 3D/list navigation, retained-event evidence and protocol/catalog-family radars over loaded observations; bounded coverage, presence and observations do not prove use |
 | Endpoint agent | Implemented process/container/runtime/extension inventory; OS and fleet rollout verification pending |
 | Browser extension inventory | Implemented per-installation state (version, enabled, install source, user, profile) for accessible local users/profiles on agent 0.3.0 hosts, version-change history and audited export in **Extensions**; presence evidence kept for the identity window, not usage |
 | Microsoft Entra collector | Implemented service-principal inventory and optional grants; AI matching requires reviewed application-ID mappings; live tenant validation pending |
