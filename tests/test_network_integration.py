@@ -150,7 +150,8 @@ async def test_live_network_worker_to_typed_metrics_deduplicates_replays_and_kee
         detail = await network.get_network_event(
             events[1].event_id, hours=24, _user=SimpleNamespace(role="analyst")
         )
-        assert detail.match_field == "sni" and detail.match_confidence == pytest.approx(0.65)
+        assert detail.sni == domain
+        assert detail.match_field == "domain" and detail.match_confidence == pytest.approx(0.65)
         assert await queue_redis.xlen("matches") == 4  # DNS, TLS and both out-of-window DNS fixtures.
         queued = await queue_redis.xrange("matches")
         assert {CanonicalEvent.model_validate_json(fields["event"]).event_id for _, fields in queued} == {
