@@ -43,7 +43,7 @@ gh api repos/alebgl77/open-shadow-ai/branches/main
 
 Vérifiez l'état renvoyé, sans supposer qu'une requête réussie a installé chaque paramètre :
 
-- `required_status_checks.strict` vaut `true` ; `checks` contient exactement les 32 paires contexte/application distinctes du modèle. GitHub peut renseigner l'ancienne liste `contexts` dans sa réponse bien que la requête l'envoie vide.
+- `required_status_checks.strict` vaut `true` ; `checks` contient exactement les 32 paires contexte/application distinctes du modèle. La requête utilise uniquement `checks` et omet le champ obsolète `contexts` ; n'envoyez pas les deux représentations. GitHub peut néanmoins renseigner `contexts` dans sa réponse.
 - `enforce_admins.enabled` vaut `true` ; la réponse de branche contient `protected: true`.
 - `required_pull_request_reviews` est non nul, avec `0` approbation requise, invalidation des revues obsolètes activée, revue des propriétaires de code désactivée et approbation du dernier push désactivée. Aucun utilisateur, équipe ou application de contournement n'est présent.
 - Résolution des discussions activée ; force push et suppression désactivés. GitHub représente ces champs de réponse par des objets contenant `enabled`, au lieu des booléens de la requête.

@@ -1,7 +1,6 @@
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": [],
     "checks": [
       {"context": "compose-integration", "app_id": 15368},
       {"context": "frontend", "app_id": 15368},

@@ -43,7 +43,7 @@ gh api repos/alebgl77/open-shadow-ai/branches/main
 
 检查返回状态，不要假定请求成功就代表所有设置均已安装：
 
-- `required_status_checks.strict` 为 `true`；其 `checks` 恰好包含模板中的 32 组不同上下文/应用组合。即使请求传入空列表，GitHub 仍可能在响应中填充旧式 `contexts` 列表。
+- `required_status_checks.strict` 为 `true`；其 `checks` 恰好包含模板中的 32 组不同上下文/应用组合。请求仅使用 `checks`，省略已弃用的 `contexts` 字段；不要同时发送这两种表示。GitHub 仍可能在响应中填充 `contexts` 列表。
 - `enforce_admins.enabled` 为 `true`；分支响应显示 `protected: true`。
 - `required_pull_request_reviews` 非空，必需批准数为 `0`，启用过时审查失效，禁用代码所有者审查及最后推送批准。不存在绕过用户、团队或应用。
 - 启用讨论解决要求，禁用强制推送和删除。GitHub 在响应中使用含 `enabled` 的对象表示这些字段，而不是请求中的布尔值。

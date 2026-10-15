@@ -59,9 +59,8 @@ def assert_policy(policy, workflow):
         "required_conversation_resolution", "allow_force_pushes", "allow_deletions",
     }
     status = policy["required_status_checks"]
-    assert set(status) == {"strict", "contexts", "checks"}
+    assert set(status) == {"strict", "checks"}
     assert status["strict"] is True
-    assert status["contexts"] == []
     checks = status["checks"]
     assert type(checks) is list and len(checks) == 32
     for check in checks:
@@ -117,6 +116,7 @@ def test_workflow_retains_reviewed_literal_gate_surface(repository_assets):
 
 @pytest.mark.parametrize(("path", "value"), [
     (("required_status_checks", "strict"), False),
+    (("required_status_checks", "contexts"), []),
     (("required_status_checks", "contexts"), ["frontend"]),
     (("required_status_checks", "checks", 0, "app_id"), -1),
     (("required_status_checks", "checks", 0, "app_id"), True),

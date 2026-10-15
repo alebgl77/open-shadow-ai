@@ -41,7 +41,7 @@ gh api repos/alebgl77/open-shadow-ai/branches/main
 
 Check the returned state rather than assuming a successful request installed every setting:
 
-- `required_status_checks.strict` is `true`; its `checks` contains exactly the 32 distinct context/application pairs in the template. GitHub may populate the legacy `contexts` list in its response even though the request sends it empty.
+- `required_status_checks.strict` is `true`; its `checks` contains exactly the 32 distinct context/application pairs in the template. The request uses only `checks` and omits the deprecated `contexts` field; do not send both representations. GitHub may still populate `contexts` in its response.
 - `enforce_admins.enabled` is `true`; the branch response reports `protected: true`.
 - `required_pull_request_reviews` is non-null, with approval count `0`, stale-review dismissal enabled, code-owner review disabled and last-push approval disabled. No bypass users, teams or applications are present.
 - Conversation resolution is enabled; force pushes and deletions are disabled. GitHub represents these response fields as objects containing `enabled` rather than the request's booleans.
