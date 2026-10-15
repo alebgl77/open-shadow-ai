@@ -14,6 +14,8 @@ Understand which AI services and tools appear in your environment, where each si
 
 [Expert implementation handbook](docs/en/README.md) · [Get started](#get-started) · [Documentation and language coverage](docs/README.md) · [Deployment (English reference)](docs/deployment.md) · [Production qualification (English reference)](docs/production-qualification.md) · [Collector operations (English reference)](docs/collector-operations.md) · [Microsoft & Active Directory (English reference)](docs/microsoft.md) · [SSO & SCIM (English reference)](docs/sso-scim.md) · [Architecture (English reference)](docs/architecture.md) · [Roadmap (English reference)](docs/roadmap.md)
 
+[15 October audit remediation and operator checks](docs/audit-remediation-2026-10-15.md)
+
 > Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
 
 The backend is development preview **0.3.0**; the standalone endpoint agent is **0.3.0** (the published `v0.3.0` prerelease ships agent 0.1.0). The English, French and Simplified Chinese handbooks provide equivalent implementation procedures. Detailed references and historical validation records retain their stated language and source-specific scope.
