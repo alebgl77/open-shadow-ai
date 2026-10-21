@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Open Shadow AI"
+abstract: >-
+  Self-hosted Shadow AI discovery and governance. Correlates DNS and proxy
+  logs, Zeek/Suricata, an endpoint agent and Entra ID / Active Directory, with
+  an explicit evidence level per finding, keeping presence separate from usage.
+authors:
+  - family-names: "Beguel"
+    given-names: "Alexandre"
+    alias: "alebgl77"
+    website: "https://beguel.com/"
+license: Apache-2.0
+repository-code: "https://github.com/alebgl77/open-shadow-ai"
+url: "https://github.com/alebgl77/open-shadow-ai"
+keywords:
+  - shadow-ai
+  - ai-governance
+  - ai-inventory
+  - eu-ai-act
+  - cybersecurity
+  - entra-id
+  - active-directory
+  - self-hosted
