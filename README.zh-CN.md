@@ -147,3 +147,7 @@ DNS 解析表明与域名有关的联系，不表示已完成 AI 交互。已安
 采用 [Apache-2.0](LICENSE) 许可证。版权所有：Open Shadow AI 贡献者。
 
 有关容量与部署，参见[容量规划（英文参考）](docs/capacity.md)。吞吐量结论需要依据自身工作负载进行测量。
+
+## 作者
+
+由 **[Alexandre Beguel](https://github.com/alebgl77)** 构建和维护。他是常驻巴黎的智能体 AI 架构师和外部首席 AI 官（CAIO），专注于生产级生成式 AI、LLMOps、LLM FinOps 以及基于证据的 AI 治理。[beguel.com](https://beguel.com/) · [LinkedIn](https://www.linkedin.com/in/beguel/) · [英文、法文和西班牙文个人主页](https://alebgl77.github.io/)

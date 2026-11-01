@@ -146,3 +146,7 @@ Consultez [CONTRIBUTING.md (référence en anglais)](CONTRIBUTING.md), proposez 
 Licence [Apache-2.0](LICENSE). Copyright des contributeurs Open Shadow AI.
 
 Pour le dimensionnement et le déploiement progressif, voir la [planification de capacité (référence en anglais)](docs/capacity.md). Toute affirmation de débit exige des mesures sur votre charge.
+
+## Auteur
+
+Conçu et maintenu par **[Alexandre Beguel](https://github.com/alebgl77)**, architecte IA agentique et CAIO externalisé basé à Paris. Il travaille sur l'IA générative en production, le LLMOps, le FinOps des LLM et la gouvernance de l'IA fondée sur les preuves. [beguel.com](https://beguel.com/) · [LinkedIn](https://www.linkedin.com/in/beguel/) · [Profil en français, anglais et espagnol](https://alebgl77.github.io/fr/)

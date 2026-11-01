@@ -147,3 +147,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), submit a small reproducible change and 
 Licensed under [Apache-2.0](LICENSE). Copyright Open Shadow AI contributors.
 
 For sizing and rollout, see [capacity planning (English reference)](docs/capacity.md). Throughput claims require measurements on your workload.
+
+## Author
+
+Built and maintained by **[Alexandre Beguel](https://github.com/alebgl77)**, Agentic AI Architect and external CAIO based in Paris. He works on production GenAI, LLMOps, LLM FinOps and evidence-first AI governance. [beguel.com](https://beguel.com/) · [LinkedIn](https://www.linkedin.com/in/beguel/) · [Profile in English, French and Spanish](https://alebgl77.github.io/)
