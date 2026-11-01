@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "recipe_version": 3,
+  "recipe_version": 4,
   "toolchain": {
-    "version": "go1.26.9",
+    "version": "go1.26.10",
     "image": "golang",
     "goproxy": "https://proxy.golang.org",
     "gosumdb": "sum.golang.org",
@@ -78,6 +78,28 @@
           "signature_members": [
             ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
           ]
+        },
+        {
+          "architecture": "x86_64",
+          "package": "musl",
+          "version": "1.2.6-r3",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/musl-1.2.6-r3.apk",
+          "sha256": "e142255d0fa397f14318996bc10378093dcc069dc3dd1b6818c8f28a789c21da",
+          "bytes": 415466,
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
+          ]
+        },
+        {
+          "architecture": "x86_64",
+          "package": "musl-utils",
+          "version": "1.2.6-r3",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/musl-utils-1.2.6-r3.apk",
+          "sha256": "47263d05842c5e12d01e0369e5b5bea51733323501c00ca21968a5102de137ca",
+          "bytes": 13598,
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
+          ]
         }
       ],
       "aarch64": [
@@ -110,6 +132,28 @@
           "architecture": "aarch64",
           "version": "1.3.2-r1",
           "package": "zlib",
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
+          ]
+        },
+        {
+          "architecture": "aarch64",
+          "package": "musl",
+          "version": "1.2.6-r3",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/musl-1.2.6-r3.apk",
+          "sha256": "2e17864102278d9049c3a56f1bceed9e8cf287065617e579325123443daed8a5",
+          "bytes": 417730,
+          "signature_members": [
+            ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
+          ]
+        },
+        {
+          "architecture": "aarch64",
+          "package": "musl-utils",
+          "version": "1.2.6-r3",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/musl-utils-1.2.6-r3.apk",
+          "sha256": "bb460bdc009e88989bd5adca8a7c8298c339cba99da11c6196c818e042fbaf49",
+          "bytes": 16883,
           "signature_members": [
             ".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
           ]
@@ -220,31 +264,31 @@
   "services": {
     "postgres": {
       "functional_version": "16.15",
-      "runtime_tag": "shadai/postgres:16.15-maintained.3",
+      "runtime_tag": "shadai/postgres:16.15-maintained.4",
       "base": "postgres-base",
       "dockerfile": "deploy/service-builds/Dockerfile.postgres"
     },
     "clickhouse": {
       "functional_version": "25.8.33.6",
-      "runtime_tag": "shadai/clickhouse:25.8.33.6-maintained.3",
+      "runtime_tag": "shadai/clickhouse:25.8.33.6-maintained.4",
       "base": "clickhouse-base",
       "dockerfile": "deploy/service-builds/Dockerfile.clickhouse"
     },
     "redis": {
       "functional_version": "7.4.11",
-      "runtime_tag": "shadai/redis:7.4.11-maintained.3",
+      "runtime_tag": "shadai/redis:7.4.11-maintained.4",
       "base": "redis-base",
       "dockerfile": "deploy/service-builds/Dockerfile.redis"
     },
     "node-exporter": {
       "functional_version": "1.12.1",
-      "runtime_tag": "shadai/node-exporter:1.12.1-maintained.3",
+      "runtime_tag": "shadai/node-exporter:1.12.1-maintained.4",
       "base": "node-exporter-base",
       "dockerfile": "deploy/service-builds/Dockerfile.node-exporter"
     },
     "prometheus": {
       "functional_version": "3.15.0",
-      "runtime_tag": "shadai/prometheus:3.15.0-maintained.3",
+      "runtime_tag": "shadai/prometheus:3.15.0-maintained.4",
       "base": "prometheus-base",
       "dockerfile": "deploy/service-builds/Dockerfile.prometheus"
     }
@@ -257,28 +301,28 @@
     "requirements/service-builds/gosu/modules.txt": "cea520ba9ff289571cda1aef8ec37a0fadfbeb892618adad4ee2c21f57b54401",
     "requirements/service-builds/gosu/upstream.go.mod": "0475f1708db81d718b633faf2d9dd64695037eabdc8562125060607bcb01b2ba",
     "requirements/service-builds/gosu/upstream.go.sum": "2a8f3fb6adb84839bbb9999f12f1416fb86c184135aaa1c2e489b35203c08346",
-    "requirements/service-builds/node-exporter/go.mod": "955bb46227920ad8f79790ba0559cd03dc7335ff9d48ee102c84dec11797cd33",
-    "requirements/service-builds/node-exporter/go.mod.diff": "eed682f9055de068399244821fe7c7ca2aaae949923c58df59c6b6ccd45b3047",
-    "requirements/service-builds/node-exporter/go.sum": "f80c991b74b0428e584695885f34e08c1f81b53faaa85f1cf3d128f87a02b354",
+    "requirements/service-builds/node-exporter/go.mod": "57c83f68e6b65f17c4235ca6c2a6de2b55324ebc9806db6199d9abaf25f41d9b",
+    "requirements/service-builds/node-exporter/go.mod.diff": "529d57c1a04acc4a1d3646e26e2f9eb920f07f116428c127f8db57cfced428f3",
+    "requirements/service-builds/node-exporter/go.sum": "900eae667063c7b94f4fc994ced89cd41e4bec219a93ec743f20c330eee34f13",
     "requirements/service-builds/node-exporter/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-    "requirements/service-builds/node-exporter/modules.txt": "c5c4072a1a2bcf9255898a914f5708d03fc6894f4ba545c6b39fa71591d94690",
+    "requirements/service-builds/node-exporter/modules.txt": "a3c29819ac8992d4dbe3a254891e89ad5a5e7079a36ebd90943c2242ea1e3def",
     "requirements/service-builds/node-exporter/upstream.go.mod": "0e4614c617f16e308698ed1afdd0f0f055b119d4cdf015b336c095eb35fa34ed",
     "requirements/service-builds/node-exporter/upstream.go.sum": "e9457fad10a31b707ebfb68dc8378ec71f3271d04faf84f7ec8f9d231d81ea57",
-    "requirements/service-builds/prometheus/go.mod": "d85af091d5bf9ba19f98e4d92e24b368d3e5537af086521ef10c7dd669695fd7",
-    "requirements/service-builds/prometheus/go.mod.diff": "b1f6ea9e02800db3e29cb6f705d444a8034c663b571604673395cca31918e5ff",
-    "requirements/service-builds/prometheus/go.sum": "d788de08ccf06166baafa21b52764bd0af13328903a447029ee08b21fbd4ae67",
+    "requirements/service-builds/prometheus/go.mod": "6e2dfa8d25b5cd3da5513334134e63549aff7e70915958f98893893c825d609e",
+    "requirements/service-builds/prometheus/go.mod.diff": "d16c4a54172ed26c834436658580b5e69409096c3c0883d03111760d8c0fad08",
+    "requirements/service-builds/prometheus/go.sum": "e389454f20031dd3370e241952dd76b6a36079b301834c2557a12cc6dc0e7c27",
     "requirements/service-builds/prometheus/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
     "requirements/service-builds/prometheus/NOTICE": "ac9e304462a58a4d71b6488423d4447e614c8b31d517fe24345016522c102a78",
-    "requirements/service-builds/prometheus/modules.txt": "48a253a48d28565de9eca04945bf970449c5ab315b955044fda8e53995047cdb",
+    "requirements/service-builds/prometheus/modules.txt": "6dc79e270b4206cf0a146123b2643402b476108016ea3d16c8ad68dfa70b282e",
     "requirements/service-builds/prometheus/upstream.go.mod": "94e39d68d3abd10168c4b1944a63356a1d9a467ddeceee46aea75fc14e4381d1",
     "requirements/service-builds/prometheus/upstream.go.sum": "2b0f11cdccdc6605922c8f48d7afc68ae44fdc90df6b5d2f6f677b447b07d99e",
-    "deploy/service-builds/Dockerfile.clickhouse": "52ec4634e6e9d7c14dee8184ac0c00374531ca606d923a1cfaa5fbdf70a97bd2",
-    "deploy/service-builds/Dockerfile.node-exporter": "874feec13f1ba41274b605a5fb8f28b358bf8ce656538233d0f1b6c5b643e713",
-    "deploy/service-builds/Dockerfile.postgres": "856fbd83f85993d939fa95dcb478ec0f52158724164c829de9cf4e4ba2b16b90",
-    "deploy/service-builds/Dockerfile.prometheus": "65f77a3bfc7a68ea36bf1f1a10143fb5abb4f3de21f2f29d60f27fcf9b294d99",
-    "deploy/service-builds/Dockerfile.redis": "33babb871c07e9f50ade631effbd099172a4b07211d0bb410ecd38df94f2e3dd",
+    "deploy/service-builds/Dockerfile.clickhouse": "b9d38ac2c51f08257df4c1dab9db5040815295ac22753e220dfca9142d87e7b7",
+    "deploy/service-builds/Dockerfile.node-exporter": "677e423ce578707549d7224163faf1dc5ccdefa83e7167250c184b3936be20ab",
+    "deploy/service-builds/Dockerfile.postgres": "2012a8c40cffb344e8ddbf9d97314653881c6601a70a9fbd727847d8efc4f929",
+    "deploy/service-builds/Dockerfile.prometheus": "57660b7436e4aab0c040b99f34d07b375b86c16e0813707df82ad389a3ec2911",
+    "deploy/service-builds/Dockerfile.redis": "fd851a28240f1f899347aed38fbfba25da866d435cd9dc6a3ada121a210754ae",
     "requirements/service-builds/.gitattributes": "2804281a76c3635e66dabadffc7212e07184a22816f277a03591b3297539fc64",
     "deploy/service-builds/.gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    "requirements/service-builds/NOTICE.md": "123b26673f3038b9ba6e42a7f8181df694b817352ae62c82dfa7852ce87c9e9a"
+    "requirements/service-builds/NOTICE.md": "99d19e025331cf3cfa29d00571b1e92641f8692591b9961e889958b15ea28441"
   }
 }

@@ -13,7 +13,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-UV_VERSION = "0.11.16"
+UV_VERSION = "0.13.4"
 LOCKS = {
     "runtime.txt": (["pyproject.toml", "agent/pyproject.toml"], "3.12", []),
     "development.txt": (["pyproject.toml", "agent/pyproject.toml"], "3.12", ["--extra", "dev"]),

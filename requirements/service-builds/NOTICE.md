@@ -1,4 +1,4 @@
-# Maintained service recipe 3
+# Maintained service recipe 4
 
 These recipes preserve PostgreSQL 16.15, Redis 7.4.11, ClickHouse 25.8.33.6,
 gosu 1.19, node_exporter 1.12.1 and Prometheus 3.15.0. They replace the final
@@ -15,12 +15,24 @@ v3.15.0, commit 5241a27f): `go mod download` fetches it through
 `h1:` hash, and the recipe additionally compares the reported hash, the
 reported origin commit and the zip's SHA256 bytes with the manifest before
 unpacking it. The module zip is the complete release tree without nested
-modules; it does not contain the generated web UI. Go 1.26.9 is the official
+modules; it does not contain the generated web UI. Go 1.26.10 is the official
 multiarch image recorded in `requirements/images.json`; automatic toolchain
 downloads are disabled. `go.mod`, `go.sum` and `modules.txt` fix the module
 graph. Go verifies downloads through `proxy.golang.org` and `sum.golang.org`,
 verifies the module cache, checks the complete selected graph and builds with
 `-mod=readonly`, `CGO_ENABLED=0`, `-trimpath` and `-buildvcs=false`.
+
+Recipe 4 rebuilds the same publisher sources with Go 1.26.10 for
+CVE-2026-111943 (GO-2026-6809). node_exporter and Prometheus select x/net
+0.62.0 for CVE-2026-78661 and CVE-2026-97045, with its required x/crypto
+0.58.0, x/sys 0.49.0, x/term 0.47.0, x/text 0.43.0 and x/sync 0.24.0.
+The complete selected graph also moves the unlinked x/tools module to 0.51.0.
+Functional versions, publisher sources, checksum authorities, readonly graph
+checks and native evidence requirements remain unchanged. All runtime tags
+and recipe labels are revision 4. ClickHouse additionally installs the signed
+Alpine 3.24 musl and musl-utils 1.2.6-r3 packages for CVE-2026-107891.
+
+## Historical recipes 2 and 3
 
 Every publisher source is unchanged. Recipe 2 compiles gosu and node_exporter with
 Go 1.26.9, the fixed standard library reported for CVE-2026-78667,
@@ -130,7 +142,10 @@ Primary sources: [gosu 1.19](https://github.com/tianon/gosu/releases/tag/1.19),
 [Prometheus 3.15.0](https://github.com/prometheus/prometheus/releases/tag/v3.15.0),
 [Prometheus module zip](https://proxy.golang.org/github.com/prometheus/prometheus/@v/v0.315.0.zip),
 [Prometheus checksum database entry](https://sum.golang.org/lookup/github.com/prometheus/prometheus@v0.315.0),
-[Go downloads](https://go.dev/dl/), [Go checksum database](https://go.dev/ref/mod#authenticating),
+[Go downloads](https://go.dev/dl/),
+[Go certificate trust fix](https://pkg.go.dev/vuln/GO-2026-6809),
+[x/net parser allocation fix](https://pkg.go.dev/vuln/GO-2026-6860),
+[x/net renderer namespace fix](https://pkg.go.dev/vuln/GO-2026-6866), [Go checksum database](https://go.dev/ref/mod#authenticating),
 [Alpine package repositories](https://dl-cdn.alpinelinux.org/alpine/),
 [x/sys advisory](https://pkg.go.dev/vuln/GO-2026-5024),
 [moby/sys/user advisory](https://github.com/advisories/GHSA-mjcv-p78q-w5fw),
