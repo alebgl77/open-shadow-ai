@@ -1,4 +1,4 @@
-FROM python:3.12.15-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1 AS builder
+FROM python:3.12.15-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS builder
 WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src/ src/
@@ -7,7 +7,7 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r
     && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --prefix=/install -r requirements/runtime.txt \
     && python -m pip install --no-cache-dir --prefix=/install --no-deps --no-build-isolation .
 
-FROM python:3.12.15-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM python:3.12.15-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 # DSA-6549-1: the official image still ships liblzma5 5.8.1-1+deb13u1; install the exact fixed Debian package.

@@ -85,7 +85,7 @@ def harness(tmp_path, monkeypatch):
     def inventory():
         purls = ['pkg:apk/alpine/libcrypto3@3.5.9-r0']
         if state.component in {'postgres', 'node-exporter'}:
-            purls.append('pkg:golang/stdlib@go1.26.9')
+            purls.append('pkg:golang/stdlib@go1.26.10')
         elif state.component in PINS.APP_IMAGES and state.component != 'frontend':
             environment = AUDIT.default_environment()
             environment.update({'sys_platform': 'linux', 'os_name': 'posix', 'platform_system': 'Linux',
@@ -145,7 +145,7 @@ def harness(tmp_path, monkeypatch):
             packages = []
             for purl in inventory():
                 _, name, version = SCAN.package_key(purl)
-                packages.append({'Name': name, 'Version': 'go1.26.9' if name == 'stdlib' else version,
+                packages.append({'Name': name, 'Version': 'go1.26.10' if name == 'stdlib' else version,
                                  'Identifier': {'PURL': purl}})
             report = {'SchemaVersion': 2, 'ArtifactType': 'container_image', 'ArtifactName': '/input/layout',
                       'Trivy': {'Version': SCAN.TRIVY_VERSION},
@@ -395,7 +395,7 @@ def test_synthetic_prometheus_model_binds_both_binaries_to_one_source_copy_layer
         assert claim['source_proof']['authenticated_provenance'] is False
         assert claim['source_proof']['binary_copy_layer'] == claim['original_binary_file']['comment'].split(' ')[1]
     assert projections[0]['source_proof_sha256'] == projections[1]['source_proof_sha256']
-    assert metadata['service_recipe']['runtime_tag'] == 'shadai/prometheus:3.15.0-maintained.3'
+    assert metadata['service_recipe']['runtime_tag'] == 'shadai/prometheus:3.15.0-maintained.4'
     assert metadata['verdict'] == 'passed' and metadata['findings'] == []
 
 

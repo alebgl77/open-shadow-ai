@@ -62,7 +62,7 @@ def test_actual_recipes_inventory_and_deployed_roles_are_complete(service_tree):
     assert all("@sha256:" in value["reference"] for value in images.values() if value["role"] == "build-only")
     assert images["prometheus-base"] == {"role": "build-only", "reference": "prom/prometheus:v3.15.0@sha256:"
                                          "efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e"}
-    assert images["prometheus"] == {"role": "derived-runtime", "reference": "shadai/prometheus:3.15.0-maintained.3",
+    assert images["prometheus"] == {"role": "derived-runtime", "reference": "shadai/prometheus:3.15.0-maintained.4",
                                     "dockerfile": "deploy/service-builds/Dockerfile.prometheus"}
 
 
@@ -185,10 +185,14 @@ def test_zlib_native_matrix_is_exact_and_other_patch_versions_are_retained(servi
     assert zlib["version"] == "1.3.2-r1" and type(zlib["bytes"]) is int
     branch = "v3.21" if service == "redis" else "v3.24"
     assert zlib["url"] == f"https://dl-cdn.alpinelinux.org/alpine/{branch}/main/{arch}/zlib-1.3.2-r1.apk"
-    assert {entry["package"] for entry in entries} == (
-        {"zlib"} if service == "postgres" else {"libcrypto3", "libssl3", "zlib"})
+    expected = {"zlib"} if service == "postgres" else {"libcrypto3", "libssl3", "zlib"}
+    if service == "clickhouse":
+        expected |= {"musl", "musl-utils"}
+    assert {entry["package"] for entry in entries} == expected
     for entry in entries:
-        if entry["package"] != "zlib":
+        if entry["package"] in {"musl", "musl-utils"}:
+            assert service == "clickhouse" and entry["version"] == "1.2.6-r3"
+        elif entry["package"] != "zlib":
             assert entry["version"] == ("3.3.7-r2" if service == "redis" else "3.5.9-r0")
 
 
@@ -283,6 +287,8 @@ def test_refreshed_hash_cannot_authorize_an_unsafe_apk_install(service_tree, ser
                "missing-zlib": (" /packages/zlib.apk \\\n", " \\\n"),
                "stale-version": ("'zlib=1.3.2-r1'", "'zlib=1.3.2-r0'"),
                "write-mount": ("target=/packages,ro", "target=/packages,rw")}
+    if service == "clickhouse" and mutation == "missing-zlib":
+        changes[mutation] = (" /packages/zlib.apk /packages/musl.apk", " /packages/musl.apk")
     before, after = changes[mutation]
     assert before in recipe
     path.write_text(recipe.replace(before, after))
@@ -373,18 +379,18 @@ def test_release_sources_and_only_approved_module_difference():
     before = (directory / "upstream.go.mod").read_text()
     after = (directory / "go.mod").read_text()
     assert after == before.replace("go 1.25.0\n", "go 1.26.0\n").replace(
-        "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0").replace(
-        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.57.0").replace(
-        "golang.org/x/net v0.57.0", "golang.org/x/net v0.60.0").replace(
-        "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0").replace(
-        "golang.org/x/text v0.40.0", "golang.org/x/text v0.42.0")
+        "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.49.0").replace(
+        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.58.0").replace(
+        "golang.org/x/net v0.57.0", "golang.org/x/net v0.62.0").replace(
+        "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.24.0").replace(
+        "golang.org/x/text v0.40.0", "golang.org/x/text v0.43.0")
     maintained_sums = set((directory / "go.sum").read_text().splitlines())
     upstream_sums = set((directory / "upstream.go.sum").read_text().splitlines())
     added_sums = maintained_sums - upstream_sums
     assert len(added_sums) == 10
-    assert all(line.startswith(("golang.org/x/crypto v0.57.0", "golang.org/x/net v0.60.0",
-                                "golang.org/x/sync v0.23.0", "golang.org/x/sys v0.48.0",
-                                "golang.org/x/text v0.42.0")) for line in added_sums)
+    assert all(line.startswith(("golang.org/x/crypto v0.58.0", "golang.org/x/net v0.62.0",
+                                "golang.org/x/sync v0.24.0", "golang.org/x/sys v0.49.0",
+                                "golang.org/x/text v0.43.0")) for line in added_sums)
     removed_sums = upstream_sums - maintained_sums  # Only the superseded publisher versions leave the tidy graph.
     assert len(removed_sums) == 10
     assert all(line.startswith(("golang.org/x/crypto v0.54.0", "golang.org/x/net v0.57.0",
@@ -409,26 +415,26 @@ def test_release_sources_and_only_approved_module_difference():
     upstream = (prometheus / "upstream.go.mod").read_text()
     assert "go 1.26.0\n" in upstream and "toolchain" not in upstream
     assert (prometheus / "go.mod").read_text() == upstream.replace(
-        "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.23.0").replace(
-        "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.48.0").replace(
-        "golang.org/x/text v0.41.0", "golang.org/x/text v0.42.0").replace(
-        "golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.57.0").replace(
-        "golang.org/x/net v0.58.0", "golang.org/x/net v0.60.0").replace(
-        "golang.org/x/term v0.45.0", "golang.org/x/term v0.46.0")
+        "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.24.0").replace(
+        "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.49.0").replace(
+        "golang.org/x/text v0.41.0", "golang.org/x/text v0.43.0").replace(
+        "golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.58.0").replace(
+        "golang.org/x/net v0.58.0", "golang.org/x/net v0.62.0").replace(
+        "golang.org/x/term v0.45.0", "golang.org/x/term v0.47.0")
     added = set((prometheus / "go.sum").read_text().splitlines()) - \
         set((prometheus / "upstream.go.sum").read_text().splitlines())
     removed = set((prometheus / "upstream.go.sum").read_text().splitlines()) - \
         set((prometheus / "go.sum").read_text().splitlines())
     assert len(added) == 12 and all(line.startswith((
-        "golang.org/x/crypto v0.57.0", "golang.org/x/net v0.60.0", "golang.org/x/sync v0.23.0",
-        "golang.org/x/sys v0.48.0", "golang.org/x/term v0.46.0", "golang.org/x/text v0.42.0")) for line in added)
+        "golang.org/x/crypto v0.58.0", "golang.org/x/net v0.62.0", "golang.org/x/sync v0.24.0",
+        "golang.org/x/sys v0.49.0", "golang.org/x/term v0.47.0", "golang.org/x/text v0.43.0")) for line in added)
     assert len(removed) == 12 and all(line.startswith((
         "golang.org/x/crypto v0.56.0", "golang.org/x/net v0.58.0", "golang.org/x/sync v0.22.0",
         "golang.org/x/sys v0.47.0", "golang.org/x/term v0.45.0", "golang.org/x/text v0.41.0")) for line in removed)
     modules = (prometheus / "modules.txt").read_text().splitlines()
     assert modules[0] == "github.com/prometheus/prometheus"
-    assert {"golang.org/x/net v0.60.0", "golang.org/x/crypto v0.57.0", "golang.org/x/sys v0.48.0",
-            "golang.org/x/text v0.42.0", "golang.org/x/term v0.46.0", "golang.org/x/sync v0.23.0"} <= set(modules)
+    assert {"golang.org/x/net v0.62.0", "golang.org/x/crypto v0.58.0", "golang.org/x/sys v0.49.0",
+            "golang.org/x/text v0.43.0", "golang.org/x/term v0.47.0", "golang.org/x/sync v0.24.0"} <= set(modules)
     assert not any(line.startswith(("golang.org/x/net v0.58.0", "golang.org/x/crypto v0.56.0")) for line in modules)
     assert (prometheus / "LICENSE").read_text().startswith("                                 Apache License")
     assert "Prometheus" in (prometheus / "NOTICE").read_text()
@@ -442,15 +448,15 @@ def test_release_sources_and_only_approved_module_difference():
     ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.0"),
     ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.2"),
     ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.10"),
-    ("node-exporter", "golang.org/x/crypto v0.57.0", "golang.org/x/crypto v0.56.0"),
-    ("node-exporter", "golang.org/x/net v0.60.0", "golang.org/x/net v0.57.0"),
-    ("node-exporter", "golang.org/x/sys v0.48.0", "golang.org/x/sys v0.49.0"),
-    ("node-exporter", "golang.org/x/text v0.42.0", "golang.org/x/text v0.43.0"),
+    ("node-exporter", "golang.org/x/crypto v0.58.0", "golang.org/x/crypto v0.56.0"),
+    ("node-exporter", "golang.org/x/net v0.62.0", "golang.org/x/net v0.57.0"),
+    ("node-exporter", "golang.org/x/sys v0.49.0", "golang.org/x/sys v0.50.0"),
+    ("node-exporter", "golang.org/x/text v0.43.0", "golang.org/x/text v0.44.0"),
     ("node-exporter", "go 1.26.0", "go 1.25.0"),
-    ("prometheus", "golang.org/x/net v0.60.0", "golang.org/x/net v0.58.0"),
-    ("prometheus", "golang.org/x/net v0.60.0", "golang.org/x/net v0.61.0"),
-    ("prometheus", "golang.org/x/crypto v0.57.0", "golang.org/x/crypto v0.56.0"),
-    ("prometheus", "golang.org/x/term v0.46.0", "golang.org/x/term v0.45.0"),
+    ("prometheus", "golang.org/x/net v0.62.0", "golang.org/x/net v0.58.0"),
+    ("prometheus", "golang.org/x/net v0.62.0", "golang.org/x/net v0.61.0"),
+    ("prometheus", "golang.org/x/crypto v0.58.0", "golang.org/x/crypto v0.56.0"),
+    ("prometheus", "golang.org/x/term v0.47.0", "golang.org/x/term v0.45.0"),
     ("prometheus", "go 1.26.0", "go 1.27.0"),
     ("prometheus", "github.com/prometheus/common v0.71.0", "github.com/prometheus/common v0.71.1"),
 ])
@@ -479,7 +485,7 @@ def test_gosu_module_closure_tampering_is_detected(service_tree, filename):
         PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
 
 
-@pytest.mark.parametrize("revision", [2, 4, True, "3"])
+@pytest.mark.parametrize("revision", [2, 3, 5, True, "4"])
 def test_global_recipe_revision_cannot_drift(service_tree, revision):
     edit_manifest(service_tree, lambda manifest: manifest.update(recipe_version=revision))
     with pytest.raises(ValueError, match="unknown maintained service manifest"):
@@ -491,8 +497,8 @@ def test_refreshed_hash_cannot_authorize_a_stale_recipe_label(service_tree, serv
     name = f"deploy/service-builds/Dockerfile.{service}"
     path = service_tree / name
     value = path.read_text()
-    assert 'io.shadai.maintenance.recipe="3"' in value
-    path.write_text(value.replace('io.shadai.maintenance.recipe="3"', 'io.shadai.maintenance.recipe="2"'))
+    assert 'io.shadai.maintenance.recipe="4"' in value
+    path.write_text(value.replace('io.shadai.maintenance.recipe="4"', 'io.shadai.maintenance.recipe="2"'))
     edit_manifest(service_tree, lambda manifest: manifest["files"].update(
         {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
     with pytest.raises(ValueError, match="approved global revision"):
@@ -508,19 +514,19 @@ def test_rehashed_recipe_label_decoys_and_overrides_are_rejected(service_tree, m
     value = path.read_text()
     label = "io.shadai.maintenance.recipe"
     if mutation in {"comment", "run", "continued-run", "env", "other-label", "missing-label"}:
-        value = value.replace(f'{label}="3"', f"{label}=2")
-        decoys = {"comment": f'# {label}="3"\n', "run": f'RUN echo \'{label}="3"\'\n',
-                  "continued-run": f'RUN echo \\\n  {label}="3"\n',
-                  "env": f'ENV NOTE=\'{label}="3"\'\n', "other-label": f'LABEL note=\'{label}="3"\'\n',
-                  "missing-label": f'# {label}="3"\n'}
+        value = value.replace(f'{label}="4"', f"{label}=2")
+        decoys = {"comment": f'# {label}="4"\n', "run": f'RUN echo \'{label}="4"\'\n',
+                  "continued-run": f'RUN echo \\\n  {label}="4"\n',
+                  "env": f'ENV NOTE=\'{label}="4"\'\n', "other-label": f'LABEL note=\'{label}="4"\'\n',
+                  "missing-label": f'# {label}="4"\n'}
         value += decoys[mutation]
         if mutation == "missing-label":
             value = value.replace(f"{label}=2", "io.shadai.other=2")
     elif mutation == "same-instruction-override":
-        value = value.replace(f'{label}="3"', f'{label}="3" {label}=2')
+        value = value.replace(f'{label}="4"', f'{label}="4" {label}=2')
     else:
         overrides = {"later-unquoted": f"{label}=2", "later-single-quoted": f"{label}='2'",
-                     "later-quoted-key": f'"{label}"=2', "duplicate-approved": f"{label}=3"}
+                     "later-quoted-key": f'"{label}"=2', "duplicate-approved": f"{label}=4"}
         value += "LABEL " + overrides[mutation] + "\n"
     path.write_text(value)
     edit_manifest(service_tree, lambda manifest: manifest["files"].update(
@@ -532,15 +538,15 @@ def test_rehashed_recipe_label_decoys_and_overrides_are_rejected(service_tree, m
 
 
 @pytest.mark.parametrize("assignment", [
-    "io.shadai.maintenance.recipe=3", '"io.shadai.maintenance.recipe"="3"',
-    "'io.shadai.maintenance.recipe'='3'", "io.shadai.maintenance.recipe='3'",
-    "io.shadai.maintenance.recipe=\\3", "io.shadai.maintenance.recipe=\\\n3",
-    "io.shadai.maintenance.\\\nrecipe=3", "io.shadai.maintenance.recipe=\\\n# ignored comment \\\n3",
+    "io.shadai.maintenance.recipe=4", '"io.shadai.maintenance.recipe"="4"',
+    "'io.shadai.maintenance.recipe'='4'", "io.shadai.maintenance.recipe='4'",
+    "io.shadai.maintenance.recipe=\\4", "io.shadai.maintenance.recipe=\\\n4",
+    "io.shadai.maintenance.\\\nrecipe=4", "io.shadai.maintenance.recipe=\\\n# ignored comment \\\n4",
 ])
 def test_rehashed_recipe_accepts_actual_quoted_unquoted_and_continued_labels(service_tree, assignment):
     name = "deploy/service-builds/Dockerfile.clickhouse"
     path = service_tree / name
-    value = path.read_text().replace('LABEL io.shadai.maintenance.recipe="3"', "  lAbEl\t" + assignment)
+    value = path.read_text().replace('LABEL io.shadai.maintenance.recipe="4"', "  lAbEl\t" + assignment)
     path.write_text(value)
     edit_manifest(service_tree, lambda manifest: manifest["files"].update(
         {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
@@ -612,11 +618,11 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
                           component["web_ui"]["sha256"] + "  /tmp/web-ui.tar.gz' | sha256sum -c -",
                           "cp embed.go.tmpl embed.go", "gzip -c", "sort -z | xargs -0 echo //go:embed >> embed.go",
                           "echo var EmbedFS embed.FS >> embed.go",
-                          "-tags netgo,builtinassets", "version.Version=3.15.0-shadai.3",
+                          "-tags netgo,builtinassets", "version.Version=3.15.0-shadai.4",
                           "version.Revision=" + component["commit"], "-o /out/prometheus ./cmd/prometheus",
                           "-o /out/promtool ./cmd/promtool", "COPY --from=build /out/prometheus /out/promtool /bin/",
                           "COPY --from=build /src/LICENSE /src/NOTICE /usr/local/share/licenses/shadai/prometheus/",
-                          'io.shadai.maintenance.version="v3.15.0-shadai.3"',
+                          'io.shadai.maintenance.version="v3.15.0-shadai.4"',
                           "RUN /bin/prometheus --version && /bin/promtool --version"):
                 assert guard in recipe, guard
             assert recipe.count("go build ") == 2 and "gzip -n" not in recipe  # busybox gzip has no -n flag.
@@ -625,16 +631,34 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
             assert 'case "$(apk --print-arch)" in' in recipe and "ARG TARGETARCH" not in recipe
             assert "apk add --no-network /packages/zlib.apk" in recipe and "apk info -e 'zlib=1.3.2-r1'" in recipe
             assert "--mount=type=bind,from=build,source=/packages,target=/packages,ro" in recipe
-            assert 'gosu --version | grep -F "1.19 (go1.26.9 " && test "$(gosu nobody id -u)" = 65534' in recipe
+            assert 'gosu --version | grep -F "1.19 (go1.26.10 " && test "$(gosu nobody id -u)" = 65534' in recipe
 
 
-@pytest.mark.parametrize("version", ["go1.26.9", "1.26.9", "v1.26.9"])
+@pytest.mark.parametrize("version", ["1.26.9", "1.27.3"])
+def test_refreshed_hashes_cannot_authorize_old_or_unapproved_go_compilers(service_tree, version):
+    images = PINS.inventory(service_tree)
+    images["golang"]["reference"] = images["golang"]["reference"].replace("1.26.10", version)
+    (service_tree / "requirements/images.json").write_text(json.dumps(images))
+    manifest_path = service_tree / "requirements/service-builds/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["toolchain"]["version"] = "go" + version
+    for service in PINS.SERVICES:
+        name = images[service]["dockerfile"]
+        recipe = service_tree / name
+        recipe.write_text(recipe.read_text().replace("1.26.10", version))
+        manifest["files"][name] = hashlib.sha256(recipe.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="toolchain or checksum database mismatch"):
+        PINS.check_service_builds(service_tree, images)
+
+
+@pytest.mark.parametrize("version", ["go1.26.10", "1.26.10", "v1.26.10"])
 def test_go_standard_library_inventory_uses_one_semantic_version(version):
-    assert SCAN.package_key(f"pkg:golang/stdlib@{version}") == ("golang", "stdlib", "v1.26.9")
+    assert SCAN.package_key(f"pkg:golang/stdlib@{version}") == ("golang", "stdlib", "v1.26.10")
 
 
 def test_service_sbom_retains_entire_go_and_os_inventory():
-    purls = ["pkg:apk/alpine/libcrypto3@3.5.9-r0", "pkg:golang/stdlib@go1.26.9",
+    purls = ["pkg:apk/alpine/libcrypto3@3.5.9-r0", "pkg:golang/stdlib@go1.26.10",
              "pkg:golang/golang.org/x/crypto@v0.55.0"]
     sbom = {"packages": [{"externalRefs": [{"referenceType": "purl", "referenceLocator": p}]} for p in purls]}
     sbom["packages"][1]["name"] = "stdlib"

@@ -1,8 +1,8 @@
-# Maintained recipe 3: pinned release source, toolchain and readonly module graph.
-FROM golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS build
+# Maintained recipe 4: pinned release source, toolchain and readonly module graph.
+FROM golang:1.26.10-alpine3.24@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOENV=off GOWORK=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOFLAGS=-mod=readonly GOTELEMETRY=off
-RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.9 \
+RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.10 \
     && go mod download -json github.com/prometheus/prometheus@v0.315.0 > /tmp/source.json \
     && grep -F '"Sum": "h1:sFGZWmC2Hk9N1NBJGCnXYZb5hyLCq8yuAMoEjLAg6ac=",' /tmp/source.json \
     && grep -F '"Hash": "5241a27fe3c6983549fccc32f6e65917408c63cd",' /tmp/source.json \
@@ -22,13 +22,13 @@ RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.9 \
     && echo var EmbedFS embed.FS >> embed.go
 COPY requirements/service-builds/prometheus/go.mod requirements/service-builds/prometheus/go.sum ./
 COPY requirements/service-builds/prometheus/modules.txt /locked-modules.txt
-RUN printf '%s\n' 'd85af091d5bf9ba19f98e4d92e24b368d3e5537af086521ef10c7dd669695fd7  go.mod' 'd788de08ccf06166baafa21b52764bd0af13328903a447029ee08b21fbd4ae67  go.sum' '48a253a48d28565de9eca04945bf970449c5ab315b955044fda8e53995047cdb  /locked-modules.txt' | sha256sum -c - \
+RUN printf '%s\n' '6e2dfa8d25b5cd3da5513334134e63549aff7e70915958f98893893c825d609e  go.mod' 'e389454f20031dd3370e241952dd76b6a36079b301834c2557a12cc6dc0e7c27  go.sum' '6dc79e270b4206cf0a146123b2643402b476108016ea3d16c8ad68dfa70b282e  /locked-modules.txt' | sha256sum -c - \
     && go mod download \
     && go mod verify \
     && go list -m all | cmp - /locked-modules.txt \
     && mkdir /out \
-    && go build -trimpath -buildvcs=false -tags netgo,builtinassets -ldflags='-s -w -X github.com/prometheus/common/version.Version=3.15.0-shadai.3 -X github.com/prometheus/common/version.Revision=5241a27fe3c6983549fccc32f6e65917408c63cd -X github.com/prometheus/common/version.Branch=maintained -X github.com/prometheus/common/version.BuildUser=shadai -X github.com/prometheus/common/version.BuildDate=2026-10-12T00:00:00Z' -o /out/prometheus ./cmd/prometheus \
-    && go build -trimpath -buildvcs=false -tags netgo,builtinassets -ldflags='-s -w -X github.com/prometheus/common/version.Version=3.15.0-shadai.3 -X github.com/prometheus/common/version.Revision=5241a27fe3c6983549fccc32f6e65917408c63cd -X github.com/prometheus/common/version.Branch=maintained -X github.com/prometheus/common/version.BuildUser=shadai -X github.com/prometheus/common/version.BuildDate=2026-10-12T00:00:00Z' -o /out/promtool ./cmd/promtool \
+    && go build -trimpath -buildvcs=false -tags netgo,builtinassets -ldflags='-s -w -X github.com/prometheus/common/version.Version=3.15.0-shadai.4 -X github.com/prometheus/common/version.Revision=5241a27fe3c6983549fccc32f6e65917408c63cd -X github.com/prometheus/common/version.Branch=maintained -X github.com/prometheus/common/version.BuildUser=shadai -X github.com/prometheus/common/version.BuildDate=2026-10-12T00:00:00Z' -o /out/prometheus ./cmd/prometheus \
+    && go build -trimpath -buildvcs=false -tags netgo,builtinassets -ldflags='-s -w -X github.com/prometheus/common/version.Version=3.15.0-shadai.4 -X github.com/prometheus/common/version.Revision=5241a27fe3c6983549fccc32f6e65917408c63cd -X github.com/prometheus/common/version.Branch=maintained -X github.com/prometheus/common/version.BuildUser=shadai -X github.com/prometheus/common/version.BuildDate=2026-10-12T00:00:00Z' -o /out/promtool ./cmd/promtool \
     && cp /locked-modules.txt /out/GO-MODULES.txt \
     && find /go/pkg/mod -type f \( -iname 'license*' -o -iname 'notice*' -o -iname 'copying*' -o -iname 'copyright*' \) \
        -exec sh -c 'for p do printf "\nSOURCE LICENSE %s\n" "$p"; cat "$p"; done' sh {} + > /out/THIRD-PARTY-NOTICES.txt
@@ -37,9 +37,9 @@ COPY --from=build /out/prometheus /out/promtool /bin/
 COPY --from=build /src/LICENSE /src/NOTICE /usr/local/share/licenses/shadai/prometheus/
 COPY --from=build /usr/local/go/LICENSE /usr/local/share/licenses/shadai/prometheus/GO-LICENSE
 COPY --from=build /out/GO-MODULES.txt /out/THIRD-PARTY-NOTICES.txt /usr/local/share/licenses/shadai/prometheus/
-LABEL io.shadai.maintenance.recipe="3" \
+LABEL io.shadai.maintenance.recipe="4" \
       io.shadai.maintenance.component="prometheus" \
-      io.shadai.maintenance.version="v3.15.0-shadai.3" \
+      io.shadai.maintenance.version="v3.15.0-shadai.4" \
       io.shadai.maintenance.source="5241a27fe3c6983549fccc32f6e65917408c63cd" \
-      io.shadai.maintenance.toolchain="go1.26.9"
+      io.shadai.maintenance.toolchain="go1.26.10"
 RUN /bin/prometheus --version && /bin/promtool --version

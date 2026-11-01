@@ -63,7 +63,7 @@ The recipes additionally pin zlib 1.3.2-r1 for PostgreSQL/ClickHouse on Alpine 3
 
 Recipe 3 additionally selects the exact `github.com/moby/sys/user v0.4.1` release in gosu for [CVE-2026-61801 / GHSA-mjcv-p78q-w5fw](https://github.com/advisories/GHSA-mjcv-p78q-w5fw), which affects versions through 0.4.0. Its selected graph otherwise retains x/sys 0.44.0, Go 1.26.9 and the same gosu 1.19 publisher source. All five maintained recipes advance together to revision 3; native builds, bound final-runtime scans and provenance on both architectures are still required before claiming image remediation.
 
-Compose uses `pull_policy: build` and `shadai/SERVICE:VERSION-maintained.3` local tags bound to those recipes. These tags identify the maintenance recipe and are not immutable output digests or published signatures. No image is pushed or deployed by this CI. Kubernetes still requires externally supplied, verified immutable image references. Runtime users and entrypoints are inherited from the pinned official bases; Compose preserves private volumes and read-only deployment contracts. Replacing files does not remove their original bytes from lower layers.
+Compose uses `pull_policy: build` and `shadai/SERVICE:VERSION-maintained.4` local tags bound to those recipes. These tags identify the maintenance recipe and are not immutable output digests or published signatures. No image is pushed or deployed by this CI. Kubernetes still requires externally supplied, verified immutable image references. Runtime users and entrypoints are inherited from the pinned official bases; Compose preserves private volumes and read-only deployment contracts. Replacing files does not remove their original bytes from lower layers.
 
 ```sh
 python scripts/verify-image-pins.py

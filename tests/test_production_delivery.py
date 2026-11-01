@@ -79,8 +79,8 @@ def test_test_image_scripts_support_pytest_integration_collection(tmp_path):
     ("pyproject.toml", '"fastapi>=0.121.0"', '"fastapi>=0.142.0"'),
     ("pyproject.toml", 'requires-python = ">=3.12"', 'requires-python = ">=3.13"'),
     ("agent/pyproject.toml", '"docker>=7.1.0"', '"docker>=7.3.0"'),
-    ("agent/pyproject.toml", '"setuptools==84.0.0"', '"setuptools==84.0.1"'),
-    ("requirements/tools.in", "uv==0.11.16", "uv==0.11.17"),
+    ("agent/pyproject.toml", '"setuptools==84.1.0"', '"setuptools==84.1.1"'),
+    ("requirements/tools.in", "uv==0.13.4", "uv==0.13.5"),
     ("requirements/build.in", "wheel==0.48.0", "wheel==0.48.1"),
 ])
 def test_dependency_and_build_metadata_drift_fails(delivery_tree, source, before, after):
@@ -126,7 +126,7 @@ def test_failed_resolution_does_not_modify_existing_locks(delivery_tree, monkeyp
 
     before = snapshot()
     monkeypatch.setattr(LOCK, "ROOT", delivery_tree)
-    monkeypatch.setattr(LOCK.subprocess, "check_output", lambda *args, **kwargs: "uv 0.11.16")
+    monkeypatch.setattr(LOCK.subprocess, "check_output", lambda *args, **kwargs: f"uv {LOCK.UV_VERSION}")
 
     def fail(*args, **kwargs):
         raise RuntimeError("synthetic registry outage")
@@ -140,7 +140,7 @@ def test_failed_resolution_does_not_modify_existing_locks(delivery_tree, monkeyp
 def test_every_lock_compile_disables_ambient_configuration(delivery_tree, monkeypatch):
     commands = []
     monkeypatch.setattr(LOCK, "ROOT", delivery_tree)
-    monkeypatch.setattr(LOCK.subprocess, "check_output", lambda *args, **kwargs: "uv 0.11.16")
+    monkeypatch.setattr(LOCK.subprocess, "check_output", lambda *args, **kwargs: f"uv {LOCK.UV_VERSION}")
     monkeypatch.setenv("UV_INDEX_URL", "https://untrusted.example.test/simple")
     monkeypatch.setenv("PIP_EXTRA_INDEX_URL", "https://untrusted.example.test/simple")
 
