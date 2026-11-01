@@ -4,26 +4,26 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
-# Alpine v3.24 security fixes: CVE-2026-77214 and CVE-2026-88806.
+# Nginx 1.30.6 fixes the HTTP parser advisories; Alpine musl fixes CVE-2026-107891.
 # Fetch exact signed packages separately; the final install is offline with the base trusted keys.
-FROM nginxinc/nginx-unprivileged:1.30.5-alpine3.24@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86 AS frontend-security-packages
+FROM nginxinc/nginx-unprivileged:1.30.6-alpine3.24-slim@sha256:5d8bb9437d74a600ec5dbf90c035451c724dc33eac8d3a71078f6f8612c345f6 AS frontend-security-packages
 USER 0
 RUN set -eu; mkdir /packages; arch="$(apk --print-arch)"; \
     case "$arch" in \
-      x86_64) expat=32b127f31e0a919110a18a7f0bb3780d8fb66ba4d8d61b2d301d633f0e319d0e; x11=016efc189c6d566061ffe206ed0780e32686c1a8c832a3917d35d2c66d61a40f ;; \
-      aarch64) expat=7128bfe18b8a315b9cf90ddf0beffeee454648ae72ff7898ff7d7b09803a559d; x11=d460c111c1fc40e8f84367907b3e50a58a2b19c3e9d54f7c1f0e4aea7a376e3b ;; \
+      x86_64) musl=e142255d0fa397f14318996bc10378093dcc069dc3dd1b6818c8f28a789c21da; utils=47263d05842c5e12d01e0369e5b5bea51733323501c00ca21968a5102de137ca ;; \
+      aarch64) musl=2e17864102278d9049c3a56f1bceed9e8cf287065617e579325123443daed8a5; utils=bb460bdc009e88989bd5adca8a7c8298c339cba99da11c6196c818e042fbaf49 ;; \
       *) exit 1 ;; \
     esac; \
-    wget -O /packages/libexpat.apk https://dl-cdn.alpinelinux.org/alpine/v3.24/main/$arch/libexpat-2.9.0-r0.apk; \
-    wget -O /packages/libx11.apk https://dl-cdn.alpinelinux.org/alpine/v3.24/main/$arch/libx11-1.8.14-r0.apk; \
-    printf '%s\n' "$expat  /packages/libexpat.apk" "$x11  /packages/libx11.apk" | sha256sum -c -
+    wget -O /packages/musl.apk https://dl-cdn.alpinelinux.org/alpine/v3.24/main/$arch/musl-1.2.6-r3.apk; \
+    wget -O /packages/musl-utils.apk https://dl-cdn.alpinelinux.org/alpine/v3.24/main/$arch/musl-utils-1.2.6-r3.apk; \
+    printf '%s\n' "$musl  /packages/musl.apk" "$utils  /packages/musl-utils.apk" | sha256sum -c -
 
-FROM nginxinc/nginx-unprivileged:1.30.5-alpine3.24@sha256:56b8272e43a0525f67aed68d1e0794a712d10e3e45a563e118e9a77c817e6f86
+FROM nginxinc/nginx-unprivileged:1.30.6-alpine3.24-slim@sha256:5d8bb9437d74a600ec5dbf90c035451c724dc33eac8d3a71078f6f8612c345f6
 USER 0
 RUN --mount=type=bind,from=frontend-security-packages,source=/packages,target=/packages,ro \
-    apk add --no-network /packages/libexpat.apk /packages/libx11.apk \
-    && apk info -e 'libexpat=2.9.0-r0' 'libx11=1.8.14-r0' \
-    && ldd /usr/lib/libexpat.so.1 && ldd /usr/lib/libX11.so.6
+    apk add --no-network /packages/musl.apk /packages/musl-utils.apk \
+    && apk info -e 'musl=1.2.6-r3' 'musl-utils=1.2.6-r3' \
+    && ldd /usr/sbin/nginx && nginx -v
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 8080

@@ -203,6 +203,8 @@ def zlib_pg_model():
     compiler = next(line.split()[1] for line in instructions if line.startswith("FROM golang:"))
     compiler_version = compiler.split(":", 1)[1].split("-", 1)[0]
     graph = predicate["buildDefinition"]["internalParameters"]["buildConfig"]["llbDefinition"]
+    runtime = [line.split()[1] for line in instructions if line.startswith("FROM ")][-1]
+    graph[0]["op"]["Op"]["source"]["identifier"] = source.source_identifier(runtime)
     graph[1]["op"]["Op"]["source"]["identifier"] = source.source_identifier(compiler)
     for step in (3, 7):
         environment = graph[step]["op"]["Op"]["exec"]["meta"]["env"]
