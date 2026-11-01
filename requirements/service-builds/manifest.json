@@ -274,9 +274,9 @@
     "requirements/service-builds/prometheus/upstream.go.sum": "2b0f11cdccdc6605922c8f48d7afc68ae44fdc90df6b5d2f6f677b447b07d99e",
     "deploy/service-builds/Dockerfile.clickhouse": "52ec4634e6e9d7c14dee8184ac0c00374531ca606d923a1cfaa5fbdf70a97bd2",
     "deploy/service-builds/Dockerfile.node-exporter": "874feec13f1ba41274b605a5fb8f28b358bf8ce656538233d0f1b6c5b643e713",
-    "deploy/service-builds/Dockerfile.postgres": "856fbd83f85993d939fa95dcb478ec0f52158724164c829de9cf4e4ba2b16b90",
+    "deploy/service-builds/Dockerfile.postgres": "9fe8b578266dbed36a4df1d32e6ae5a459e9997ec0e6de05d7c579ebe7945e6a",
     "deploy/service-builds/Dockerfile.prometheus": "65f77a3bfc7a68ea36bf1f1a10143fb5abb4f3de21f2f29d60f27fcf9b294d99",
-    "deploy/service-builds/Dockerfile.redis": "33babb871c07e9f50ade631effbd099172a4b07211d0bb410ecd38df94f2e3dd",
+    "deploy/service-builds/Dockerfile.redis": "4287d3c333284acda66ab15c959cd9ebe163a389e803553ffb87fe1c6e86d4f7",
     "requirements/service-builds/.gitattributes": "2804281a76c3635e66dabadffc7212e07184a22816f277a03591b3297539fc64",
     "deploy/service-builds/.gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
     "requirements/service-builds/NOTICE.md": "123b26673f3038b9ba6e42a7f8181df694b817352ae62c82dfa7852ce87c9e9a"
