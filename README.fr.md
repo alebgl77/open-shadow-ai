@@ -11,17 +11,24 @@
 
 Comprenez quels services et outils d'IA apparaissent dans votre environnement, d'où vient chaque signal et ce qu'il permet réellement d'établir. Rassemblez métadonnées réseau, inventaires des postes et signaux des annuaires Microsoft dans une interface d'investigation.
 
-[Guide de mise en œuvre pour experts](docs/fr/README.md) · [Démarrage](#démarrage) · [Portail documentaire professionnel](docs/README.md) · [Roadmap](docs/fr/roadmap.md)
+[Essayer l'interface](#essayer-linterface) · [Guide d'évaluation DSI (en anglais)](docs/enterprise-evaluation.md) · [Déployer](#démarrage) · [Documentation](docs/README.md)
 
-[Corrections de l'audit du 15 octobre et vérifications d'exploitation](docs/fr/audit-remediation-2026-10-15.md) · [Gouvernance du dépôt](docs/fr/repository-governance.md)
+> Logiciel en phase initiale, destiné à l'évaluation et aux pilotes maîtrisés. Chaque déploiement dessert une seule organisation. Validez votre infrastructure avant tout usage en production.
 
-> Logiciel en phase initiale, destiné à l'évaluation et aux pilotes maîtrisés. Une organisation par installation. Docker, Kubernetes et les environnements Microsoft réels exigent une validation opérationnelle sur votre infrastructure ; aucune certification ni aucun SLA de production ne sont revendiqués.
+## Essayer l'interface
 
-Ce README décrit le code maintenu aligné au **15 octobre 2026**, commit `d159ed68012281a2c9e887e1281d44f0fb75112c` (fusion de la [PR nº 17](https://github.com/alebgl77/open-shadow-ai/pull/17)), avec le backend en préversion **0.3.0** et l'agent autonome **0.3.0**. La dernière préversion publiée reste `v0.3.0` (**7 octobre 2026**, `49a58d7`, agent `0.1.0`) ; elle précède l'inventaire des extensions, la localisation, la cartographie et les corrections du 15 octobre.
+Suivez un parcours de revue de 15 minutes sur des données synthétiques. Il vous faut Git et **Node.js 22.22.2+ (22.x)**. La démonstration s'exécute en local, sans Docker, sans identifiants et sans accès à vos annuaires ni à vos postes.
 
-La console propose l'anglais, le français et le chinois simplifié avant et après connexion. La préférence de langue validée, locale au navigateur, est séparée de l'authentification ; l'anglais est utilisé sans préférence disponible ou si le stockage est bloqué. Les données brutes des sources et identifiants techniques/API conservent leurs valeurs originales. Voir la [couverture linguistique](docs/README.md).
+```bash
+git clone https://github.com/alebgl77/open-shadow-ai.git
+cd open-shadow-ai/frontend
+npm ci
+npm run demo
+```
 
-Utilisez le [portail documentaire professionnel](docs/README.md) pour le parcours de mise en œuvre et la disponibilité selon le code ou la préversion, puis suivez le [guide pour experts](docs/fr/README.md). Le seul numéro `0.3.0` n'identifie pas le code livré : consignez le commit exact déployé, la configuration, les digests d'images et les preuves CI/de construction. Les évolutions ultérieures exigent leur propre qualification ; une CI réussie ne publie pas les images et ne certifie pas votre environnement cible.
+1. Ouvrez `/demo` à l'adresse affichée par le serveur de développement. Dans le **Tableau de bord**, vérifiez la période d'observation et les sources qui ont fourni des preuves. Consultez **Sources et couverture** pour voir ce que chaque source permet d'établir.
+2. Dans **Découvertes**, comparez **Perplexity** (une résolution DNS) et **Ollama** (un signal remonté par un poste). Examinez la provenance et distinguez la présence d'un outil de son usage effectif.
+3. Passez une découverte synthétique en revue, puis ouvrez **Gouvernance** pour voir un exemple d'outil approuvé et son responsable. Le [guide d'évaluation DSI (en anglais)](docs/enterprise-evaluation.md) donne les critères pour décider de lancer un pilote.
 
 ![Interface d'investigation Open Shadow AI avec des données de démonstration synthétiques](docs/assets/dashboard-desktop.webp)
 
@@ -45,19 +52,9 @@ Trois schémas muets en français expliquent l'empreinte IA, les niveaux de preu
 
 Voir l'empreinte. Comprendre le risque. Garder le contrôle. La [roadmap en six étapes](docs/fr/roadmap.md) prévoit une découverte enrichie, la visibilité des agents, une analyse locale facultative, des investigations sourcées, des usages encadrés et une qualification continue. Chaque étape future comporte des critères mesurables ; les technologies candidates restent des propositions à évaluer.
 
-## Essayer l'interface
-
-Prérequis : **Node.js 22.22.2+ (22.x)**. Lancez la démonstration isolée :
-
-```bash
-cd frontend
-npm ci
-npm run demo
-```
-
-Ouvrez la route `/demo` à l'adresse locale affichée par le serveur de développement. Cette session synthétique ne demande aucun identifiant backend et ne se connecte ni à vos annuaires ni à votre parc. Pour poursuivre avec l'installation complète, arrêtez le serveur de démonstration puis exécutez `cd ..`.
-
 ## Démarrage
+
+Si vous avez lancé la démonstration, arrêtez-la et revenez à la racine du dépôt. Ignorez les lignes `git clone` et `cd open-shadow-ai` ci-dessous si vous avez déjà cloné le dépôt.
 
 Prérequis : Git, Python 3.12+ et un Docker Engine fonctionnel avec Compose v2. Aucun runtime Docker n'est fourni. L'interface initiale écoute en HTTP sur localhost ; les agents distants nécessitent un reverse proxy HTTPS.
 
@@ -99,7 +96,9 @@ La [connexion OIDC et le provisionnement SCIM facultatifs (référence en anglai
 
 ## Ce qui est livré
 
-Les capacités ci-dessous décrivent le code maintenu indiqué plus haut. Vérifiez séparément leur disponibilité dans la préversion publiée.
+Le tableau décrit le code du dépôt. Consultez la [documentation et la disponibilité des préversions](docs/README.md) pour connaître les différences de version. Consignez le commit exact, la configuration et les empreintes d'images que vous évaluez. Retrouvez le parcours de qualification dans le [guide de mise en œuvre](docs/fr/README.md), le [compte rendu d'audit du 15 octobre](docs/fr/audit-remediation-2026-10-15.md) et la [gouvernance du dépôt](docs/fr/repository-governance.md).
+
+La console propose l'anglais, le français et le chinois simplifié avant et après connexion. La préférence de langue reste dans le navigateur et l'anglais est utilisé si elle est indisponible. Les valeurs brutes des sources et les identifiants d'API conservent leur forme d'origine.
 
 | Fonctionnalité | État et limite pratique |
 |---|---|

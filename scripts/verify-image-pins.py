@@ -42,14 +42,14 @@ GO_DELTAS = {
              ("github.com/moby/sys/user v0.1.0\n", "github.com/moby/sys/user v0.4.1\n"),
              ("golang.org/x/sys v0.1.0", "golang.org/x/sys v0.44.0")),
     "node-exporter": (("go 1.25.0\n", "go 1.26.0\n"), ("golang.org/x/sys v0.47.0", "golang.org/x/sys v0.49.0"),
-                      ("golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.58.0"),
+                      ("golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2"),
                       ("golang.org/x/net v0.57.0", "golang.org/x/net v0.62.0"),
                       ("golang.org/x/sync v0.22.0", "golang.org/x/sync v0.24.0"),
                       ("golang.org/x/text v0.40.0", "golang.org/x/text v0.43.0")),
     "prometheus": (("golang.org/x/sync v0.22.0", "golang.org/x/sync v0.24.0"),
                    ("golang.org/x/sys v0.47.0", "golang.org/x/sys v0.49.0"),
                    ("golang.org/x/text v0.41.0", "golang.org/x/text v0.43.0"),
-                   ("golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.58.0"),
+                   ("golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2"),
                    ("golang.org/x/net v0.58.0", "golang.org/x/net v0.62.0"),
                    ("golang.org/x/term v0.45.0", "golang.org/x/term v0.47.0")),
 }
@@ -173,7 +173,7 @@ def check_service_builds(root: Path, images: dict) -> dict:
     manifest = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_service_manifest_object)
     if not isinstance(manifest, dict) or type(manifest.get("schema")) is not int or \
             type(manifest.get("recipe_version")) is not int or \
-            manifest.get("schema") != 1 or manifest.get("recipe_version") != 4 or \
+            manifest.get("schema") != 1 or manifest.get("recipe_version") != 5 or \
             set(manifest.get("services", {})) != set(SERVICES):
         raise ValueError("Incomplete or unknown maintained service manifest")
     files = {f"requirements/service-builds/{component}/{name}"
@@ -196,7 +196,7 @@ def check_service_builds(root: Path, images: dict) -> dict:
         if version != VERSIONS[name] or service.get("base") != name + "-base" or \
                 service.get("dockerfile") != images[name]["dockerfile"] or \
                 service.get("runtime_tag") != images[name]["reference"] or \
-                images[name]["reference"] != f"shadai/{name}:{version}-maintained.4":
+                images[name]["reference"] != f"shadai/{name}:{version}-maintained.5":
             raise ValueError(f"Maintained service recipe/reference mismatch: {name}")
     if manifest.get("toolchain") != {"version": "go1.26.10", "image": "golang", "goproxy": "https://proxy.golang.org",
                                      "gosumdb": "sum.golang.org", "gotoolchain": "local"}:
@@ -208,7 +208,7 @@ def check_service_builds(root: Path, images: dict) -> dict:
         bases = re.findall(r"(?m)^FROM (\S+)", recipe)
         if bases != [images["golang"]["reference"], images[name + "-base"]["reference"]]:
             raise ValueError("Maintained recipe must use its exact compiler/fetch and service base images")
-        if maintenance_recipe_labels(recipe) != ["4"]:
+        if maintenance_recipe_labels(recipe) != ["5"]:
             raise ValueError("Maintained recipe label must use the approved global revision")
     components = manifest.get("components", {})
     if type(components) is not dict or set(components) != set(GO_COMPONENTS):

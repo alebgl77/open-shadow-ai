@@ -1,5 +1,5 @@
-# Maintained recipe 4: pinned release source, toolchain and readonly module graph.
-FROM golang:1.26.10-alpine3.24@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
+# Maintained recipe 5: pinned release source, toolchain and readonly module graph.
+FROM golang:1.26.10-alpine3.24@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOENV=off GOWORK=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOFLAGS=-mod=readonly GOTELEMETRY=off
 RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.10 \
@@ -9,12 +9,12 @@ RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.10 \
     && rm /tmp/source.tar.gz
 COPY requirements/service-builds/node-exporter/go.mod requirements/service-builds/node-exporter/go.sum ./
 COPY requirements/service-builds/node-exporter/modules.txt /locked-modules.txt
-RUN printf '%s\n' '57c83f68e6b65f17c4235ca6c2a6de2b55324ebc9806db6199d9abaf25f41d9b  go.mod' '900eae667063c7b94f4fc994ced89cd41e4bec219a93ec743f20c330eee34f13  go.sum' 'a3c29819ac8992d4dbe3a254891e89ad5a5e7079a36ebd90943c2242ea1e3def  /locked-modules.txt' | sha256sum -c - \
+RUN printf '%s\n' '452214ae9d4aedb17a3ea5d38d73599aaab28344a8a22558c80360a4bfd569cc  go.mod' 'f1ae72d6a2a25cbc72849917ea6833ebc5384aa47a077bcf9d053c3a944edf6f  go.sum' '74e6684edaff091ee17e7598ad40dae4a1bfdb51f5019ff20eedff00819e14d2  /locked-modules.txt' | sha256sum -c - \
     && go mod download \
     && go mod verify \
     && go list -m all | cmp - /locked-modules.txt \
     && mkdir /out \
-    && go build -trimpath -buildvcs=false -ldflags='-s -w -X github.com/prometheus/common/version.Version=1.12.1-shadai.4 -X github.com/prometheus/common/version.Revision=6044da783597cc3b57aef7580ddcdcff58a4ee99 -X github.com/prometheus/common/version.Branch=maintained -X github.com/prometheus/common/version.BuildUser=shadai -X github.com/prometheus/common/version.BuildDate=2026-10-12T00:00:00Z' -o /out/node_exporter . \
+    && go build -trimpath -buildvcs=false -ldflags='-s -w -X github.com/prometheus/common/version.Version=1.12.1-shadai.5 -X github.com/prometheus/common/version.Revision=6044da783597cc3b57aef7580ddcdcff58a4ee99 -X github.com/prometheus/common/version.Branch=maintained -X github.com/prometheus/common/version.BuildUser=shadai -X github.com/prometheus/common/version.BuildDate=2026-10-12T00:00:00Z' -o /out/node_exporter . \
     && cp /locked-modules.txt /out/GO-MODULES.txt \
     && find /go/pkg/mod -type f \( -iname 'license*' -o -iname 'notice*' -o -iname 'copying*' -o -iname 'copyright*' \) \
        -exec sh -c 'for p do printf "\nSOURCE LICENSE %s\n" "$p"; cat "$p"; done' sh {} + > /out/THIRD-PARTY-NOTICES.txt
@@ -23,9 +23,9 @@ COPY --from=build /out/node_exporter /bin/node_exporter
 COPY --from=build /src/LICENSE /usr/local/share/licenses/shadai/node-exporter/LICENSE
 COPY --from=build /usr/local/go/LICENSE /usr/local/share/licenses/shadai/node-exporter/GO-LICENSE
 COPY --from=build /out/GO-MODULES.txt /out/THIRD-PARTY-NOTICES.txt /usr/local/share/licenses/shadai/node-exporter/
-LABEL io.shadai.maintenance.recipe="4" \
+LABEL io.shadai.maintenance.recipe="5" \
       io.shadai.maintenance.component="node-exporter" \
-      io.shadai.maintenance.version="v1.12.1-shadai.4" \
+      io.shadai.maintenance.version="v1.12.1-shadai.5" \
       io.shadai.maintenance.source="6044da783597cc3b57aef7580ddcdcff58a4ee99" \
       io.shadai.maintenance.toolchain="go1.26.10"
 RUN /bin/node_exporter --version

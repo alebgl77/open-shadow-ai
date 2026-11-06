@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "recipe_version": 4,
+  "recipe_version": 5,
   "toolchain": {
     "version": "go1.26.10",
     "image": "golang",
@@ -264,31 +264,31 @@
   "services": {
     "postgres": {
       "functional_version": "16.15",
-      "runtime_tag": "shadai/postgres:16.15-maintained.4",
+      "runtime_tag": "shadai/postgres:16.15-maintained.5",
       "base": "postgres-base",
       "dockerfile": "deploy/service-builds/Dockerfile.postgres"
     },
     "clickhouse": {
       "functional_version": "25.8.33.6",
-      "runtime_tag": "shadai/clickhouse:25.8.33.6-maintained.4",
+      "runtime_tag": "shadai/clickhouse:25.8.33.6-maintained.5",
       "base": "clickhouse-base",
       "dockerfile": "deploy/service-builds/Dockerfile.clickhouse"
     },
     "redis": {
       "functional_version": "7.4.11",
-      "runtime_tag": "shadai/redis:7.4.11-maintained.4",
+      "runtime_tag": "shadai/redis:7.4.11-maintained.5",
       "base": "redis-base",
       "dockerfile": "deploy/service-builds/Dockerfile.redis"
     },
     "node-exporter": {
       "functional_version": "1.12.1",
-      "runtime_tag": "shadai/node-exporter:1.12.1-maintained.4",
+      "runtime_tag": "shadai/node-exporter:1.12.1-maintained.5",
       "base": "node-exporter-base",
       "dockerfile": "deploy/service-builds/Dockerfile.node-exporter"
     },
     "prometheus": {
       "functional_version": "3.15.0",
-      "runtime_tag": "shadai/prometheus:3.15.0-maintained.4",
+      "runtime_tag": "shadai/prometheus:3.15.0-maintained.5",
       "base": "prometheus-base",
       "dockerfile": "deploy/service-builds/Dockerfile.prometheus"
     }
@@ -301,28 +301,28 @@
     "requirements/service-builds/gosu/modules.txt": "cea520ba9ff289571cda1aef8ec37a0fadfbeb892618adad4ee2c21f57b54401",
     "requirements/service-builds/gosu/upstream.go.mod": "0475f1708db81d718b633faf2d9dd64695037eabdc8562125060607bcb01b2ba",
     "requirements/service-builds/gosu/upstream.go.sum": "2a8f3fb6adb84839bbb9999f12f1416fb86c184135aaa1c2e489b35203c08346",
-    "requirements/service-builds/node-exporter/go.mod": "57c83f68e6b65f17c4235ca6c2a6de2b55324ebc9806db6199d9abaf25f41d9b",
-    "requirements/service-builds/node-exporter/go.mod.diff": "529d57c1a04acc4a1d3646e26e2f9eb920f07f116428c127f8db57cfced428f3",
-    "requirements/service-builds/node-exporter/go.sum": "900eae667063c7b94f4fc994ced89cd41e4bec219a93ec743f20c330eee34f13",
+    "requirements/service-builds/node-exporter/go.mod": "452214ae9d4aedb17a3ea5d38d73599aaab28344a8a22558c80360a4bfd569cc",
+    "requirements/service-builds/node-exporter/go.mod.diff": "0bc8d3aa10a4a4b579fe035b8928701b6d8d26160543c647ee9564efe090c8f1",
+    "requirements/service-builds/node-exporter/go.sum": "f1ae72d6a2a25cbc72849917ea6833ebc5384aa47a077bcf9d053c3a944edf6f",
     "requirements/service-builds/node-exporter/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-    "requirements/service-builds/node-exporter/modules.txt": "a3c29819ac8992d4dbe3a254891e89ad5a5e7079a36ebd90943c2242ea1e3def",
+    "requirements/service-builds/node-exporter/modules.txt": "74e6684edaff091ee17e7598ad40dae4a1bfdb51f5019ff20eedff00819e14d2",
     "requirements/service-builds/node-exporter/upstream.go.mod": "0e4614c617f16e308698ed1afdd0f0f055b119d4cdf015b336c095eb35fa34ed",
     "requirements/service-builds/node-exporter/upstream.go.sum": "e9457fad10a31b707ebfb68dc8378ec71f3271d04faf84f7ec8f9d231d81ea57",
-    "requirements/service-builds/prometheus/go.mod": "6e2dfa8d25b5cd3da5513334134e63549aff7e70915958f98893893c825d609e",
-    "requirements/service-builds/prometheus/go.mod.diff": "d16c4a54172ed26c834436658580b5e69409096c3c0883d03111760d8c0fad08",
-    "requirements/service-builds/prometheus/go.sum": "e389454f20031dd3370e241952dd76b6a36079b301834c2557a12cc6dc0e7c27",
+    "requirements/service-builds/prometheus/go.mod": "3c3fef182cfc2bb993e9082b5e91ececfeae57a3ceb28eb50accabc67d9c6f62",
+    "requirements/service-builds/prometheus/go.mod.diff": "13238c5d73aae6d5d5f4a26b59b4454b3cc567a8dc029cbf468ddddc38bf333e",
+    "requirements/service-builds/prometheus/go.sum": "5b1ddd6828d20cec343524927558db0d62320c8a290fe0c15ef9a5aadcee6788",
     "requirements/service-builds/prometheus/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
     "requirements/service-builds/prometheus/NOTICE": "ac9e304462a58a4d71b6488423d4447e614c8b31d517fe24345016522c102a78",
-    "requirements/service-builds/prometheus/modules.txt": "6dc79e270b4206cf0a146123b2643402b476108016ea3d16c8ad68dfa70b282e",
+    "requirements/service-builds/prometheus/modules.txt": "d8c8baf179b94df43462dfa7dabc10c1c4f10609d3e1d32f9a6aa022e3e4b789",
     "requirements/service-builds/prometheus/upstream.go.mod": "94e39d68d3abd10168c4b1944a63356a1d9a467ddeceee46aea75fc14e4381d1",
     "requirements/service-builds/prometheus/upstream.go.sum": "2b0f11cdccdc6605922c8f48d7afc68ae44fdc90df6b5d2f6f677b447b07d99e",
-    "deploy/service-builds/Dockerfile.clickhouse": "b9d38ac2c51f08257df4c1dab9db5040815295ac22753e220dfca9142d87e7b7",
-    "deploy/service-builds/Dockerfile.node-exporter": "677e423ce578707549d7224163faf1dc5ccdefa83e7167250c184b3936be20ab",
-    "deploy/service-builds/Dockerfile.postgres": "2012a8c40cffb344e8ddbf9d97314653881c6601a70a9fbd727847d8efc4f929",
-    "deploy/service-builds/Dockerfile.prometheus": "57660b7436e4aab0c040b99f34d07b375b86c16e0813707df82ad389a3ec2911",
-    "deploy/service-builds/Dockerfile.redis": "fd851a28240f1f899347aed38fbfba25da866d435cd9dc6a3ada121a210754ae",
+    "deploy/service-builds/Dockerfile.clickhouse": "fc624bbb7a2b2a49b6a593e7831aac38bb95286e76e4316bbb368d83b5cf6835",
+    "deploy/service-builds/Dockerfile.node-exporter": "978f5b140b9e4b559ebded5e7fdf8ac941930829b4a587a0a46e497ee1aa5177",
+    "deploy/service-builds/Dockerfile.postgres": "5be24f02220822eba6787a26743982c7bf9fa3af10f55172f4a9002aa89ae374",
+    "deploy/service-builds/Dockerfile.prometheus": "706ea140f183462e56f74457e8c03e5880190a68906e39c2932540f5bbd4466f",
+    "deploy/service-builds/Dockerfile.redis": "0d520651aaea128d87b70cab081c0e0ec8f05eb0339de179d61709f05fc21505",
     "requirements/service-builds/.gitattributes": "2804281a76c3635e66dabadffc7212e07184a22816f277a03591b3297539fc64",
     "deploy/service-builds/.gitattributes": "a79691a93b46e49ce460c26ef22afcc03d6eca1e63bf2edbc20e96159510f6c9",
-    "requirements/service-builds/NOTICE.md": "99d19e025331cf3cfa29d00571b1e92641f8692591b9961e889958b15ea28441"
+    "requirements/service-builds/NOTICE.md": "1d997a5ad30c06c2cc09ff4679a24688b73a3dfa7eaa1109245d6827c11134dd"
   }
 }

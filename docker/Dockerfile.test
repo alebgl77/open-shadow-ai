@@ -1,11 +1,8 @@
 FROM python:3.12.15-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SHADAI_INTEGRATION=1
-# DSA-6549-1: the official image still ships liblzma5 5.8.1-1+deb13u1; install the exact fixed Debian package.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends liblzma5=5.8.1-1+deb13u2 \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,source=docker/install-debian-security.py,target=/tmp/install-debian-security.py,ro \
+    python /tmp/install-debian-security.py
 COPY pyproject.toml README.md alembic.ini ./
 COPY src/ src/
 COPY agent/ agent/

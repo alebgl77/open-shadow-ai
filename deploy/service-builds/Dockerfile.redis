@@ -1,5 +1,5 @@
-# Maintained recipe 4: replace only signed, SHA256-pinned OpenSSL and zlib APKs.
-FROM golang:1.26.10-alpine3.24@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS packages
+# Maintained recipe 5: replace only signed, SHA256-pinned OpenSSL and zlib APKs.
+FROM golang:1.26.10-alpine3.24@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS packages
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
       amd64) arch=x86_64; crypto=3c6fb1c90a974ef0fc83687868712340ca3df3ef5206cfc79fd81ff16f22596a; ssl=00e674d00a80c9808580546dd388093c1c67f21628a9d70e27628bddc86a31e8; zlib=52ed3729bec11d63313f38ade503d40650bb57a36ec72a0050619391fb6bfd5e ;; \
@@ -15,7 +15,7 @@ FROM redis:7.4.11-alpine3.21@sha256:d9436322172a5b482c187bf1f363d3c4fea086fcca6b
 RUN --mount=type=bind,from=packages,source=/packages,target=/packages,ro \
     apk add --no-network /packages/libcrypto3.apk /packages/libssl3.apk /packages/zlib.apk \
     && apk info -e 'libcrypto3=3.3.7-r2' 'libssl3=3.3.7-r2' 'zlib=1.3.2-r1'
-LABEL io.shadai.maintenance.recipe="4" \
+LABEL io.shadai.maintenance.recipe="5" \
       io.shadai.maintenance.component="openssl" \
       io.shadai.maintenance.openssl="3.3.7-r2" \
       io.shadai.maintenance.zlib="1.3.2-r1"

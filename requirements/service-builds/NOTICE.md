@@ -1,4 +1,4 @@
-# Maintained service recipe 4
+# Maintained service recipe 5
 
 These recipes preserve PostgreSQL 16.15, Redis 7.4.11, ClickHouse 25.8.33.6,
 gosu 1.19, node_exporter 1.12.1 and Prometheus 3.15.0. They replace the final
@@ -22,14 +22,15 @@ graph. Go verifies downloads through `proxy.golang.org` and `sum.golang.org`,
 verifies the module cache, checks the complete selected graph and builds with
 `-mod=readonly`, `CGO_ENABLED=0`, `-trimpath` and `-buildvcs=false`.
 
-Recipe 4 rebuilds the same publisher sources with Go 1.26.10 for
-CVE-2026-111943 (GO-2026-6809). node_exporter and Prometheus select x/net
-0.62.0 for CVE-2026-78661 and CVE-2026-97045, with its required x/crypto
-0.58.0, x/sys 0.49.0, x/term 0.47.0, x/text 0.43.0 and x/sync 0.24.0.
-The complete selected graph also moves the unlinked x/tools module to 0.51.0.
-Functional versions, publisher sources, checksum authorities, readonly graph
-checks and native evidence requirements remain unchanged. All runtime tags
-and recipe labels are revision 4. ClickHouse additionally installs the signed
+Recipe 5 refreshes the official PostgreSQL and Go image indexes at the same
+release versions. It retains Go 1.26.10 for CVE-2026-111943 (GO-2026-6809)
+and x/net 0.62.0 for CVE-2026-78661 and CVE-2026-97045. The node_exporter
+and Prometheus graphs select x/crypto
+`v0.58.1-0.20261009181718-2f1f834330b2`, the first fixed version of that
+module in the Go vulnerability database for GO-2026-5932. The upstream
+commit moves OpenPGP into its own module, which these locked graphs omit.
+The selected version of every other module stays the same. All five
+runtime tags and recipe labels use revision 5. ClickHouse retains the signed
 Alpine 3.24 musl and musl-utils 1.2.6-r3 packages for CVE-2026-107891.
 
 ## Historical recipes 2 and 3
@@ -84,11 +85,10 @@ official `prom/prometheus:v3.15.0` image with only `/bin/prometheus` and
 `/bin/promtool` replaced; its `nobody` user, working directory, entrypoint,
 example configuration and volume are inherited unchanged.
 
-The module-level GO-2026-5932 advisory remains visible: x/crypto's OpenPGP
-packages are unmaintained and have no fixed version. Updating x/crypto does
-not resolve that advisory or establish whether those specific imports are
-used in a binary. Native bound scans and separate coverage analysis remain
-required; unknown main-module versions in generated SBOMs are not invented.
+GO-2026-5932 continues to cover the separate OpenPGP module. The native
+scans and exact inventory checks establish which modules the rebuilt
+binaries contain. Principal versions come from the existing source and
+binary evidence.
 The x/sys advisory concerns Windows NewNTUnicodeString; its module update
 does not establish that this Windows function is present in a Linux binary.
 
@@ -151,4 +151,4 @@ Primary sources: [gosu 1.19](https://github.com/tianon/gosu/releases/tag/1.19),
 [moby/sys/user advisory](https://github.com/advisories/GHSA-mjcv-p78q-w5fw),
 [x/crypto SSH advisories](https://pkg.go.dev/vuln/GO-2026-6354),
 [second SSH advisory](https://pkg.go.dev/vuln/GO-2026-6355),
-[OpenPGP residual](https://pkg.go.dev/vuln/GO-2026-5932).
+[GO-2026-5932 module ranges](https://vuln.go.dev/ID/GO-2026-5932.json).

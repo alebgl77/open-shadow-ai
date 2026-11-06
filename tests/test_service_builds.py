@@ -24,6 +24,11 @@ def load(name):
 
 PINS = load("verify-image-pins")
 SCAN = load("scan-images")
+X_CRYPTO_PIN = "golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2"
+X_CRYPTO_SUMS = {
+    f"{X_CRYPTO_PIN} h1:zGDaB+/Mus2mScKvZ23k+W9NAUbP56sNM9SptgvWI5A=",
+    f"{X_CRYPTO_PIN}/go.mod h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w=",
+}
 
 
 def load_models():
@@ -62,7 +67,7 @@ def test_actual_recipes_inventory_and_deployed_roles_are_complete(service_tree):
     assert all("@sha256:" in value["reference"] for value in images.values() if value["role"] == "build-only")
     assert images["prometheus-base"] == {"role": "build-only", "reference": "prom/prometheus:v3.15.0@sha256:"
                                          "efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e"}
-    assert images["prometheus"] == {"role": "derived-runtime", "reference": "shadai/prometheus:3.15.0-maintained.4",
+    assert images["prometheus"] == {"role": "derived-runtime", "reference": "shadai/prometheus:3.15.0-maintained.5",
                                     "dockerfile": "deploy/service-builds/Dockerfile.prometheus"}
 
 
@@ -380,13 +385,15 @@ def test_release_sources_and_only_approved_module_difference():
     after = (directory / "go.mod").read_text()
     assert after == before.replace("go 1.25.0\n", "go 1.26.0\n").replace(
         "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.49.0").replace(
-        "golang.org/x/crypto v0.54.0", "golang.org/x/crypto v0.58.0").replace(
+        "golang.org/x/crypto v0.54.0", X_CRYPTO_PIN).replace(
         "golang.org/x/net v0.57.0", "golang.org/x/net v0.62.0").replace(
         "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.24.0").replace(
         "golang.org/x/text v0.40.0", "golang.org/x/text v0.43.0")
     maintained_sums = set((directory / "go.sum").read_text().splitlines())
     upstream_sums = set((directory / "upstream.go.sum").read_text().splitlines())
     added_sums = maintained_sums - upstream_sums
+    assert X_CRYPTO_SUMS <= added_sums
+    added_sums -= X_CRYPTO_SUMS
     assert len(added_sums) == 10
     assert all(line.startswith(("golang.org/x/crypto v0.58.0", "golang.org/x/net v0.62.0",
                                 "golang.org/x/sync v0.24.0", "golang.org/x/sys v0.49.0",
@@ -396,6 +403,8 @@ def test_release_sources_and_only_approved_module_difference():
     assert all(line.startswith(("golang.org/x/crypto v0.54.0", "golang.org/x/net v0.57.0",
                                 "golang.org/x/sync v0.22.0", "golang.org/x/sys v0.47.0",
                                 "golang.org/x/text v0.40.0")) for line in removed_sums)
+    node_modules = (directory / "modules.txt").read_text().splitlines()
+    assert X_CRYPTO_PIN in node_modules and "golang.org/x/crypto v0.58.0" not in node_modules
     gosu = ROOT / "requirements/service-builds/gosu"
     assert (gosu / "go.mod").read_text() == (gosu / "upstream.go.mod").read_text().replace(
         "go 1.20\n", "go 1.25.0\n").replace(
@@ -418,13 +427,15 @@ def test_release_sources_and_only_approved_module_difference():
         "golang.org/x/sync v0.22.0", "golang.org/x/sync v0.24.0").replace(
         "golang.org/x/sys v0.47.0", "golang.org/x/sys v0.49.0").replace(
         "golang.org/x/text v0.41.0", "golang.org/x/text v0.43.0").replace(
-        "golang.org/x/crypto v0.56.0", "golang.org/x/crypto v0.58.0").replace(
+        "golang.org/x/crypto v0.56.0", X_CRYPTO_PIN).replace(
         "golang.org/x/net v0.58.0", "golang.org/x/net v0.62.0").replace(
         "golang.org/x/term v0.45.0", "golang.org/x/term v0.47.0")
     added = set((prometheus / "go.sum").read_text().splitlines()) - \
         set((prometheus / "upstream.go.sum").read_text().splitlines())
     removed = set((prometheus / "upstream.go.sum").read_text().splitlines()) - \
         set((prometheus / "go.sum").read_text().splitlines())
+    assert X_CRYPTO_SUMS <= added
+    added -= X_CRYPTO_SUMS
     assert len(added) == 12 and all(line.startswith((
         "golang.org/x/crypto v0.58.0", "golang.org/x/net v0.62.0", "golang.org/x/sync v0.24.0",
         "golang.org/x/sys v0.49.0", "golang.org/x/term v0.47.0", "golang.org/x/text v0.43.0")) for line in added)
@@ -433,8 +444,9 @@ def test_release_sources_and_only_approved_module_difference():
         "golang.org/x/sys v0.47.0", "golang.org/x/term v0.45.0", "golang.org/x/text v0.41.0")) for line in removed)
     modules = (prometheus / "modules.txt").read_text().splitlines()
     assert modules[0] == "github.com/prometheus/prometheus"
-    assert {"golang.org/x/net v0.62.0", "golang.org/x/crypto v0.58.0", "golang.org/x/sys v0.49.0",
+    assert {"golang.org/x/net v0.62.0", X_CRYPTO_PIN, "golang.org/x/sys v0.49.0",
             "golang.org/x/text v0.43.0", "golang.org/x/term v0.47.0", "golang.org/x/sync v0.24.0"} <= set(modules)
+    assert "golang.org/x/crypto v0.58.0" not in modules
     assert not any(line.startswith(("golang.org/x/net v0.58.0", "golang.org/x/crypto v0.56.0")) for line in modules)
     assert (prometheus / "LICENSE").read_text().startswith("                                 Apache License")
     assert "Prometheus" in (prometheus / "NOTICE").read_text()
@@ -448,14 +460,14 @@ def test_release_sources_and_only_approved_module_difference():
     ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.0"),
     ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.2"),
     ("gosu", "github.com/moby/sys/user v0.4.1", "github.com/moby/sys/user v0.4.10"),
-    ("node-exporter", "golang.org/x/crypto v0.58.0", "golang.org/x/crypto v0.56.0"),
+    ("node-exporter", X_CRYPTO_PIN, "golang.org/x/crypto v0.58.0"),
     ("node-exporter", "golang.org/x/net v0.62.0", "golang.org/x/net v0.57.0"),
     ("node-exporter", "golang.org/x/sys v0.49.0", "golang.org/x/sys v0.50.0"),
     ("node-exporter", "golang.org/x/text v0.43.0", "golang.org/x/text v0.44.0"),
     ("node-exporter", "go 1.26.0", "go 1.25.0"),
     ("prometheus", "golang.org/x/net v0.62.0", "golang.org/x/net v0.58.0"),
     ("prometheus", "golang.org/x/net v0.62.0", "golang.org/x/net v0.61.0"),
-    ("prometheus", "golang.org/x/crypto v0.58.0", "golang.org/x/crypto v0.56.0"),
+    ("prometheus", X_CRYPTO_PIN, "golang.org/x/crypto v0.58.0"),
     ("prometheus", "golang.org/x/term v0.47.0", "golang.org/x/term v0.45.0"),
     ("prometheus", "go 1.26.0", "go 1.27.0"),
     ("prometheus", "github.com/prometheus/common v0.71.0", "github.com/prometheus/common v0.71.1"),
@@ -485,7 +497,7 @@ def test_gosu_module_closure_tampering_is_detected(service_tree, filename):
         PINS.check_service_builds(service_tree, PINS.inventory(service_tree))
 
 
-@pytest.mark.parametrize("revision", [2, 3, 5, True, "4"])
+@pytest.mark.parametrize("revision", [2, 3, 4, 6, True, "5"])
 def test_global_recipe_revision_cannot_drift(service_tree, revision):
     edit_manifest(service_tree, lambda manifest: manifest.update(recipe_version=revision))
     with pytest.raises(ValueError, match="unknown maintained service manifest"):
@@ -497,8 +509,8 @@ def test_refreshed_hash_cannot_authorize_a_stale_recipe_label(service_tree, serv
     name = f"deploy/service-builds/Dockerfile.{service}"
     path = service_tree / name
     value = path.read_text()
-    assert 'io.shadai.maintenance.recipe="4"' in value
-    path.write_text(value.replace('io.shadai.maintenance.recipe="4"', 'io.shadai.maintenance.recipe="2"'))
+    assert 'io.shadai.maintenance.recipe="5"' in value
+    path.write_text(value.replace('io.shadai.maintenance.recipe="5"', 'io.shadai.maintenance.recipe="2"'))
     edit_manifest(service_tree, lambda manifest: manifest["files"].update(
         {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
     with pytest.raises(ValueError, match="approved global revision"):
@@ -514,19 +526,19 @@ def test_rehashed_recipe_label_decoys_and_overrides_are_rejected(service_tree, m
     value = path.read_text()
     label = "io.shadai.maintenance.recipe"
     if mutation in {"comment", "run", "continued-run", "env", "other-label", "missing-label"}:
-        value = value.replace(f'{label}="4"', f"{label}=2")
-        decoys = {"comment": f'# {label}="4"\n', "run": f'RUN echo \'{label}="4"\'\n',
-                  "continued-run": f'RUN echo \\\n  {label}="4"\n',
-                  "env": f'ENV NOTE=\'{label}="4"\'\n', "other-label": f'LABEL note=\'{label}="4"\'\n',
-                  "missing-label": f'# {label}="4"\n'}
+        value = value.replace(f'{label}="5"', f"{label}=2")
+        decoys = {"comment": f'# {label}="5"\n', "run": f'RUN echo \'{label}="5"\'\n',
+                  "continued-run": f'RUN echo \\\n  {label}="5"\n',
+                  "env": f'ENV NOTE=\'{label}="5"\'\n', "other-label": f'LABEL note=\'{label}="5"\'\n',
+                  "missing-label": f'# {label}="5"\n'}
         value += decoys[mutation]
         if mutation == "missing-label":
             value = value.replace(f"{label}=2", "io.shadai.other=2")
     elif mutation == "same-instruction-override":
-        value = value.replace(f'{label}="4"', f'{label}="4" {label}=2')
+        value = value.replace(f'{label}="5"', f'{label}="5" {label}=2')
     else:
         overrides = {"later-unquoted": f"{label}=2", "later-single-quoted": f"{label}='2'",
-                     "later-quoted-key": f'"{label}"=2', "duplicate-approved": f"{label}=4"}
+                     "later-quoted-key": f'"{label}"=2', "duplicate-approved": f"{label}=5"}
         value += "LABEL " + overrides[mutation] + "\n"
     path.write_text(value)
     edit_manifest(service_tree, lambda manifest: manifest["files"].update(
@@ -538,15 +550,15 @@ def test_rehashed_recipe_label_decoys_and_overrides_are_rejected(service_tree, m
 
 
 @pytest.mark.parametrize("assignment", [
-    "io.shadai.maintenance.recipe=4", '"io.shadai.maintenance.recipe"="4"',
-    "'io.shadai.maintenance.recipe'='4'", "io.shadai.maintenance.recipe='4'",
-    "io.shadai.maintenance.recipe=\\4", "io.shadai.maintenance.recipe=\\\n4",
-    "io.shadai.maintenance.\\\nrecipe=4", "io.shadai.maintenance.recipe=\\\n# ignored comment \\\n4",
+    "io.shadai.maintenance.recipe=5", '"io.shadai.maintenance.recipe"="5"',
+    "'io.shadai.maintenance.recipe'='5'", "io.shadai.maintenance.recipe='5'",
+    "io.shadai.maintenance.recipe=\\5", "io.shadai.maintenance.recipe=\\\n5",
+    "io.shadai.maintenance.\\\nrecipe=5", "io.shadai.maintenance.recipe=\\\n# ignored comment \\\n5",
 ])
 def test_rehashed_recipe_accepts_actual_quoted_unquoted_and_continued_labels(service_tree, assignment):
     name = "deploy/service-builds/Dockerfile.clickhouse"
     path = service_tree / name
-    value = path.read_text().replace('LABEL io.shadai.maintenance.recipe="4"', "  lAbEl\t" + assignment)
+    value = path.read_text().replace('LABEL io.shadai.maintenance.recipe="5"', "  lAbEl\t" + assignment)
     path.write_text(value)
     edit_manifest(service_tree, lambda manifest: manifest["files"].update(
         {name: hashlib.sha256(path.read_bytes()).hexdigest()}))
@@ -618,11 +630,11 @@ def test_runtime_recipes_keep_native_authentication_and_compiler_guards():
                           component["web_ui"]["sha256"] + "  /tmp/web-ui.tar.gz' | sha256sum -c -",
                           "cp embed.go.tmpl embed.go", "gzip -c", "sort -z | xargs -0 echo //go:embed >> embed.go",
                           "echo var EmbedFS embed.FS >> embed.go",
-                          "-tags netgo,builtinassets", "version.Version=3.15.0-shadai.4",
+                          "-tags netgo,builtinassets", "version.Version=3.15.0-shadai.5",
                           "version.Revision=" + component["commit"], "-o /out/prometheus ./cmd/prometheus",
                           "-o /out/promtool ./cmd/promtool", "COPY --from=build /out/prometheus /out/promtool /bin/",
                           "COPY --from=build /src/LICENSE /src/NOTICE /usr/local/share/licenses/shadai/prometheus/",
-                          'io.shadai.maintenance.version="v3.15.0-shadai.4"',
+                          'io.shadai.maintenance.version="v3.15.0-shadai.5"',
                           "RUN /bin/prometheus --version && /bin/promtool --version"):
                 assert guard in recipe, guard
             assert recipe.count("go build ") == 2 and "gzip -n" not in recipe  # busybox gzip has no -n flag.

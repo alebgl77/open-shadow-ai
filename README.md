@@ -12,17 +12,24 @@
 
 Understand which AI services and tools appear in your environment, where each signal came from, and what it can actually prove. Bring together network metadata, endpoint inventory and Microsoft directory signals in an interface built for investigation.
 
-[Expert implementation handbook](docs/en/README.md) · [Get started](#get-started) · [Professional documentation hub](docs/README.md) · [Roadmap (English reference)](docs/roadmap.md)
+[Try the interface](#try-the-interface) · [Enterprise evaluation guide](docs/enterprise-evaluation.md) · [Deploy](#get-started) · [Documentation](docs/README.md)
 
-[15 October audit remediation and operator checks](docs/audit-remediation-2026-10-15.md) · [Repository governance](docs/repository-governance.md)
+> Early-stage software for evaluation and controlled pilots. Each deployment serves one organization. Qualify your own infrastructure before production use.
 
-> Early-stage software for evaluation and controlled pilots. One organization per deployment. Docker, Kubernetes and live Microsoft environments require operational validation in your environment; no certification or production SLA is claimed.
+## Try the interface
 
-This README describes maintained source aligned on **2026-10-15**, commit `d159ed68012281a2c9e887e1281d44f0fb75112c` (merged [PR #17](https://github.com/alebgl77/open-shadow-ai/pull/17)), with backend preview **0.3.0** and standalone agent **0.3.0**. The latest published prerelease remains `v0.3.0` (**2026-10-07**, `49a58d7`, agent `0.1.0`); it predates the extension inventory, localization, cartography and 15 October corrections.
+Follow a 15-minute review with synthetic data. You need Git and **Node.js 22.22.2+ (22.x)**. The demo runs locally without Docker, credentials or access to your directory and devices.
 
-The console offers English, French and Simplified Chinese before and after sign-in. A validated browser-local language preference is separate from authentication; English is the default when no preference is available or storage is blocked. Raw source data and machine/API identifiers retain their original values. See [language coverage](docs/README.md).
+```bash
+git clone https://github.com/alebgl77/open-shadow-ai.git
+cd open-shadow-ai/frontend
+npm ci
+npm run demo
+```
 
-Use the [professional documentation hub](docs/README.md) for the implementation reading order and source/release availability, then follow the [expert handbook](docs/en/README.md). Version `0.3.0` alone does not identify the delivered code: record the exact deployed commit, configuration, image digests and CI/build evidence. Later changes require their own qualification; successful CI does not publish images or certify your target environment.
+1. Open `/demo` at the address printed by the development server. On the **Dashboard**, check the observation window and which sources supplied evidence. Open **Sources & coverage** to see what each source can establish.
+2. In **Discoveries**, compare **Perplexity** (a DNS lookup) with **Ollama** (an endpoint signal). Inspect provenance and separate evidence of presence from evidence of actual use.
+3. Review a synthetic finding and open **Governance** to see an example of an approved tool and its owner. Use the [enterprise evaluation guide](docs/enterprise-evaluation.md) to turn the walkthrough into a pilot decision.
 
 ![Open Shadow AI investigation dashboard with synthetic demo data](docs/assets/dashboard-desktop.webp)
 
@@ -46,19 +53,9 @@ Three silent French diagrams explain the AI footprint, evidence levels and colle
 
 See the footprint. Understand the risk. Keep control. The [six-step roadmap (English reference)](docs/roadmap.md) sets out richer discovery, agent visibility, optional local analysis, investigations that cite evidence, deliberate usage controls and continuous qualification. Each future step has measurable delivery gates; candidate technologies remain proposals for evaluation.
 
-## Try the interface
-
-Prerequisite: **Node.js 22.22.2+ (22.x)**. Launch the isolated interface demo:
-
-```bash
-cd frontend
-npm ci
-npm run demo
-```
-
-Open the `/demo` route at the local address printed by the development server. This is a synthetic demo session: it needs no backend credentials and does not connect to your directories or fleet. To continue with the full installation, stop the demo server and run `cd ..` first.
-
 ## Get started
+
+If you ran the demo, stop it and return to the repository root. Skip the `git clone` and `cd open-shadow-ai` lines below if you already have the checkout.
 
 Prerequisites: Git, Python 3.12+ and a working Docker Engine with Compose v2. No Docker runtime is bundled. The initial interface binds to localhost over HTTP; remote agents require an HTTPS reverse proxy.
 
@@ -100,7 +97,9 @@ Optional [OIDC sign-in and SCIM provisioning (English reference)](docs/sso-scim.
 
 ## What is delivered
 
-The capabilities below describe the maintained source baseline above. Check release availability separately.
+The table describes the repository source. Check [documentation and release availability](docs/README.md) for version boundaries. Record the exact commit, configuration and image digests you evaluate. Consult the [implementation handbook](docs/en/README.md), [15 October audit record](docs/audit-remediation-2026-10-15.md) and [repository governance](docs/repository-governance.md) for the qualification trail.
+
+The console supports English, French and Simplified Chinese before and after sign-in. The language preference stays in the browser and defaults to English when unavailable. Raw source values and API identifiers retain their original form.
 
 | Capability | Status and practical boundary |
 |---|---|

@@ -620,6 +620,26 @@ def test_workflow_whole_source_preserves_every_original_command_guard_and_job(wo
     end = text.index("      - name: Build the maintained Prometheus runtime from its recipe\n", start)
     original = text[:start] + text[end:]
     original = original.replace("        id: qualification_lab\n", "", 1)
+    # Restore only the two reviewed runner changes before comparing the historical workflow.
+    runner_changes = (
+        (
+            "derived-service-builds",
+            "# Keep the protected check name while the amd64 native observer is qualified on Ubuntu 24.04.",
+            "${{ matrix.os == 'ubuntu-latest' && matrix.service == 'clickhouse' && 'ubuntu-24.04' || matrix.os }}",
+            "${{ matrix.os }}",
+        ),
+        (
+            "production-qualification",
+            "# Keep the Docker recovery rehearsal on the qualified Ubuntu 24.04 runner.",
+            "ubuntu-24.04",
+            "ubuntu-latest",
+        ),
+    )
+    for job, comment, current, previous in runner_changes:
+        assert document["jobs"][job]["runs-on"] == current
+        reviewed_block = f"    {comment}\n    runs-on: {current}\n"
+        assert original.count(reviewed_block) == 1
+        original = original.replace(reviewed_block, f"    runs-on: {previous}\n", 1)
     assert hashlib.sha256(original.encode()).hexdigest() == (
         "5a6c394d8e604a6654b2edb5e9b68b13e6ef6813b1ca7d594f5107e3ef32ff04"
     )
