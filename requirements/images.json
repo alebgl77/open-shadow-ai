@@ -16,7 +16,7 @@
     "role": "build-only"
   },
   "prometheus": {
-    "reference": "shadai/prometheus:3.15.0-maintained.4",
+    "reference": "shadai/prometheus:3.15.0-maintained.5",
     "role": "derived-runtime",
     "dockerfile": "deploy/service-builds/Dockerfile.prometheus"
   },
@@ -33,11 +33,11 @@
     "role": "build-only"
   },
   "postgres-base": {
-    "reference": "postgres:16.15-alpine3.24@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab",
+    "reference": "postgres:16.15-alpine3.24@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139",
     "role": "build-only"
   },
   "postgres": {
-    "reference": "shadai/postgres:16.15-maintained.4",
+    "reference": "shadai/postgres:16.15-maintained.5",
     "role": "derived-runtime",
     "dockerfile": "deploy/service-builds/Dockerfile.postgres"
   },
@@ -46,7 +46,7 @@
     "role": "build-only"
   },
   "clickhouse": {
-    "reference": "shadai/clickhouse:25.8.33.6-maintained.4",
+    "reference": "shadai/clickhouse:25.8.33.6-maintained.5",
     "role": "derived-runtime",
     "dockerfile": "deploy/service-builds/Dockerfile.clickhouse"
   },
@@ -55,7 +55,7 @@
     "role": "build-only"
   },
   "redis": {
-    "reference": "shadai/redis:7.4.11-maintained.4",
+    "reference": "shadai/redis:7.4.11-maintained.5",
     "role": "derived-runtime",
     "dockerfile": "deploy/service-builds/Dockerfile.redis"
   },
@@ -64,12 +64,12 @@
     "role": "build-only"
   },
   "node-exporter": {
-    "reference": "shadai/node-exporter:1.12.1-maintained.4",
+    "reference": "shadai/node-exporter:1.12.1-maintained.5",
     "role": "derived-runtime",
     "dockerfile": "deploy/service-builds/Dockerfile.node-exporter"
   },
   "golang": {
-    "reference": "golang:1.26.10-alpine3.24@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308",
+    "reference": "golang:1.26.10-alpine3.24@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696",
     "role": "build-only"
   }
 }

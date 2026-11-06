@@ -1,5 +1,5 @@
-# Maintained recipe 4: pinned release source, toolchain and readonly module graph.
-FROM golang:1.26.10-alpine3.24@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
+# Maintained recipe 5: pinned release source, toolchain and readonly module graph.
+FROM golang:1.26.10-alpine3.24@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOENV=off GOWORK=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org GOFLAGS=-mod=readonly GOTELEMETRY=off
 RUN test "$(go version | cut -d ' ' -f 3)" = go1.26.10 \
@@ -26,14 +26,14 @@ RUN printf '%s\n' 'ae1ddde8ee44bccffcc7df1ac03ccfed4ac75776ad20b370b7b9c37298ea9
     && cp /locked-modules.txt /out/GO-MODULES.txt \
     && find /go/pkg/mod -type f \( -iname 'license*' -o -iname 'notice*' -o -iname 'copying*' -o -iname 'copyright*' \) \
        -exec sh -c 'for p do printf "\nSOURCE LICENSE %s\n" "$p"; cat "$p"; done' sh {} + > /out/THIRD-PARTY-NOTICES.txt
-FROM postgres:16.15-alpine3.24@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+FROM postgres:16.15-alpine3.24@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
 COPY --from=build /out/gosu /usr/local/bin/gosu
 COPY --from=build /src/LICENSE /usr/local/share/licenses/shadai/gosu/LICENSE
 COPY --from=build /usr/local/go/LICENSE /usr/local/share/licenses/shadai/gosu/GO-LICENSE
 COPY --from=build /out/GO-MODULES.txt /out/THIRD-PARTY-NOTICES.txt /usr/local/share/licenses/shadai/gosu/
-LABEL io.shadai.maintenance.recipe="4" \
+LABEL io.shadai.maintenance.recipe="5" \
       io.shadai.maintenance.component="gosu" \
-      io.shadai.maintenance.version="1.19-shadai.4" \
+      io.shadai.maintenance.version="1.19-shadai.5" \
       io.shadai.maintenance.source="6456aaa0f3c854d199d0f037f068eb97515b7513" \
       io.shadai.maintenance.toolchain="go1.26.10" \
       io.shadai.maintenance.zlib="1.3.2-r1"

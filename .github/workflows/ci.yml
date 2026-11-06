@@ -370,7 +370,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
         service: [postgres, clickhouse, redis, node-exporter, prometheus]
-    runs-on: ${{ matrix.os }}
+    # Keep the protected check name while the amd64 native observer is qualified on Ubuntu 24.04.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && matrix.service == 'clickhouse' && 'ubuntu-24.04' || matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -436,7 +437,8 @@ jobs:
           retention-days: 7
 
   production-qualification:
-    runs-on: ubuntu-latest
+    # Keep the Docker recovery rehearsal on the qualified Ubuntu 24.04 runner.
+    runs-on: ubuntu-24.04
     # The lab profile allows a 25-minute wall plus the separately timed maintained Prometheus rebuild.
     timeout-minutes: 45
     steps:
