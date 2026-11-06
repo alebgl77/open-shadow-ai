@@ -8,20 +8,22 @@
 | Français | [Guide de mise en œuvre pour experts](fr/README.md) | [README français](../README.fr.md) |
 | 简体中文 | [专家实施手册](zh-CN/README.md) | [中文 README](../README.zh-CN.md) |
 
+[Enterprise evaluation guide](enterprise-evaluation.md) · [Guide d'évaluation DSI (en anglais)](enterprise-evaluation.md) · [企业评估指南（英文）](enterprise-evaluation.md)
+
 ## Source and release / Code source et préversion / 源代码与预发行版
 
-Documentation alignment / Alignement documentaire / 文档对齐日期: **2026-10-15**.
+Historical handbook baseline / Référence historique des guides / 手册的历史基线 — **2026-10-15**.
 
 | Baseline / Référence / 基线 | Exact source / Source exacte / 准确源代码 | Availability / Disponibilité / 可用性 |
 |---|---|---|
-| Maintained source / Code maintenu / 维护中的源代码 | `d159ed68012281a2c9e887e1281d44f0fb75112c` — merged [PR #17](https://github.com/alebgl77/open-shadow-ai/pull/17); backend `0.3.0`, agent `0.3.0` | Extension inventory, three-language console and handbooks, cartography and 15 October corrections / Inventaire des extensions, console et guides en trois langues, cartographie et corrections du 15 octobre / 扩展清单、三语言控制台与手册、关系图及 10 月 15 日修复 |
+| Handbook baseline / Référence des guides / 手册基线 | `d159ed68012281a2c9e887e1281d44f0fb75112c` — merged [PR #17](https://github.com/alebgl77/open-shadow-ai/pull/17); backend `0.3.0`, agent `0.3.0` | Extension inventory, three-language console and handbooks, cartography and 15 October corrections / Inventaire des extensions, console et guides en trois langues, cartographie et corrections du 15 octobre / 扩展清单、三语言控制台与手册、关系图及 10 月 15 日修复 |
 | Published prerelease / Préversion publiée / 已发布的预发行版 | `v0.3.0` — **2026-10-07**, `49a58d778d3014879e30a3ac5334df45cd426dbf`; backend `0.3.0`, agent `0.1.0` | Earlier preview; none of the additions above / Préversion antérieure ; aucun des ajouts ci-dessus / 较早的预览版本，不含上述新增功能 |
 
-These guides apply to the maintained source baseline above. The latest published release remains `v0.3.0`; component version `0.3.0` alone cannot identify the available features or security corrections. Record the exact deployed commit, configuration revision, image digests and CI/build evidence. Source changes and successful CI do not publish or deploy images and do not certify a target environment. Later revisions need their own qualification.
+These guides apply to the maintained source baseline above. Check [published releases](https://github.com/alebgl77/open-shadow-ai/releases) separately. Component version `0.3.0` alone cannot identify the available features or security corrections. Record the exact deployed commit, configuration revision, image digests and CI/build evidence. CI retains qualifying build evidence as artifacts. Registry publication and deployment are separate operations. A target environment needs its own acceptance. Later revisions need their own qualification.
 
-Ces guides s'appliquent au code maintenu indiqué ci-dessus. La dernière préversion publiée reste `v0.3.0` ; le seul numéro de composant `0.3.0` ne permet pas d'identifier les fonctionnalités ou corrections de sécurité disponibles. Consignez le commit exact déployé, la révision de configuration, les digests d'images et les preuves CI/de construction. Les changements de code et une CI réussie ne publient ni ne déploient des images et ne certifient aucun environnement cible. Toute révision ultérieure exige sa propre qualification.
+Ces guides s'appliquent au code maintenu indiqué ci-dessus. Consultez séparément les [versions publiées](https://github.com/alebgl77/open-shadow-ai/releases). Le seul numéro de composant `0.3.0` ne permet pas d'identifier les fonctionnalités ou corrections de sécurité disponibles. Consignez le commit exact déployé, la révision de configuration, les digests d'images et les preuves CI/de construction. La CI conserve les preuves de construction validées sous forme d'artefacts. La publication dans un registre et le déploiement sont des opérations distinctes. Chaque environnement cible exige sa propre validation. Toute révision ultérieure exige sa propre qualification.
 
-这些手册适用于上表所列的维护中源代码基线。最新发布版本仍为 `v0.3.0`；仅凭组件版本号 `0.3.0` 无法确定可用功能或安全修复。应记录实际部署的准确提交、配置修订、镜像摘要以及 CI/构建证据。源代码变更和 CI 成功不会发布或部署镜像，也不能认证目标环境。后续修订需要各自的验收验证。
+这些手册适用于上表所列的维护中源代码基线。请另行查看[已发布版本](https://github.com/alebgl77/open-shadow-ai/releases)。仅凭组件版本号 `0.3.0` 无法确定可用功能或安全修复。应记录实际部署的准确提交、配置修订、镜像摘要以及 CI/构建证据。CI 将通过验证的构建证据保留为构件。发布到镜像仓库与部署是独立操作。每个目标环境需要单独验收。后续修订需要各自的验收验证。
 
 ## Reading order / Parcours de lecture / 阅读顺序
 
