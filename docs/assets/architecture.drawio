@@ -1,11 +1,130 @@
-<mxfile host="app.diagrams.net" agent="Open Shadow AI" version="24.7.17"><diagram id="architecture" name="Architecture"><mxGraphModel dx="1200" dy="790" grid="1" gridSize="10" page="1" pageWidth="1200" pageHeight="790"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="heading" value="Open Shadow AI — one organization per install" style="text;html=0;fontSize=26;fontStyle=1;fontColor=#173e37;" vertex="1" parent="1"><mxGeometry x="48" y="40" width="1104" height="48" as="geometry"/></mxCell><mxCell id="ad" value="AD + Entra
-Directory inventory" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#edf3f0;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="48" y="132" width="258" height="108" as="geometry"/></mxCell><mxCell id="network" value="DNS + proxy
-Network observations" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#edf3f0;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="330" y="132" width="258" height="108" as="geometry"/></mxCell><mxCell id="endpoint" value="Managed endpoints
-Asset inventory" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#edf3f0;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="612" y="132" width="258" height="108" as="geometry"/></mxCell><mxCell id="instrumented" value="Instrumented API
-Declared usage evidence" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#edf3f0;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="894" y="132" width="258" height="108" as="geometry"/></mxCell><mxCell id="collect" value="Scoped collectors + HTTP event API
-Trusted-network syslog · API-key-authenticated HTTP" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#173e37;strokeColor=#d3dfd7;fontColor=#ffffff;fontSize=16;" vertex="1" parent="1"><mxGeometry x="48" y="300" width="1104" height="86" as="geometry"/></mxCell><mxCell id="redis" value="Redis Streams
-Queue · retry · dead letters" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#ffffff;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="48" y="448" width="258" height="100" as="geometry"/></mxCell><mxCell id="catalog" value="Catalog + workers
-Match · explain · correlate" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#ffffff;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="330" y="448" width="258" height="100" as="geometry"/></mxCell><mxCell id="ch" value="ClickHouse
-Observed events" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#ffffff;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="612" y="448" width="258" height="100" as="geometry"/></mxCell><mxCell id="pg" value="PostgreSQL
-Detections · governance&#10;Idempotency receipts" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#ffffff;strokeColor=#d3dfd7;fontColor=#173e37;fontSize=16;" vertex="1" parent="1"><mxGeometry x="894" y="448" width="258" height="100" as="geometry"/></mxCell><mxCell id="ui" value="Evidence interface
-Sources, confidence, review and explicit unknowns" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#173e37;strokeColor=#d3dfd7;fontColor=#ffffff;fontSize=16;" vertex="1" parent="1"><mxGeometry x="612" y="610" width="540" height="94" as="geometry"/></mxCell><mxCell id="edge0" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="ad" target="collect"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="network" target="collect"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge2" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="endpoint" target="collect"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge3" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="instrumented" target="collect"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge4" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="collect" target="redis"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge5" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="redis" target="catalog"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge6" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="catalog" target="ch"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge7" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="catalog" target="pg"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge8" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="ch" target="ui"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="edge9" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;strokeColor=#879d95;" edge="1" parent="1" source="pg" target="ui"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="note" value="Inventory ≠ usage. Models and tokens require instrumented evidence." style="text;html=0;fontSize=16;fontColor=#62746c;" vertex="1" parent="1"><mxGeometry x="48" y="724" width="1104" height="40" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>
+<mxfile host="app.diagrams.net" agent="Open Shadow AI" version="24.7.17">
+  <diagram id="architecture" name="Architecture">
+    <mxGraphModel dx="1200" dy="860" grid="1" gridSize="10" page="1" pageWidth="1200" pageHeight="860" background="#0c1217">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Open Shadow AI architecture" style="text;html=0;align=left;verticalAlign=middle;fontSize=31;fontColor=#f1f5f9;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="48" y="35" width="800" height="41" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="From observed signals to reviewable findings" style="text;html=0;align=left;verticalAlign=middle;fontSize=17;fontColor=#a9bac7;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="48" y="77" width="800" height="27" as="geometry" />
+        </mxCell>
+        <mxCell id="badge" value="ONE ORGANIZATION PER INSTALL" style="rounded=1;arcSize=50;fillColor=#162129;strokeColor=#3c4d57;fontColor=#65dbc6;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="898" y="43" width="254" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="header-rule" value="" style="rounded=0;strokeColor=none;fillColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="48" y="116" width="1104" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="footer-rule" value="" style="rounded=0;strokeColor=none;fillColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="48" y="809" width="1104" height="1" as="geometry" />
+        </mxCell>
+        <mxCell id="source-lane" value="01  SIGNALS AND ENTRY POINTS" style="text;html=0;align=left;verticalAlign=middle;fontSize=13;fontColor=#65dbc6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="48" y="125" width="800" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="process-lane" value="02  PROCESSING AND STORAGE" style="text;html=0;align=left;verticalAlign=middle;fontSize=13;fontColor=#65dbc6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="48" y="383" width="800" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="inventory-write" value="Inventory and ingest receipts" style="text;html=0;align=left;verticalAlign=middle;fontSize=13;fontColor=#a9bac7;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="426" y="523" width="800" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="read-lane" value="03  AUTHORIZED READS" style="text;html=0;align=left;verticalAlign=middle;fontSize=13;fontColor=#65dbc6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="48" y="726" width="800" height="23" as="geometry" />
+        </mxCell>
+        <mxCell id="footer" value="Inventory records presence. Usage evidence requires instrumentation." style="text;html=0;align=left;verticalAlign=middle;fontSize=15;fontColor=#a9bac7;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="48" y="821" width="800" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="https" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Scoped HTTPS&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Endpoint and passive network collectors&lt;/div&gt;&lt;div style=&quot;font-size:14px;color:#a9bac7&quot;&gt;AD export and instrumented sources&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="48" y="158" width="348" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="syslog" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Trusted-network syslog&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;DNS and proxy logs&lt;/div&gt;&lt;div style=&quot;font-size:14px;color:#a9bac7&quot;&gt;Private delivery spool&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="426" y="158" width="348" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="entra" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Microsoft Entra collector&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Application inventory&lt;/div&gt;&lt;div style=&quot;font-size:14px;color:#a9bac7&quot;&gt;Internal queueing path&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="804" y="158" width="348" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="events" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Redis event streams&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Queue, retry and dead letters&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#162129;strokeColor=#65dbc6;" vertex="1" parent="1">
+          <mxGeometry x="48" y="294" width="1104" height="67" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Ingest worker + catalog&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Record events and match source evidence&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="48" y="425" width="348" height="81" as="geometry" />
+        </mxCell>
+        <mxCell id="matches" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Redis match stream&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Pass matches to correlation&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="426" y="425" width="348" height="81" as="geometry" />
+        </mxCell>
+        <mxCell id="correlate" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Correlation worker&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Update detections and risk snapshots&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="804" y="425" width="348" height="81" as="geometry" />
+        </mxCell>
+        <mxCell id="clickhouse" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;ClickHouse&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Observed events&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="48" y="564" width="348" height="83" as="geometry" />
+        </mxCell>
+        <mxCell id="postgres" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;PostgreSQL&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Detections, governance, inventory and receipts&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="804" y="564" width="348" height="83" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Authenticated evidence API&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Role-scoped evidence and operations&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#162129;strokeColor=#65dbc6;" vertex="1" parent="1">
+          <mxGeometry x="426" y="710" width="348" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="console" value="&lt;div style=&quot;font-size:19px;color:#f1f5f9;font-weight:700&quot;&gt;Investigation console&lt;/div&gt;&lt;div style=&quot;margin-top:5px;font-size:14px;color:#a9bac7&quot;&gt;Sources, confidence and review&lt;/div&gt;" style="rounded=1;arcSize=13;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=18;fillColor=#10191f;strokeColor=#3c4d57;" vertex="1" parent="1">
+          <mxGeometry x="804" y="710" width="348" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="https-to-events" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.5000;exitY=1.0000;entryX=0.1576;entryY=0.0000;" edge="1" parent="1" source="https" target="events">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="syslog-to-events" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.5000;exitY=1.0000;entryX=0.5000;entryY=0.0000;" edge="1" parent="1" source="syslog" target="events">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="entra-to-events" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.5000;exitY=1.0000;entryX=0.8424;entryY=0.0000;" edge="1" parent="1" source="entra" target="events">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="events-to-ingest" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.3098;exitY=1.0000;entryX=0.5000;entryY=0.0000;" edge="1" parent="1" source="events" target="ingest">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="390" y="410" />
+              <mxPoint x="222" y="410" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ingest-to-matches" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=1.0000;exitY=0.4938;entryX=0.0000;entryY=0.4938;" edge="1" parent="1" source="ingest" target="matches">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="matches-to-correlate" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=1.0000;exitY=0.4938;entryX=0.0000;entryY=0.4938;" edge="1" parent="1" source="matches" target="correlate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest-to-clickhouse" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.5000;exitY=1.0000;entryX=0.5000;entryY=0.0000;" edge="1" parent="1" source="ingest" target="clickhouse">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest-to-postgres" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.9425;exitY=1.0000;entryX=0.0000;entryY=0.5663;" edge="1" parent="1" source="ingest" target="postgres">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="376" y="546" />
+              <mxPoint x="785" y="546" />
+              <mxPoint x="785" y="611" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="correlate-to-postgres" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.5000;exitY=1.0000;entryX=0.5000;entryY=0.0000;" edge="1" parent="1" source="correlate" target="postgres">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="clickhouse-to-api" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.5000;exitY=1.0000;entryX=0.1983;entryY=0.0000;" edge="1" parent="1" source="clickhouse" target="api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="222" y="676" />
+              <mxPoint x="495" y="676" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="postgres-to-api" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=0.5000;exitY=1.0000;entryX=0.8017;entryY=0.0000;" edge="1" parent="1" source="postgres" target="api">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="978" y="676" />
+              <mxPoint x="705" y="676" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="api-to-console" style="edgeStyle=segmentEdgeStyle;rounded=0;endArrow=block;endFill=1;strokeWidth=1.8;strokeColor=#7c9da6;exitX=1.0000;exitY=0.5000;entryX=0.0000;entryY=0.5000;" edge="1" parent="1" source="api" target="console">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

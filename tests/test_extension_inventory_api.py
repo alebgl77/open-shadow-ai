@@ -459,11 +459,39 @@ async def test_export_carries_the_warning_every_filter_and_an_audit_entry_and_is
     }
 
 
+async def test_detection_csv_neutralises_catalog_names_and_reasoning(inventory_console, monkeypatch):
+    name = '=SUM("1","2")'
+    reasoning = '\nObservation, "quoted"; second line\r\nthird line'
+    event = CanonicalEvent(tenant_id="test-org", collector_id="sensor", source_type="dns", timestamp=NOW)
+    catalog_item = item().model_copy(update={"canonical_name": name})
+    detection = Correlator(None)._create_detection(event, catalog_item, "domain", 0.9, NOW, NOW, None)
+    # The read projection regenerates the summary. Exercise the CSV boundary with its output.
+    monkeypatch.setattr("shadai.engine.scorer.generate_reasoning_summary", lambda *_: reasoning)
+    async with inventory_console.sessions.begin() as session:
+        session.add(detection)
+
+    response = await inventory_console.client.post("/api/v1/exports/detections")
+    assert response.status_code == 200, response.text
+    assert response.text.startswith(ANTI_HR_WARNING)
+    [row] = csv.DictReader(io.StringIO(response.text.removeprefix(ANTI_HR_WARNING)))
+    assert row["entity_name"] == "'" + name
+    assert row["reasoning"] == "'" + reasoning
+    assert row["classification"] == detection.classification
+    assert row["risk_score"] == str(detection.risk_score)
+    assert row["risk_score_stale"] == str(detection.risk_score_stale)
+    assert datetime.fromisoformat(row["last_seen"]).replace(tzinfo=UTC) == NOW
+    [audit] = await audit_entries(inventory_console)
+    assert audit.action == "export_detections"
+    assert audit.details == {"format": "csv", "count": 1, "filters": {}}
+
+
 def test_csv_cells_that_a_spreadsheet_would_run_as_formulas_are_neutralised():
     from shadai.api.exports import _csv_value
 
-    # Extension names come from manifests anyone can publish; labels and profiles are endpoint text.
-    for hostile in ("=HYPERLINK(\"https://example.invalid\")", "+1+1", "-2+3", "@SUM(A1)", "\tx", "\rx"):
+    for hostile in (
+        "=1+1", "+1+1", "-2+3", "@SUM(A1)", "\tx", "\rx", "\nx",
+        "\uff1d1+1", "\uff0b1+1", "\uff0d2+3", "\uff20SUM(A1)",
+    ):
         assert _csv_value(hostile) == "'" + hostile
     assert [_csv_value(value) for value in ("Sider", "1.2.3", "", None, True, False)] == [
         "Sider", "1.2.3", "", "", "true", "false"

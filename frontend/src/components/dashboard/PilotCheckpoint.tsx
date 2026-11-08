@@ -1,6 +1,7 @@
 import type { UseQueryResult } from '@tanstack/react-query'
 import { ArrowRight, CircleDot, Database, Layers3 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { REVIEW_DISCOVERIES_PATH } from '@/api/detections'
 import type { DashboardSummary, EvidenceSummary, SourceHealth } from '@/api/dashboard'
 import ErrorAlert from '@/components/ui/ErrorAlert'
 import { useI18n } from '@/i18n'
@@ -94,7 +95,7 @@ export default function PilotCheckpoint({ evidence, sources, summary }: Props) {
             ? tr('No new findings among retained detections.')
             : tr('New findings · {count}', { count: formatNumber(summary.data.unreviewed) })}</p>}
         <p className="mt-2 text-xs leading-relaxed text-slate-400">{tr('This count can include retained findings from outside the observation window.')}</p>
-        <Link to="/discoveries?analyst_status=new" className="mt-auto inline-flex w-fit items-center gap-2 rounded-sm pt-3 text-xs font-medium text-accent hover:underline">
+        <Link to={REVIEW_DISCOVERIES_PATH} className="mt-auto inline-flex w-fit items-center gap-2 rounded-sm pt-3 text-xs font-medium text-accent hover:underline">
           {tr('Open review queue')} <ArrowRight size={13} aria-hidden="true"/>
         </Link>
       </div>

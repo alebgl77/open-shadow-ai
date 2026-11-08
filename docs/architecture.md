@@ -1,8 +1,8 @@
 # Architecture
 
-![Architecture](assets/architecture.svg)
+![Architecture overview showing how source signals reach the console through Redis, processing, evidence stores and an authenticated API](assets/architecture.svg)
 
-[Edit the overview diagram in diagrams.net](assets/architecture.drawio). The SVG is a presentation export of that overview. The Mermaid below adds the collector control plane, local queues and retention boundaries.
+[Edit the overview diagram in diagrams.net](assets/architecture.drawio). The SVG and editable diagram show the same source paths, storage roles and authorized reads. The Mermaid diagram below adds the collector control plane, local queues and retention boundaries.
 
 ```mermaid
 flowchart TD

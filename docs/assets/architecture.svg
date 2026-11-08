@@ -1,1 +1,92 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790" role="img" aria-labelledby="title desc"><title id="title">Open Shadow AI architecture</title><desc id="desc">Directory, network, endpoint and instrumented sources flow through ingestion, Redis and the catalog into event and detection stores and an evidence interface. Inventory is distinct from usage.</desc><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#879d95"/></marker></defs><rect width="1200" height="790" fill="#f5f6f2"/><text x="48" y="59" font-family="Arial,sans-serif" font-size="29" font-weight="700" fill="#173e37">Open Shadow AI</text><text x="48" y="90" font-family="Arial,sans-serif" font-size="16" fill="#62746c">From source signals to findings you can inspect</text><rect x="928" y="42" width="224" height="32" rx="16" fill="#e3ebe6"/><text x="1040" y="63" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" letter-spacing="1" fill="#173e37">ONE ORGANIZATION / INSTALL</text><path d="M 177 240 V 270 H 177 V 300" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 459 240 V 270 H 459 V 300" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 741 240 V 270 H 741 V 300" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 1023 240 V 270 H 1023 V 300" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 600 386 V 417 H 177 V 448" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 306 498 H 330" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 588 498 H 612" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 459 548 V 582 H 1023 V 548" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 741 548 V 579 H 882 V 610" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><path d="M 1023 548 V 579 H 882 V 610" fill="none" stroke="#879d95" stroke-width="2" marker-end="url(#arrow)"/><g><rect x="48" y="132" width="258" height="108" rx="12" fill="#edf3f0" stroke="#d3dfd7"/><text x="72" y="170" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">AD + Entra</text><text x="72" y="198" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Directory inventory</text></g><g><rect x="330" y="132" width="258" height="108" rx="12" fill="#edf3f0" stroke="#d3dfd7"/><text x="354" y="170" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">DNS + proxy</text><text x="354" y="198" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Network observations</text></g><g><rect x="612" y="132" width="258" height="108" rx="12" fill="#edf3f0" stroke="#d3dfd7"/><text x="636" y="170" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">Managed endpoints</text><text x="636" y="198" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Asset inventory</text></g><g><rect x="894" y="132" width="258" height="108" rx="12" fill="#edf3f0" stroke="#d3dfd7"/><text x="918" y="170" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">Instrumented API</text><text x="918" y="198" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Declared usage evidence</text></g><g><rect x="48" y="300" width="1104" height="86" rx="12" fill="#173e37" stroke="#173e37"/><text x="72" y="338" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#ffffff">Scoped collectors + HTTP event API</text><text x="72" y="366" font-family="Arial,sans-serif" font-size="14" fill="#c6ddd4">Trusted-network syslog · API-key-authenticated HTTP</text></g><g><rect x="48" y="448" width="258" height="100" rx="12" fill="#ffffff" stroke="#d3dfd7"/><text x="72" y="486" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">Redis Streams</text><text x="72" y="514" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Queue · retry · dead letters</text></g><g><rect x="330" y="448" width="258" height="100" rx="12" fill="#ffffff" stroke="#d3dfd7"/><text x="354" y="486" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">Catalog + workers</text><text x="354" y="514" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Match · explain · correlate</text></g><g><rect x="612" y="448" width="258" height="100" rx="12" fill="#ffffff" stroke="#d3dfd7"/><text x="636" y="486" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">ClickHouse</text><text x="636" y="514" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Observed events</text></g><g><rect x="894" y="448" width="258" height="100" rx="12" fill="#ffffff" stroke="#d3dfd7"/><text x="918" y="486" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#173e37">PostgreSQL</text><text x="918" y="514" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Detections · governance<tspan x="918" dy="20">Idempotency receipts</tspan></text></g><g><rect x="612" y="610" width="540" height="94" rx="12" fill="#173e37" stroke="#173e37"/><text x="636" y="648" font-family="Arial,sans-serif" font-size="19" font-weight="700" fill="#ffffff">Evidence interface</text><text x="636" y="676" font-family="Arial,sans-serif" font-size="14" fill="#c6ddd4">Sources, confidence, review and explicit unknowns</text></g><text x="48" y="644" font-family="Arial,sans-serif" font-size="16" font-weight="700" fill="#173e37">Inventory ≠ usage</text><text x="48" y="672" font-family="Arial,sans-serif" font-size="14" fill="#62746c">Models and tokens require instrumented evidence.</text><text x="48" y="754" font-family="Arial,sans-serif" font-size="13" fill="#62746c">Self-hosted · No automatic fleet enrollment · Coverage depends on connected sources</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" role="img" aria-labelledby="title description">
+  <title id="title">Open Shadow AI architecture</title>
+  <desc id="description">Endpoint and passive network collectors, Active Directory exports and instrumented sources enter through scoped HTTPS. Trusted-network syslog and the Microsoft Entra inventory collector queue through separate paths. Redis event streams feed ingestion and matching. ClickHouse stores observed events, while PostgreSQL stores inventory, receipts and correlated detections. The console reads evidence through an authenticated API.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 L8 4 L0 8 Z" fill="#7c9da6" />
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1200" height="860" fill="#0c1217" />
+  <text x="48" y="68" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="31" font-weight="700" fill="#f1f5f9">Open Shadow AI architecture</text>
+  <text x="48" y="96" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="17" font-weight="400" fill="#a9bac7">From observed signals to reviewable findings</text>
+  <rect x="898" y="43" width="254" height="36" fill="#162129" rx="18" stroke="#3c4d57" />
+  <text x="1025" y="66" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#65dbc6" text-anchor="middle">ONE ORGANIZATION PER INSTALL</text>
+  <path d="M48 116 H1152 M48 809 H1152" stroke="#3c4d57" />
+  <g id="connections">
+    <path data-source="https" data-target="events" d="M222 254 L222 294" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="syslog" data-target="events" d="M600 254 L600 294" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="entra" data-target="events" d="M978 254 L978 294" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="events" data-target="ingest" d="M390 361 L390 410 L222 410 L222 425" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="ingest" data-target="matches" d="M396 465 L426 465" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="matches" data-target="correlate" d="M774 465 L804 465" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="ingest" data-target="clickhouse" d="M222 506 L222 564" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="ingest" data-target="postgres" d="M376 506 L376 546 L785 546 L785 611 L804 611" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="correlate" data-target="postgres" d="M978 506 L978 564" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="clickhouse" data-target="api" d="M222 647 L222 676 L495 676 L495 710" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="postgres" data-target="api" d="M978 647 L978 676 L705 676 L705 710" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+    <path data-source="api" data-target="console" d="M774 750 L804 750" fill="none" stroke="#7c9da6" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#arrow)" />
+  </g>
+  <g id="https">
+    <rect x="48" y="158" width="348" height="96" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="67" y="188" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Scoped HTTPS</text>
+    <text x="67" y="211" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Endpoint and passive network collectors</text>
+    <text x="67" y="229" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">AD export and instrumented sources</text>
+  </g>
+  <g id="syslog">
+    <rect x="426" y="158" width="348" height="96" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="445" y="188" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Trusted-network syslog</text>
+    <text x="445" y="211" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">DNS and proxy logs</text>
+    <text x="445" y="229" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Private delivery spool</text>
+  </g>
+  <g id="entra">
+    <rect x="804" y="158" width="348" height="96" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="823" y="188" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Microsoft Entra collector</text>
+    <text x="823" y="211" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Application inventory</text>
+    <text x="823" y="229" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Internal queueing path</text>
+  </g>
+  <g id="events">
+    <rect x="48" y="294" width="1104" height="67" fill="#162129" rx="12" stroke="#65dbc6" />
+    <text x="67" y="324" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Redis event streams</text>
+    <text x="67" y="347" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Queue, retry and dead letters</text>
+  </g>
+  <g id="ingest">
+    <rect x="48" y="425" width="348" height="81" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="67" y="458" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Ingest worker + catalog</text>
+    <text x="67" y="481" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Record events and match source evidence</text>
+  </g>
+  <g id="matches">
+    <rect x="426" y="425" width="348" height="81" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="445" y="458" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Redis match stream</text>
+    <text x="445" y="481" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Pass matches to correlation</text>
+  </g>
+  <g id="correlate">
+    <rect x="804" y="425" width="348" height="81" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="823" y="458" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Correlation worker</text>
+    <text x="823" y="481" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Update detections and risk snapshots</text>
+  </g>
+  <g id="clickhouse">
+    <rect x="48" y="564" width="348" height="83" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="67" y="597" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">ClickHouse</text>
+    <text x="67" y="620" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Observed events</text>
+  </g>
+  <g id="postgres">
+    <rect x="804" y="564" width="348" height="83" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="823" y="597" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">PostgreSQL</text>
+    <text x="823" y="620" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Detections, governance, inventory and receipts</text>
+  </g>
+  <g id="api">
+    <rect x="426" y="710" width="348" height="80" fill="#162129" rx="12" stroke="#65dbc6" />
+    <text x="445" y="743" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Authenticated evidence API</text>
+    <text x="445" y="766" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Role-scoped evidence and operations</text>
+  </g>
+  <g id="console">
+    <rect x="804" y="710" width="348" height="80" fill="#10191f" rx="12" stroke="#3c4d57" />
+    <text x="823" y="743" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="19" font-weight="700" fill="#f1f5f9">Investigation console</text>
+    <text x="823" y="766" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="14" font-weight="400" fill="#a9bac7">Sources, confidence and review</text>
+  </g>
+  <text x="48" y="140" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="13" font-weight="700" fill="#65dbc6">01  SIGNALS AND ENTRY POINTS</text>
+  <text x="48" y="398" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="13" font-weight="700" fill="#65dbc6">02  PROCESSING AND STORAGE</text>
+  <text x="426" y="538" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="13" font-weight="500" fill="#a9bac7">Inventory and ingest receipts</text>
+  <text x="48" y="741" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="13" font-weight="700" fill="#65dbc6">03  AUTHORIZED READS</text>
+  <text x="48" y="838" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="15" font-weight="400" fill="#a9bac7">Inventory records presence. Usage evidence requires instrumentation.</text>
+</svg>

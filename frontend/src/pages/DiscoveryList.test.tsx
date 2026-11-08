@@ -29,6 +29,28 @@ describe('audited export of every matching discovery', () => {
     expect(result.filename).toBe('.._shadai_detections.csv')
     expect(result.blob).toBeInstanceOf(Blob)
   })
+  it.each(['remove scope', 'show false-positive history'])('makes dashboard scope and risk visible, then lets an analyst %s', async action => {
+    const post = vi.spyOn(client, 'post').mockResolvedValue({ data: new Blob(['rows']), headers: {} })
+    vi.spyOn(downloads, 'downloadBlob').mockImplementation(() => undefined)
+    renderList('analyst', '/discoveries?include_false_positives=false&risk_level=critical,high')
+    await screen.findByText('7 results')
+    expect(screen.getByText('False positives excluded')).toBeTruthy()
+    expect(vi.mocked(client.get).mock.calls[0][0]).toContain('include_false_positives=false')
+    fireEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+    const risk = screen.getByRole('combobox', { name: 'Risk' }) as HTMLSelectElement
+    expect(risk.selectedOptions[0].textContent).toBe('High & critical risk')
+    fireEvent.click(screen.getByRole('button', { name: 'Export all' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm export' }))
+    await waitFor(() => expect(post.mock.calls[0][0]).toContain('risk_level=critical%2Chigh&include_false_positives=false'))
+
+    if (action === 'remove scope') fireEvent.click(screen.getByRole('button', { name: 'False positives excluded. Include false positives' }))
+    else fireEvent.change(screen.getByRole('combobox', { name: 'Status' }), { target: { value: 'false_positive' } })
+    await waitFor(() => expect(screen.queryByText('False positives excluded')).toBeNull())
+    await waitFor(() => expect(vi.mocked(client.get).mock.calls.length).toBeGreaterThan(1))
+    const lastRequest = vi.mocked(client.get).mock.calls.at(-1)?.[0]
+    expect(lastRequest).not.toContain('include_false_positives')
+    if (action !== 'remove scope') expect(lastRequest).toContain('analyst_status=false_positive')
+  })
   it('is hidden from viewers, who cannot export', async () => {
     renderList('viewer')
     await screen.findByText('7 results')

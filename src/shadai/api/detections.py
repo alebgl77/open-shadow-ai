@@ -71,9 +71,11 @@ def filter_detections(
     entity_type: str | None = None,
     analyst_status: str | None = None,
     search: str | None = None,
+    include_false_positives: bool = True,
 ):
     """Apply the discovery list filters; exports reuse them so both return the same rows."""
-    query = query.where(DetectionORM.shadow_ai_status.notin_(["archived"]))
+    excluded = ("archived",) if include_false_positives else ("archived", "false_positive")
+    query = query.where(DetectionORM.shadow_ai_status.notin_(excluded))
     if classification:
         query = query.where(DetectionORM.classification.in_(classification.split(",")))
     if entity_type:
@@ -173,6 +175,7 @@ async def list_detections(
     entity_type: str | None = None,
     analyst_status: str | None = None,
     search: str | None = None,
+    include_false_positives: bool = True,
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     sort_by: str = "last_seen_at",
@@ -189,6 +192,7 @@ async def list_detections(
         entity_type=entity_type,
         analyst_status=analyst_status,
         search=search,
+        include_false_positives=include_false_positives,
     )
     query = order_detections(query, sort_by, sort_order, now=now)
 

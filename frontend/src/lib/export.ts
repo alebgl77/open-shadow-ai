@@ -1,7 +1,7 @@
 export function csvCell(value: unknown): string {
   const text = String(value ?? '')
-  // Prevent spreadsheet formula execution when exporting untrusted service names.
-  return `"${(/^[=+@\-\t\r]/.test(text) ? "'" + text : text).replaceAll('"', '""')}"`
+  // Mirror the API's formula and control prefixes, including full-width variants.
+  return `"${(/^[=+@\-\t\r\n\uff1d\uff0b\uff0d\uff20]/.test(text) ? "'" + text : text).replaceAll('"', '""')}"`
 }
 export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)

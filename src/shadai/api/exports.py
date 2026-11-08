@@ -44,6 +44,7 @@ async def export_detections(
     entity_type: str | None = None,
     analyst_status: str | None = None,
     search: str | None = None,
+    include_false_positives: bool = True,
     sort_by: str = "risk_score",
     sort_order: str = "desc",
     request: Request = None,
@@ -59,6 +60,8 @@ async def export_detections(
         "analyst_status": analyst_status,
         "search": search,
     }
+    if not include_false_positives:
+        filters["include_false_positives"] = False
     query = order_detections(filter_detections(select(DetectionORM), **filters), sort_by, sort_order, now=now)
     result = await session.execute(query)
     rows = list(result.scalars().all())
@@ -76,7 +79,7 @@ async def export_detections(
         details={
             "format": format,
             "count": len(detections),
-            "filters": {key: value for key, value in filters.items() if value},
+            "filters": {key: value for key, value in filters.items() if value or value is False},
         },
         ip_address=request.client.host if request.client else None,
     )
@@ -84,7 +87,7 @@ async def export_detections(
     if format == "csv":
         output = io.StringIO()
         output.write(ANTI_HR_WARNING)
-        writer = csv.writer(output)
+        writer = csv.writer(output, quoting=csv.QUOTE_ALL)
         writer.writerow(
             [
                 "entity_name",
@@ -107,27 +110,26 @@ async def export_detections(
             ]
         )
         for d in detections:
-            writer.writerow(
-                [
-                    d.entity_name,
-                    d.entity_type,
-                    d.entity_category,
-                    d.classification,
-                    d.confidence_score,
-                    d.confidence_level,
-                    d.risk_score,
-                    d.risk_level,
-                    d.risk_score_stale,
-                    d.governance_status,
-                    d.impacted_users_count,
-                    d.first_seen_at.isoformat(),
-                    d.last_seen_at.isoformat(),
-                    d.analyst_status,
-                    ";".join(d.source_types),
-                    d.reasoning_summary or "",
-                    d.risk_calculated_at.astimezone(UTC).isoformat() if d.risk_calculated_at else "",
-                ]
-            )
+            row = [
+                d.entity_name,
+                d.entity_type,
+                d.entity_category,
+                d.classification,
+                d.confidence_score,
+                d.confidence_level,
+                d.risk_score,
+                d.risk_level,
+                d.risk_score_stale,
+                d.governance_status,
+                d.impacted_users_count,
+                d.first_seen_at.isoformat(),
+                d.last_seen_at.isoformat(),
+                d.analyst_status,
+                ";".join(d.source_types),
+                d.reasoning_summary or "",
+                d.risk_calculated_at.astimezone(UTC).isoformat() if d.risk_calculated_at else "",
+            ]
+            writer.writerow(_csv_value(value) if isinstance(value, str) else value for value in row)
         output.seek(0)
         return StreamingResponse(
             output,
@@ -176,9 +178,8 @@ INVENTORY_EXPORT_COLUMNS = (
 )
 
 
-# Extension names, host and user labels and profile names are endpoint-reported text; a cell that
-# starts with one of these characters would run as a formula when the export opens in a spreadsheet.
-CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+# Mirror the browser CSV encoder for text that a spreadsheet may interpret as a formula.
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n", "\uff1d", "\uff0b", "\uff0d", "\uff20")
 
 
 def _csv_value(value):
@@ -251,7 +252,7 @@ async def export_extension_inventory(
     if format == "csv":
         output = io.StringIO()
         output.write(ANTI_HR_WARNING)
-        writer = csv.writer(output)
+        writer = csv.writer(output, quoting=csv.QUOTE_ALL)
         writer.writerow(INVENTORY_EXPORT_COLUMNS)
         for row in rows:
             writer.writerow([_csv_value(row[column]) for column in INVENTORY_EXPORT_COLUMNS])

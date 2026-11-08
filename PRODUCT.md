@@ -21,6 +21,8 @@ Run `npm ci` and `npm run demo` in `frontend`, or open `/demo` on a running fron
 
 ## Access and limitations
 
-Authentication credentials remain in memory and a reload requires sign-in again. Session changes clear cached queries. The backend is the authority for role enforcement; frontend viewers cannot use review mutation controls. Console account and governance-policy administration use the backend API. Source ingestion is configured at deployment time; the console reports received evidence.
+The browser restores a valid live session after reload using its HttpOnly cookie. The profile and CSRF token stay in memory, and session changes clear cached queries. The backend is the authority for role enforcement; frontend viewers cannot use review mutation controls. Console account and governance-policy administration use the backend API. Source ingestion is configured at deployment time; the console reports received evidence.
 
-CSV export includes the currently displayed discoveries only and neutralizes spreadsheet formula prefixes. Review failures are visible and preserve the current note. The console does not provide an atomic multi-record review operation: a partial bulk failure refreshes records and reports the failure count.
+Export page downloads the discoveries displayed on the current page. For analysts and administrators, Export all sends the current filters to the live API, exports every matching discovery, and records an audit entry. Demo exports contain synthetic records, and demo audit entries stay in memory. The CSV encoders escape formula-like text when generating a file. Spreadsheet software can change this escaping when it saves the file again.
+
+Review failures are visible and preserve the current note. The console does not provide an atomic multi-record review operation: a partial bulk failure refreshes records and reports the failure count.

@@ -1,3 +1,4 @@
+import { queryOptions } from '@tanstack/react-query'
 import client from './client'
 
 export interface DashboardSummary {
@@ -32,6 +33,16 @@ export const getSummary = () => client.get<DashboardSummary>('/dashboard/summary
 export const getTrend = (days = 30) => client.get<TrendData[]>(`/dashboard/trend?days=${days}`).then(r => r.data)
 export const getTopTools = (limit = 10) => client.get<TopTool[]>(`/dashboard/top-tools?limit=${limit}`).then(r => r.data)
 export const getSourceHealth = () => client.get<SourceHealth[]>('/dashboard/source-health').then(r => r.data)
+
+export const SOURCE_HEALTH_REFRESH_MS = 60_000
+
+export function sourceHealthQueryOptions(mode: 'live' | 'demo', session: number) {
+  return queryOptions({
+    queryKey: ['source-health', mode, session],
+    queryFn: getSourceHealth,
+    staleTime: SOURCE_HEALTH_REFRESH_MS,
+  })
+}
 
 export interface EvidenceSummary {
   window_days: number
