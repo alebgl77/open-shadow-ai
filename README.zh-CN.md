@@ -31,7 +31,7 @@ npm run demo
 2. 在**发现**中比较 **Perplexity**（DNS 查询）和 **Ollama**（终端报告的信号）。检查证据来源，区分工具存在和实际使用。
 3. 审查一项合成发现，再打开**治理**查看已批准工具及其负责人的示例。参阅[企业评估指南（英文）](docs/enterprise-evaluation.md)，根据明确的验收标准决定是否开展试点。
 
-![使用合成演示数据的 Open Shadow AI 调查仪表板](docs/assets/dashboard-desktop.webp)
+![使用合成演示数据的 Open Shadow AI 简体中文调查仪表板](docs/assets/dashboard-desktop.zh-CN.webp)
 
 ## 动态发现示意
 
@@ -123,7 +123,7 @@ AD 导出与终端安装由运维人员执行，流程见 [Microsoft 指南（�
 
 ## 架构
 
-![Open Shadow AI 架构](docs/assets/architecture.svg)
+![Open Shadow AI 数据流，从信号来源经认证 API 到调查控制台](docs/assets/architecture.svg)
 
 [可编辑的 draw.io 图](docs/assets/architecture.drawio) · [Mermaid 与数据流（英文参考）](docs/architecture.md)
 

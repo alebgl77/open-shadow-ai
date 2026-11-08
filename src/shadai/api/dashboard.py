@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from shadai.api.detections import filter_detections
 from shadai.api.ingestion import SOURCE_TYPES
 from shadai.config import get_config
 from shadai.database import get_clickhouse, get_postgres_session
@@ -25,50 +26,12 @@ async def get_summary(
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Executive dashboard counters."""
-    total = (
-        await session.scalar(
-            select(func.count())
-            .select_from(DetectionORM)
-            .where(DetectionORM.shadow_ai_status.notin_(["archived", "false_positive"]))
-        )
-        or 0
-    )
-
-    unsanctioned = (
-        await session.scalar(
-            select(func.count())
-            .select_from(DetectionORM)
-            .where(DetectionORM.classification == "unsanctioned")
-            .where(DetectionORM.shadow_ai_status.notin_(["archived", "false_positive"]))
-        )
-        or 0
-    )
-
-    high_risk = (
-        await session.scalar(
-            select(func.count())
-            .select_from(DetectionORM)
-            .where(DetectionORM.risk_score >= 71)
-            .where(DetectionORM.shadow_ai_status.notin_(["archived", "false_positive"]))
-        )
-        or 0
-    )
-
-    unreviewed = (
-        await session.scalar(
-            select(func.count())
-            .select_from(DetectionORM)
-            .where(DetectionORM.analyst_status == "new")
-            .where(DetectionORM.shadow_ai_status.notin_(["archived", "false_positive"]))
-        )
-        or 0
-    )
-
+    count = filter_detections(select(func.count()).select_from(DetectionORM), include_false_positives=False)
     return {
-        "total": total,
-        "unsanctioned": unsanctioned,
-        "high_risk": high_risk,
-        "unreviewed": unreviewed,
+        "total": await session.scalar(count) or 0,
+        "unsanctioned": await session.scalar(count.where(DetectionORM.classification == "unsanctioned")) or 0,
+        "high_risk": await session.scalar(count.where(DetectionORM.risk_score >= 71)) or 0,
+        "unreviewed": await session.scalar(count.where(DetectionORM.analyst_status == "new")) or 0,
     }
 
 
@@ -99,7 +62,7 @@ async def get_top_tools(
     session: AsyncSession = Depends(get_postgres_session, scope="function"),
 ):
     """Top AI tools by event count."""
-    result = await session.execute(
+    scoped = filter_detections(
         select(
             DetectionORM.entity_name,
             DetectionORM.entity_type,
@@ -107,11 +70,10 @@ async def get_top_tools(
             DetectionORM.total_events_count,
             DetectionORM.impacted_users_count,
             DetectionORM.risk_score,
-        )
-        .where(DetectionORM.shadow_ai_status.notin_(["archived", "false_positive"]))
-        .order_by(DetectionORM.total_events_count.desc())
-        .limit(limit)
+        ),
+        include_false_positives=False,
     )
+    result = await session.execute(scoped.order_by(DetectionORM.total_events_count.desc()).limit(limit))
     return [
         {
             "name": row.entity_name,

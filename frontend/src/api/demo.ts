@@ -189,8 +189,13 @@ function filteredNetwork(params: URLSearchParams) {
     (!params.has('domain') || (event.domain || event.sni || event.url_host || '') === params.get('domain')))
 }
 
+function detectionScope(includeFalsePositives: boolean): Detection[] {
+  return detections.filter(d => d.shadow_ai_status !== 'archived' &&
+    (includeFalsePositives || d.shadow_ai_status !== 'false_positive'))
+}
+
 function matchingDetections(params: URLSearchParams, defaultSort: keyof Detection): Detection[] {
-  let items = detections.filter(d => ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status'].every(key => !params.get(key) || params.get(key)!.split(',').includes(String(d[key as keyof Detection]))))
+  let items = detectionScope(params.get('include_false_positives') !== 'false').filter(d => ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status'].every(key => !params.get(key) || params.get(key)!.split(',').includes(String(d[key as keyof Detection]))))
   if (params.get('search')) items = items.filter(d => d.entity_name.toLowerCase().includes(params.get('search')!.toLowerCase()))
   const sort = (params.get('sort_by') || defaultSort) as keyof Detection
   if (!(DETECTION_SORT_COLUMNS as readonly string[]).includes(sort)) throw new Error('Invalid sort')
@@ -202,10 +207,13 @@ export function demoRequest(method: string, input: string, body: Record<string, 
   const url = new URL(input, 'https://demo.invalid')
   const path = url.pathname
   const params = url.searchParams
-  if (path === '/dashboard/summary') return { total: detections.length, unsanctioned: detections.filter(d => d.classification === 'unsanctioned').length, high_risk: detections.filter(d => ['high', 'critical'].includes(d.risk_level)).length, unreviewed: detections.filter(d => d.analyst_status === 'new').length }
+  if (path === '/dashboard/summary') {
+    const visible = detectionScope(false)
+    return { total: visible.length, unsanctioned: visible.filter(d => d.classification === 'unsanctioned').length, high_risk: visible.filter(d => d.risk_score >= 71).length, unreviewed: visible.filter(d => d.analyst_status === 'new').length }
+  }
   if (path === '/dashboard/trend') return Array.from({ length: 30 }, (_, i) => ({ date: ago((29 - i) * 24).slice(0, 10), count: i > 19 && i < 29 ? 1 : 0 }))
-  if (path === '/dashboard/top-tools') return [...detections].sort((a, b) => b.total_events_count - a.total_events_count).slice(0, Number(params.get('limit') || 10)).map(d => ({ name: d.entity_name, entity_type: d.entity_type, classification: d.classification, events_count: d.total_events_count, users_count: d.impacted_users_count, risk_score: d.risk_score }))
-  if (path === '/dashboard/source-health') return [...['proxy', 'dns', 'endpoint', 'browser', 'oauth', 'instrumented', 'directory'].map((source, i) => ({ source_type: source, status: i === 6 ? 'inactive' : i === 3 ? 'warning' : 'active', last_event: i === 6 ? null : ago(i === 3 ? 8 : .08), events_per_minute: i === 6 ? 0 : [3.2, 1.8, .5, 0, .2, .4][i], events_1h: i === 6 ? 0 : [192, 108, 30, 0, 12, 24][i], window_hours: 1 })), { source_type: 'network', status: 'active', last_event: networkEvents[0].timestamp, events_per_minute: 2 / 60, events_1h: 2, window_hours: 1 }]
+  if (path === '/dashboard/top-tools') return detectionScope(false).sort((a, b) => b.total_events_count - a.total_events_count).slice(0, Number(params.get('limit') || 10)).map(d => ({ name: d.entity_name, entity_type: d.entity_type, classification: d.classification, events_count: d.total_events_count, users_count: d.impacted_users_count, risk_score: d.risk_score }))
+  if (path === '/dashboard/source-health') return [...['proxy', 'dns', 'endpoint', 'browser', 'oauth', 'instrumented', 'directory'].map((source, i) => ({ source_type: source, status: i === 3 || i === 6 ? 'inactive' : 'active', last_event: i === 6 ? null : ago(i === 3 ? 8 : .08), events_per_minute: i === 6 ? 0 : [3.2, 1.8, .5, 0, .2, .4][i], events_1h: i === 6 ? 0 : [192, 108, 30, 0, 12, 24][i], window_hours: 1 })), { source_type: 'network', status: 'active', last_event: networkEvents[0].timestamp, events_per_minute: 2 / 60, events_1h: 2, window_hours: 1 }]
   if (path === '/dashboard/evidence') return { window_days: 30, window_start: ago(720), window_end: ago(0), total_events: 1777 + networkEvents.length, by_category: [{ category: 'network', events: 1518 + networkEvents.length }, { category: 'endpoint', events: 89 }, { category: 'oauth', events: 42 }, { category: 'instrumented', events: 128 }], by_source: ['proxy', 'dns', 'endpoint', 'browser', 'oauth', 'instrumented', 'network'].map(source => ({ source_type: source, evidence_type: source, events: source === 'network' ? networkEvents.length : detections.filter(d => d.source_types.includes(source)).reduce((sum, d) => sum + d.total_events_count, 0) })), models: [{ provider: 'openai', model: 'gpt-4.1-mini', model_provenance: 'instrumented', events: 128 }], measurement: { model_known_events: 128, tokens_reported_events: 128, cost_reported_events: 0, input_tokens: 341200, output_tokens: 98400, cost_usd: null }, unique_users: 31, unique_devices: 27 }
   if (path === '/network/overview') {
     const events = networkInWindow(params)
@@ -282,8 +290,14 @@ export function demoRequest(method: string, input: string, body: Record<string, 
   }
   if (path === '/exports/detections' && method === 'post') {
     const items = matchingDetections(params, 'risk_score')
-    const filters = Object.fromEntries([...params].filter(([key]) => key !== 'format'))
-    audit.unshift({ audit_id: String(audit.length + 1), timestamp: new Date().toISOString(), username: 'Demo reviewer', action: 'export_detections', resource_type: null, resource_id: null, ip_address: null, details: { format: 'csv', count: items.length, filters } })
+    const filters: Record<string, string | boolean> = Object.fromEntries(
+      [...params].filter(([key]) => key !== 'format' && key !== 'include_false_positives'),
+    )
+    if (params.get('include_false_positives') === 'false') filters.include_false_positives = false
+    const format = params.get('format') === 'json' ? 'json' : 'csv'
+    const exportedAt = new Date().toISOString()
+    audit.unshift({ audit_id: String(audit.length + 1), timestamp: exportedAt, username: 'Demo reviewer', action: 'export_detections', resource_type: null, resource_id: null, ip_address: null, details: { format, count: items.length, filters } })
+    if (format === 'json') return { warning: ANTI_HR_NOTICE, exported_at: exportedAt, count: items.length, detections: items.map(withVersionEvidence) }
     const rows = [['entity_name', 'entity_type', 'classification', 'risk_score', 'impacted_users', 'last_seen'], ...items.map(d => [d.entity_name, d.entity_type, d.classification, d.risk_score, d.impacted_users_count, d.last_seen_at])]
     return `# WARNING: Synthetic demo export. ${ANTI_HR_NOTICE}\n` + rows.map(row => row.map(csvCell).join(',')).join('\r\n')
   }
@@ -292,7 +306,14 @@ export function demoRequest(method: string, input: string, body: Record<string, 
     if (!found) throw new Error('Demo detection not found')
     if (path.endsWith('/timeline')) return demoTimeline(found)
     if (method === 'patch') {
-      Object.assign(found, body, { updated_at: new Date().toISOString(), reviewed_at: new Date().toISOString() })
+      const { analyst_status, ...changes } = body
+      const reviewedAt = new Date().toISOString()
+      Object.assign(found, changes, { updated_at: reviewedAt, reviewed_at: reviewedAt })
+      if (typeof analyst_status === 'string') {
+        found.analyst_status = analyst_status
+        if (analyst_status === 'false_positive') found.shadow_ai_status = 'false_positive'
+        else if (found.shadow_ai_status === 'false_positive') found.shadow_ai_status = 'suspected'
+      }
       audit.unshift({ audit_id: String(audit.length + 1), timestamp: new Date().toISOString(), username: 'Demo reviewer', action: 'detection.update', resource_type: 'detection', resource_id: id, ip_address: null })
     }
     return withVersionEvidence({ ...found })

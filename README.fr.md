@@ -30,7 +30,7 @@ npm run demo
 2. Dans **Découvertes**, comparez **Perplexity** (une résolution DNS) et **Ollama** (un signal remonté par un poste). Examinez la provenance et distinguez la présence d'un outil de son usage effectif.
 3. Passez une découverte synthétique en revue, puis ouvrez **Gouvernance** pour voir un exemple d'outil approuvé et son responsable. Le [guide d'évaluation DSI (en anglais)](docs/enterprise-evaluation.md) donne les critères pour décider de lancer un pilote.
 
-![Interface d'investigation Open Shadow AI avec des données de démonstration synthétiques](docs/assets/dashboard-desktop.webp)
+![Tableau de bord Open Shadow AI en français avec des données de démonstration synthétiques](docs/assets/dashboard-desktop.fr.webp)
 
 ## La découverte en mouvement
 
@@ -122,7 +122,7 @@ La console propose l'anglais, le français et le chinois simplifié avant et apr
 
 ## Architecture
 
-![Architecture Open Shadow AI](docs/assets/architecture.svg)
+![Flux de données Open Shadow AI des sources à la console d’investigation via une API authentifiée](docs/assets/architecture.svg)
 
 [Schéma draw.io éditable](docs/assets/architecture.drawio) · [Mermaid et flux de données (référence en anglais)](docs/architecture.md)
 

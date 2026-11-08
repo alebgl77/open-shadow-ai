@@ -1,3 +1,4 @@
+import csv
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -5,12 +6,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
+from test_evidence_privacy import evidence_sessions as evidence_sessions
+from test_extension_inventory_api import inventory_console as inventory_console
 
 from shadai.config import CatalogSettings
 from shadai.engine.catalog_loader import build_catalog_index, load_catalog_from_yaml, sync_catalog
 from shadai.engine.correlator import Correlator
 from shadai.engine.matcher import CatalogMatcher
+from shadai.models.audit import AuditLogORM
 from shadai.models.catalog import CatalogItemRead
+from shadai.models.detection import DetectionORM
 from shadai.models.event import CanonicalEvent
 
 
@@ -280,6 +286,59 @@ async def test_export_applies_every_discovery_filter():
         await export_detections(
             format="csv", risk_level="severe", request=request, current_user=user, session=AsyncMock()
         )
+
+
+async def test_dashboard_scope_matches_discovery_and_exports_but_preserves_false_positive_history(inventory_console):
+    now = datetime.now(UTC)
+    async with inventory_console.sessions.begin() as session:
+        for name, score, status, analyst_status in (
+            ("active", 71, "suspected", "new"),
+            ("archived", 100, "archived", "new"),
+            ("reviewed false positive", 86, "false_positive", "false_positive"),
+            ("medium", 70, "suspected", "new"),
+        ):
+            session.add(DetectionORM(
+                entity_type="saas_app", entity_name=name, risk_score=score,
+                shadow_ai_status=status, analyst_status=analyst_status, classification="unsanctioned",
+                first_seen_at=now, last_seen_at=now,
+            ))
+
+    client = inventory_console.client
+    risk = {"risk_level": "critical,high"}
+    scoped = {**risk, "include_false_positives": "false"}
+    summary = await client.get("/api/v1/dashboard/summary")
+    assert summary.json() == {"total": 2, "unsanctioned": 2, "high_risk": 1, "unreviewed": 2}
+    general = await client.get("/api/v1/detections", params=risk)
+    assert {item["entity_name"] for item in general.json()["items"]} == {"active", "reviewed false positive"}
+    history = await client.get("/api/v1/detections", params={**risk, "analyst_status": "false_positive"})
+    assert [item["entity_name"] for item in history.json()["items"]] == ["reviewed false positive"]
+    listing = await client.get("/api/v1/detections", params=scoped)
+    assert listing.json()["total"] == summary.json()["high_risk"]
+    active = listing.json()["items"][0]
+    assert active["entity_name"] == "active"
+
+    response = await client.post("/api/v1/exports/detections", params={**scoped, "format": "csv"})
+    assert response.status_code == 200
+    assert [item["entity_name"] for item in csv.DictReader(response.text.splitlines()[1:])] == ["active"]
+    response = await client.post("/api/v1/exports/detections", params={**scoped, "format": "json"})
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert [item["entity_name"] for item in response.json()["detections"]] == ["active"]
+    response = await client.post("/api/v1/exports/detections", params={**risk, "format": "json"})
+    assert {item["entity_name"] for item in response.json()["detections"]} == {"active", "reviewed false positive"}
+    async with inventory_console.sessions() as session:
+        audits = (await session.scalars(select(AuditLogORM))).all()
+    assert [entry.details["filters"].get("include_false_positives") for entry in audits].count(False) == 2
+
+    active_url = f"/api/v1/detections/{active['detection_id']}"
+    reviewed = await client.patch(active_url, json={"analyst_status": "false_positive"})
+    assert reviewed.json()["shadow_ai_status"] == "false_positive"
+    summary = await client.get("/api/v1/dashboard/summary")
+    assert summary.json()["high_risk"] == 0
+    reopened = await client.patch(active_url, json={"analyst_status": "investigating"})
+    assert reopened.json()["shadow_ai_status"] == "suspected"
+    summary = await client.get("/api/v1/dashboard/summary")
+    assert summary.json()["high_risk"] == 1
 
 
 def test_builtin_exact_signatures_have_a_single_owner():

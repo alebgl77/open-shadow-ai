@@ -7,12 +7,16 @@ from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 
 ARCHIVE = "https://security.debian.org/debian-security/pool/updates/main"
-# DSA-6549-1 and DSA-6607-1. Verify all bytes before invoking dpkg. Digests and
-# sizes come from the signed trixie-security binary indexes for each architecture.
+# DSA-6549-1, DSA-6607-1 and DSA-6613-1. Verify all bytes before invoking dpkg.
+# Digests and sizes come from the signed trixie-security indexes for each architecture.
 PACKAGES = (
     ("x/xz-utils/liblzma5_5.8.1-1+deb13u2", {
         "amd64": ("b38acab30f295bf1066a6632e31cbd0a1980f2924b38040cda131d5dea5384ec", 309696),
         "arm64": ("88f3aa499dc30edf01b9209ab40f11e37edfbecef971f84f4721de1874ed4827", 302984),
+    }),
+    ("z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1", {
+        "amd64": ("8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb", 88720),
+        "arm64": ("0e41b3d7ad8ad7fcd36dd4d61ca91a70018478fc4af652e044f4be770784ddff", 85028),
     }),
     ("a/apt/libapt-pkg7.0_3.0.4", {
         "amd64": ("577eb8f489de419290102364892dbd13ca256297b61f96d61b114fd4ac18be41", 1113872),

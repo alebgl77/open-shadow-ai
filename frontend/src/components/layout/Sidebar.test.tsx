@@ -67,3 +67,16 @@ describe('sign-out', () => {
     expect(post).not.toHaveBeenCalled()
   })
 })
+
+
+describe('navigation access', () => {
+  it.each(['viewer', 'analyst', 'admin'] as const)('offers only permitted investigation destinations to a %s', role => {
+    useAuthStore.getState().login('live-csrf', { ...analyst, role })
+    renderSidebar()
+    expect(Boolean(screen.queryByRole('link', { name: 'Network' }))).toBe(role !== 'viewer')
+    expect(Boolean(screen.queryByRole('link', { name: 'AI cartography' }))).toBe(role !== 'viewer')
+    expect(Boolean(screen.queryByRole('link', { name: 'Settings' }))).toBe(role === 'admin')
+    expect(screen.getByRole('link', { name: 'Sources' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Extensions' })).toBeTruthy()
+  })
+})

@@ -327,7 +327,8 @@ describe('collector operations', () => {
 })
 
 describe('source cards', () => {
-  it('links the browser source to the extension inventory view and the network source to its observations', async () => {
+  it.each(['analyst', 'admin'] as const)('links to the detailed evidence for an %s', async role => {
+    useAuthStore.getState().login('csrf-role', { ...admin, role })
     serve([
       { source_type: 'browser', status: 'warning', last_event: '2026-10-06T04:00:00Z', events_per_minute: 0 },
       { source_type: 'network', status: 'active', last_event: '2026-10-06T12:00:00Z', events_per_minute: .1 },
@@ -339,5 +340,17 @@ describe('source cards', () => {
     expect(browser.closest('section')?.textContent).toContain('Installation does not establish active use.')
     expect(screen.getByRole('link', { name: 'Inspect network observations' }).getAttribute('href')).toBe('/network')
     expect(screen.getAllByRole('link', { name: /^Inspect / })).toHaveLength(2)
+  })
+
+  it('shows aggregate source observations without privileged links to a viewer', async () => {
+    useAuthStore.getState().login('csrf-viewer', { ...admin, role: 'viewer' })
+    serve([
+      { source_type: 'browser', status: 'inactive', last_event: '2026-10-06T04:00:00Z', events_per_minute: 0 },
+      { source_type: 'network', status: 'active', last_event: '2026-10-06T12:00:00Z', events_per_minute: .1 },
+    ])
+    mount()
+    expect(await screen.findByText(/Installation does not establish active use/)).toBeTruthy()
+    expect(screen.getByText(/Passive DNS, TLS, QUIC and HTTP metadata/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /^Inspect / })).toBeNull()
   })
 })

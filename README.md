@@ -31,7 +31,7 @@ npm run demo
 2. In **Discoveries**, compare **Perplexity** (a DNS lookup) with **Ollama** (an endpoint signal). Inspect provenance and separate evidence of presence from evidence of actual use.
 3. Review a synthetic finding and open **Governance** to see an example of an approved tool and its owner. Use the [enterprise evaluation guide](docs/enterprise-evaluation.md) to turn the walkthrough into a pilot decision.
 
-![Open Shadow AI investigation dashboard with synthetic demo data](docs/assets/dashboard-desktop.webp)
+![Open Shadow AI investigation dashboard in English with synthetic demo data](docs/assets/dashboard-desktop.webp)
 
 ## Discovery in motion
 
@@ -123,7 +123,7 @@ The console supports English, French and Simplified Chinese before and after sig
 
 ## Architecture
 
-![Open Shadow AI architecture](docs/assets/architecture.svg)
+![Open Shadow AI data flow from source signals to the investigation console through an authenticated API](docs/assets/architecture.svg)
 
 [Editable draw.io diagram](docs/assets/architecture.drawio) · [Mermaid and data flow (English reference)](docs/architecture.md)
 

@@ -5,7 +5,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth'
 import { downloadBlob, downloadCsv } from '@/lib/export'
 import { Search, Download, ChevronUp, ChevronDown, Filter, X } from 'lucide-react'
-import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, exportDetections, listDetections, updateDetection, type DetectionFilter, type DetectionSortColumn } from '@/api/detections'
+import { ANTI_HR_NOTICE, DETECTION_SORT_COLUMNS, HIGH_RISK_LEVELS, exportDetections, listDetections, updateDetection, type DetectionFilter, type DetectionSortColumn } from '@/api/detections'
 import RiskBadge from '@/components/badges/RiskBadge'
 import ApprovalBadge from '@/components/badges/ApprovalBadge'
 import ConfidenceBadge from '@/components/badges/ConfidenceBadge'
@@ -33,12 +33,15 @@ export default function DiscoveryList() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
 
+  const riskLevel = searchParams.get('risk_level') || undefined
+  const excludeFalsePositives = searchParams.get('include_false_positives') === 'false'
   const filters: DetectionFilter = {
     search: searchParams.get('search') || undefined,
     classification: searchParams.get('classification') || undefined,
-    risk_level: searchParams.get('risk_level') || undefined,
+    risk_level: riskLevel === 'high,critical' ? HIGH_RISK_LEVELS : riskLevel,
     entity_type: searchParams.get('entity_type') || undefined,
     analyst_status: searchParams.get('analyst_status') || undefined,
+    include_false_positives: excludeFalsePositives ? false : undefined,
     page: Math.max(1, Math.floor(Number(searchParams.get('page')) || 1)),
     page_size: PAGE_SIZES.includes(Number(searchParams.get('page_size'))) ? Number(searchParams.get('page_size')) : 25,
     sort_by: (DETECTION_SORT_COLUMNS as readonly string[]).includes(searchParams.get('sort_by') || '') ? searchParams.get('sort_by') as DetectionSortColumn : 'last_seen_at',
@@ -60,6 +63,7 @@ export default function DiscoveryList() {
   const setFilter = useCallback((key: string, value: string | undefined) => {
     const next = new URLSearchParams(searchParams)
     if (value) next.set(key, value); else next.delete(key)
+    if (key === 'analyst_status' && value === 'false_positive') next.delete('include_false_positives')
     if (key !== 'page') next.set('page', '1')
     setSearchParams(next)
   }, [searchParams, setSearchParams])
@@ -108,7 +112,7 @@ export default function DiscoveryList() {
     setSelectedIds(selectedIds.size === data.items.length ? new Set() : new Set(data.items.map(d => d.detection_id)))
   }
 
-  const activeFilterCount = ['classification', 'risk_level', 'entity_type', 'analyst_status'].filter(k => searchParams.has(k)).length
+  const activeFilterCount = ['classification', 'risk_level', 'entity_type', 'analyst_status'].filter(k => searchParams.has(k)).length + Number(excludeFalsePositives)
 
   function SortHeader({ col, label }: { col: string; label: string }) {
   const { textLabel } = useI18n()
@@ -154,6 +158,14 @@ export default function DiscoveryList() {
         )}
       </div>
 
+      {excludeFalsePositives && (
+        <button type="button" onClick={() => setFilter('include_false_positives', undefined)}
+          aria-label={tr("False positives excluded") + ". " + tr("Include false positives")}
+          className="inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs text-accent">
+          {tr("False positives excluded")}<X className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      )}
+
       {confirmExport && (
         <section id="export-all" aria-labelledby="export-all-title" className="stat-card space-y-3">
           <h2 id="export-all-title" className="text-sm font-medium">{tr('Export all {count} matching discoveries', { count: formatNumber(data?.total ?? 0) })}</h2>
@@ -171,14 +183,14 @@ export default function DiscoveryList() {
         <div className="flex flex-wrap gap-3 bg-surface-800/50 border border-surface-600/20 rounded-lg p-4">
           {[
             { key: 'classification', label: tr("Classification"), options: ['unsanctioned', 'unknown', 'tolerated', 'sanctioned'] },
-            { key: 'risk_level', label: tr("Risk"), options: ['critical', 'high', 'medium', 'low', 'info'] },
+            { key: 'risk_level', label: tr("Risk"), options: [HIGH_RISK_LEVELS, 'critical', 'high', 'medium', 'low', 'info'] },
             { key: 'entity_type', label: tr("Type"), options: ['saas_app', 'api_service', 'browser_extension', 'oauth_app', 'local_runtime', 'local_container', 'desktop_app'] },
             { key: 'analyst_status', label: tr("Status"), options: ['new', 'investigating', 'classified', 'false_positive', 'escalated'] },
           ].map(f => (
             <select aria-label={f.label} key={f.key} value={(filters as any)[f.key] ?? ''} onChange={(e) => setFilter(f.key, e.target.value || undefined)}
               className="bg-surface-900 border border-surface-600/40 rounded-lg px-3 py-1.5 text-sm text-slate-300">
               <option value="">{tr(({ classification: 'All classifications', risk_level: 'All risks', entity_type: 'All types', analyst_status: 'All statuses' } as const)[f.key as 'classification' | 'risk_level' | 'entity_type' | 'analyst_status'])}</option>
-              {f.options.map(o => <option key={o} value={o}>{enumLabel(o)}</option>)}
+              {f.options.map(o => <option key={o} value={o}>{o === HIGH_RISK_LEVELS ? tr("High & critical risk") : enumLabel(o)}</option>)}
             </select>
           ))}
           {activeFilterCount > 0 && (

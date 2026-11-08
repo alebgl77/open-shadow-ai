@@ -43,12 +43,17 @@ export interface DetectionListResponse {
 export const DETECTION_SORT_COLUMNS = ['last_seen_at', 'first_seen_at', 'risk_score', 'confidence_score', 'entity_name', 'total_events_count', 'impacted_users_count', 'impacted_devices_count'] as const
 export type DetectionSortColumn = typeof DETECTION_SORT_COLUMNS[number]
 
+export const HIGH_RISK_LEVELS = 'critical,high'
+export const DASHBOARD_DISCOVERIES_PATH = '/discoveries?include_false_positives=false'
+export const REVIEW_DISCOVERIES_PATH = DASHBOARD_DISCOVERIES_PATH + '&analyst_status=new'
+
 export interface DetectionFilter {
   classification?: string
   risk_level?: string
   confidence_level?: string
   entity_type?: string
   analyst_status?: string
+  include_false_positives?: boolean
   search?: string
   page?: number
   page_size?: number
@@ -59,7 +64,7 @@ export interface DetectionFilter {
 export const listDetections = (filters: DetectionFilter = {}) => {
   const params = new URLSearchParams()
   const normalized = { ...filters, page: Math.max(1, Math.floor(Number(filters.page) || 1)), page_size: Math.max(10, Math.min(100, Math.floor(Number(filters.page_size) || 25))) }
-  Object.entries(normalized).forEach(([k, v]) => { if (v) params.set(k, String(v)) })
+  Object.entries(normalized).forEach(([k, v]) => { if (v || v === false) params.set(k, String(v)) })
   return client.get<DetectionListResponse>(`/detections?${params}`).then(r => r.data)
 }
 
@@ -84,12 +89,12 @@ export const getDetectionTimeline = (id: string) =>
   client.get<TimelineEntry[]>(`/detections/${id}/timeline`).then(r => r.data)
 
 export const ANTI_HR_NOTICE = 'Open Shadow AI is an IT governance tool. This data must not be used for individual employee surveillance, disciplinary action, performance evaluation or behavioural profiling.'
-const EXPORT_FILTERS = ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status', 'search', 'sort_by', 'sort_order'] as const
+const EXPORT_FILTERS = ['classification', 'risk_level', 'confidence_level', 'entity_type', 'analyst_status', 'include_false_positives', 'search', 'sort_by', 'sort_order'] as const
 
 /** Every discovery matching the filters, exported and audited by the server (analyst role). */
 export async function exportDetections(filters: DetectionFilter): Promise<{ blob: Blob; filename: string }> {
   const params = new URLSearchParams({ format: 'csv' })
-  EXPORT_FILTERS.forEach(key => { const value = filters[key]; if (value) params.set(key, String(value)) })
+  EXPORT_FILTERS.forEach(key => { const value = filters[key]; if (value || value === false) params.set(key, String(value)) })
   const response = await client.post<Blob | string>(`/exports/detections?${params}`, undefined, { responseType: 'blob' })
   const disposition = String(response.headers?.['content-disposition'] ?? '')
   const suggested = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? 'open-shadow-ai-discoveries.csv'

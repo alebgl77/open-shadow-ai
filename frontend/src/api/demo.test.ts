@@ -3,7 +3,7 @@ import { AxiosError, AxiosHeaders } from 'axios'
 import { demoRequest, resetDemo } from './demo'
 import { useAuthStore } from '@/stores/auth'
 import client from './client'
-import { listDetections } from './detections'
+import { listDetections, type Detection, type DetectionListResponse } from './detections'
 import { csvCell } from '@/lib/export'
 
 describe('explicit synthetic workspace', ()=>{
@@ -26,6 +26,31 @@ describe('explicit synthetic workspace', ()=>{
     resetDemo()
     expect(demoRequest('get','/dashboard/summary')).toMatchObject({unreviewed:4,unsanctioned:2})
     expect(demoRequest('get','/audit/logs')).toHaveLength(0)
+  })
+  it('keeps dashboard scope, live-style review transitions and both demo exports in agreement', () => {
+    const risk = 'risk_level=critical,high'
+    const scope = risk + '&include_false_positives=false'
+    const matches = (params: string) => demoRequest('get', '/detections?' + params) as DetectionListResponse
+    const { detection_id: id, entity_name: name } = matches(scope).items[0]
+    const changeStatus = (analyst_status: string) => demoRequest('patch', '/detections/' + id, { analyst_status }) as Detection
+    expect(changeStatus('false_positive').shadow_ai_status).toBe('false_positive')
+    expect(demoRequest('patch', '/detections/' + id, { analyst_status: null })).toMatchObject({
+      analyst_status: 'false_positive', shadow_ai_status: 'false_positive',
+    })
+    expect(demoRequest('get', '/dashboard/summary')).toMatchObject({ high_risk: 1 })
+    expect(matches(scope).total).toBe(1)
+    expect(matches(risk).total).toBe(2)
+    expect(matches(risk + '&analyst_status=false_positive').items.map(item => item.detection_id)).toEqual([id])
+    expect(demoRequest('post', '/exports/detections?' + scope)).not.toContain(name)
+    const json = demoRequest('post', '/exports/detections?format=json&' + scope) as { count: number; detections: Detection[] }
+    expect(json.count).toBe(1)
+    expect((demoRequest('get', '/audit/logs') as unknown[])[0]).toMatchObject({
+      action: 'export_detections', details: { count: 1, filters: { include_false_positives: false } },
+    })
+    expect(json.detections[0].detection_id).toBe(matches(scope).items[0].detection_id)
+    expect(changeStatus('investigating').shadow_ai_status).toBe('suspected')
+    expect(demoRequest('get', '/dashboard/summary')).toMatchObject({ high_risk: 2 })
+    expect(matches(scope).total).toBe(2)
   })
   it('rejects unknown routes instead of inventing success', ()=>{
     expect(()=>demoRequest('post','/not-supported')).toThrow('Demo route unavailable')
@@ -132,8 +157,11 @@ describe('synthetic extension inventory', ()=>{
   })
 })
 describe('CSV evidence export', ()=>{
-  it('escapes formula payloads, quotes, separators and multiline strings',()=>{
-    expect(csvCell('=HYPERLINK("bad")')).toBe('"\'=HYPERLINK(""bad"")"')
+  it.each(['=1+1', '+1+1', '-2+3', '@SUM(A1)', '\tx', '\rx', '\nx', '\uff1d1+1', '\uff0b1+1', '\uff0d2+3', '\uff20SUM(A1)'])('neutralises formula and control prefixes (%j)', value=>{
+    expect(csvCell(value)).toBe("\"'" + value + '"')
+  })
+  it('escapes quotes, separators and multiline strings',()=>{
+    expect(csvCell('=SUM("1","2")')).toBe('"\'=SUM(""1"",""2"")"')
     expect(csvCell('a,b\nc')).toBe('"a,b\nc"')
     expect(csvCell(null)).toBe('""')
   })
