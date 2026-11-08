@@ -52,21 +52,23 @@ def test_debian_security_configures_package_predependencies_in_order(installer, 
 
     assert [path.name for path in installed] == [
         f"liblzma5_5.8.1-1+deb13u2_{arch}.deb",
+        f"zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_{arch}.deb",
         f"libapt-pkg7.0_3.0.4_{arch}.deb",
         f"apt_3.0.4_{arch}.deb",
     ]
     assert all(not path.exists() for path in installed)
 
 
+@pytest.mark.parametrize("package", ["zlib1g", "libapt-pkg7.0", "apt"])
 @pytest.mark.parametrize("failure", ["same-size-tamper", "missing"])
-def test_debian_security_rejects_a_bad_download_before_installing_anything(installer, monkeypatch, failure):
+def test_debian_security_rejects_a_bad_download_before_installing_anything(installer, monkeypatch, package, failure):
     module, packages = installer
     monkeypatch.setattr(module, "check_output", lambda args, text: "amd64\n")
     monkeypatch.setattr(module, "run", lambda *args, **kwargs: pytest.fail("Unexpected dpkg installation"))
 
     def download(url, timeout):
         data = packages[url]
-        if "libapt-pkg7.0" in url:
+        if url.rsplit("/", 1)[1].startswith(f"{package}_"):
             if failure == "missing":
                 raise URLError("Unavailable")
             data = b"x" + data[1:]
